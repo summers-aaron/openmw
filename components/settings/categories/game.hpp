@@ -25,10 +25,10 @@ namespace Settings
         SettingValue<bool> mShowEnchantChance{ mIndex, "Game", "show enchant chance" };
         SettingValue<bool> mBestAttack{ mIndex, "Game", "best attack" };
         SettingValue<int> mDifficulty{ mIndex, "Game", "difficulty", makeClampSanitizerInt(-500, 500) };
-        // We have to cap it since using high values (larger than 7168) will make some quests harder or impossible to
-        // complete (bug #1876)
+        // Single-player default keeps 7168 (higher can make some quests harder/impossible, bug #1876),
+        // but the MP dedicated server needs a wide range to process actors across a multi-player grid.
         SettingValue<int> mActorsProcessingRange{ mIndex, "Game", "actors processing range",
-            makeClampSanitizerInt(3584, 7168) };
+            makeClampSanitizerInt(3584, 65536) };
         SettingValue<bool> mClassicReflectedAbsorbSpellsBehavior{ mIndex, "Game",
             "classic reflected absorb spells behavior" };
         SettingValue<bool> mClassicCalmSpellsBehavior{ mIndex, "Game", "classic calm spells behavior" };

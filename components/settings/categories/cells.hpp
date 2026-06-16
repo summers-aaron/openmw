@@ -33,6 +33,9 @@ namespace Settings
         SettingValue<float> mCacheExpiryDelay{ mIndex, "Cells", "cache expiry delay", makeMaxSanitizerFloat(0) };
         SettingValue<float> mTargetFramerate{ mIndex, "Cells", "target framerate", makeMaxStrictSanitizerFloat(0) };
         SettingValue<int> mPointersCacheSize{ mIndex, "Cells", "pointers cache size", makeClampSanitizerInt(40, 1000) };
+        // Active exterior cell grid is a square of (2 * radius + 1) cells. Default 1 (3x3).
+        // The MP dedicated server raises this to simulate the whole area spanning its players.
+        SettingValue<int> mExteriorGridRadius{ mIndex, "Cells", "exterior grid radius", makeClampSanitizerInt(1, 16) };
     };
 }
 

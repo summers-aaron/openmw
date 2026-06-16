@@ -614,8 +614,8 @@ namespace MWWorld
 
     void Scene::changeCellGrid(const osg::Vec3f& pos, ESM::ExteriorCellLocation playerCellIndex, bool changeEvent)
     {
-        const int halfGridSize
-            = isEsm4Ext(playerCellIndex.mWorldspace) ? Constants::ESM4CellGridRadius : Constants::CellGridRadius;
+        const int gridRadius = Settings::cells().mExteriorGridRadius;
+        const int halfGridSize = isEsm4Ext(playerCellIndex.mWorldspace) ? gridRadius * 2 : gridRadius;
         auto navigatorUpdateGuard = mNavigator.makeUpdateGuard();
         const int playerCellX = playerCellIndex.mX;
         const int playerCellY = playerCellIndex.mY;
@@ -751,7 +751,7 @@ namespace MWWorld
 
             const DetourNavigator::CellGridBounds cellGridBounds{
                 .mCenter = osg::Vec2i(it->mData.mX, it->mData.mY),
-                .mHalfSize = Constants::CellGridRadius,
+                .mHalfSize = Settings::cells().mExteriorGridRadius,
             };
 
             mNavigator.updateBounds(
@@ -848,7 +848,7 @@ namespace MWWorld
 
     void Scene::changePlayerCell(CellStore& cell, const ESM::Position& pos, bool adjustPlayerPos)
     {
-        mHalfGridSize = cell.getCell()->isEsm4() ? Constants::ESM4CellGridRadius : Constants::CellGridRadius;
+        mHalfGridSize = cell.getCell()->isEsm4() ? Settings::cells().mExteriorGridRadius * 2 : Settings::cells().mExteriorGridRadius;
         mCurrentCell = &cell;
 
         mRendering.enableTerrain(cell.isExterior(), cell.getCell()->getWorldSpace());
