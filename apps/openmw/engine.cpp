@@ -210,7 +210,10 @@ bool OMW::Engine::frame(unsigned frameNumber, float frametime)
         {
             ScopedProfile<UserStatsType::Sound> profile(frameStart, frameNumber, *timer, *stats);
 
-            if (!mWindowManager->isWindowVisible())
+            // A headless server's window is intentionally hidden (so isWindowVisible() is
+            // false); don't let that pause the simulation — the whole point is to keep
+            // ticking the world without a visible window.
+            if (!mHeadless && !mWindowManager->isWindowVisible())
             {
                 mSoundManager->pausePlayback();
                 return false;
@@ -367,6 +370,7 @@ OMW::Engine::Engine(Files::ConfigurationManager& configurationManager)
     , mStereoManager(nullptr)
     , mSkipMenu(false)
     , mUseSound(true)
+    , mHeadless(false)
     , mCompileAll(false)
     , mCompileAllDialogue(false)
     , mWarningsMode(1)
@@ -506,7 +510,10 @@ void OMW::Engine::createWindow()
         posY = SDL_WINDOWPOS_UNDEFINED_DISPLAY(screen);
     }
 
-    Uint32 flags = SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
+    // Headless dedicated server: keep the window hidden (we still need a GL context, but
+    // never present frames). Everything else — physics, mechanics, Lua — runs unchanged.
+    Uint32 flags = SDL_WINDOW_OPENGL | (mHeadless ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN)
+        | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
     if (windowMode == Settings::WindowMode::Fullscreen)
         flags |= SDL_WINDOW_FULLSCREEN;
     else if (windowMode == Settings::WindowMode::WindowedFullscreen)
