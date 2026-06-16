@@ -18,6 +18,7 @@
 #include "markupbindings.hpp"
 #include "menuscripts.hpp"
 #include "nearbybindings.hpp"
+#include "networkbindings.hpp"
 #include "objectbindings.hpp"
 #include "postprocessingbindings.hpp"
 #include "soundbindings.hpp"
@@ -50,6 +51,7 @@ namespace MWLua
             { "openmw.core", initCorePackage(context) },
             { "openmw.types", initTypesPackage(context) },
             { "openmw.world", initWorldPackage(context) },
+            { "openmw.network", initNetworkPackage(context) },
         };
     }
 

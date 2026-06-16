@@ -313,6 +313,10 @@ add_component_dir (debug
     debugging debuglog gldebug debugdraw writeflags
     )
 
+add_component_dir (network
+    networkmanager
+    )
+
 IF(NOT WIN32 AND NOT APPLE)
     add_compile_definitions(GLOBAL_DATA_PATH="${GLOBAL_DATA_PATH}")
     add_compile_definitions(GLOBAL_CONFIG_PATH="${GLOBAL_CONFIG_PATH}")
@@ -613,6 +617,7 @@ target_link_libraries(components
 
     Boost::program_options
     Boost::iostreams
+    Boost::system
 
     SDL2::SDL2
     ${OPENGL_gl_LIBRARY}

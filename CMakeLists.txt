@@ -479,7 +479,7 @@ if(HAVE_MULTIVIEW)
     add_compile_definitions(OSG_HAS_MULTIVIEW)
 endif(HAVE_MULTIVIEW)
 
-set(BOOST_COMPONENTS iostreams program_options)
+set(BOOST_COMPONENTS iostreams program_options system)
 
 find_package(Boost 1.70.0 CONFIG REQUIRED COMPONENTS ${BOOST_COMPONENTS} OPTIONAL_COMPONENTS ${BOOST_OPTIONAL_COMPONENTS})
 
