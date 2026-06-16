@@ -161,6 +161,7 @@ namespace OMW
 
         bool mSkipMenu;
         bool mUseSound;
+        bool mHeadless;
         bool mCompileAll;
         bool mCompileAllDialogue;
         int mWarningsMode;
@@ -231,6 +232,9 @@ namespace OMW
         /// \param newGame Start a new game instead off dumping the player into the game
         /// (ignored if !skipMenu).
         void setSkipMenu(bool skipMenu, bool newGame);
+
+        /// Run as a headless dedicated server: window created hidden, frames never presented.
+        void setHeadless(bool headless) { mHeadless = headless; }
 
         void setGrabMouse(bool grab) { mGrab = grab; }
 

@@ -87,6 +87,11 @@ namespace OpenMW
 
         addOption("no-grab", bpo::value<bool>()->implicit_value(true)->default_value(false), "Don't grab mouse cursor");
 
+        addOption("headless", bpo::value<bool>()->implicit_value(true)->default_value(false),
+            "Run as a headless dedicated server: create the window hidden and never present "
+            "frames, so the world simulation (physics, mechanics, Lua) runs without a visible "
+            "window. Still needs a GL context (use with a GPU or software GL).");
+
         addOption("export-fonts", bpo::value<bool>()->implicit_value(true)->default_value(false),
             "Export Morrowind .fnt fonts to PNG image and XML file in current directory");
 
