@@ -117,7 +117,14 @@ namespace Net
                 mThread.join();
         }
 
-        void run() { mThread = std::thread([this] { mIo.run(); }); }
+        // Start the IO thread once. connect() may be called repeatedly (retry until the server
+        // is up); reassigning a still-joinable std::thread would call std::terminate. The work
+        // guard keeps mIo.run() alive, so once started the thread stays running.
+        void run()
+        {
+            if (!mThread.joinable())
+                mThread = std::thread([this] { mIo.run(); });
+        }
 
         void pushInbound(Message&& m)
         {
