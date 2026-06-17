@@ -12,6 +12,7 @@
 local self = require('openmw.self')
 local anim = require('openmw.animation')
 local types = require('openmw.types')
+local core = require('openmw.core')
 
 local ATTACK = {
     weapononehand = true, weapontwohand = true, weapontwowide = true,
@@ -54,6 +55,7 @@ local function swing(group, wt)
                 loops = 0, priority = anim.PRIORITY.Weapon, blendMask = anim.BLEND_MASK.UpperBody, autoDisable = true })
         end
     end)
+    pcall(function() core.sound.playSound3d('Weapon Swish', self) end)   -- swing whoosh at the ghost
 end
 
 -- ---- velocity fallback (pre-first-packet) ----
