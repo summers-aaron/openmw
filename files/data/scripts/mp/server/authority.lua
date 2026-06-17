@@ -23,6 +23,7 @@ local pinfo     = {}   -- peer -> last REMOTE_INFO payload (cached so new joiner
 local aanim     = {}   -- actorId -> {la, ua} active animation groups (reported by animread.lua)
 local aggroed   = {}   -- actorId -> true: guard already sent into combat (don't re-issue every tick)
 local bounty    = {}   -- peer -> crime bounty (guards hunt a player whose bounty > 0)
+local assaulted = {}   -- peer -> { victimId -> true }: assault is charged once per victim, not per hit
 local function hpOf(a) local ok, h = pcall(function() return types.Actor.stats.dynamic.health(a).current end); return ok and h or 0 end
 local function findActor(id)
     for _, a in ipairs(world.activeActors) do if tostring(a.id) == id then return a end end
@@ -104,7 +105,7 @@ return { engineHandlers = { onUpdate = function(dt)
                 proxies[peer], proxyHp[peer], playerPos[peer] = nil, nil, nil
                 lastSent[peer], pstats[peer], pstatted[peer] = nil, nil, nil
                 pequip[peer], pinfo[peer], lastSeen[peer] = nil, nil, nil
-                bounty[peer] = nil
+                bounty[peer], assaulted[peer] = nil, nil
                 print('[MP] reaped disconnected peer ' .. peer)
             end
         end
@@ -140,11 +141,19 @@ return { engineHandlers = { onUpdate = function(dt)
                 local dmg = m.data.dmg or 0
                 a:sendEvent('MP_Damage', { dmg = dmg })
                 invalidate(m.data.id)
-                -- crime: hitting a lawful NPC is an assault (a murder if the blow is lethal). Bounty
-                -- earns guard enforcement below. Creatures (wildlife) are free game. hpOf reads the
-                -- pre-damage health (MP_Damage is deferred), so current-dmg<=0 means this hit kills.
+                -- crime: hitting a lawful NPC is an assault (charged once per victim); a lethal blow
+                -- is murder. Creatures (wildlife) are free game. hpOf reads pre-damage health
+                -- (MP_Damage is deferred), so health damage that takes it to <=0 means this hit kills.
                 if cfg.crimeEnabled and isNpc(a) then
-                    addBounty(m.peer, (hpOf(a) - dmg <= 0) and cfg.murderBounty or cfg.assaultBounty)
+                    if dmg > 0 and hpOf(a) - dmg <= 0 then
+                        addBounty(m.peer, cfg.murderBounty)
+                    else
+                        assaulted[m.peer] = assaulted[m.peer] or {}
+                        if not assaulted[m.peer][m.data.id] then
+                            assaulted[m.peer][m.data.id] = true
+                            addBounty(m.peer, cfg.assaultBounty)
+                        end
+                    end
                 end
                 local px = proxies[m.peer]                 -- make it fight back at the attacker's proxy
                 if px then a:sendEvent('StartAIPackage', { type = 'Combat', target = px }) end

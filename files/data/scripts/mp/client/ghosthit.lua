@@ -18,8 +18,9 @@ return {
         if not data or data.successful == false then return end
         local atk = data.attacker
         if not (atk and types.Player.objectIsInstance(atk)) then return end
-        local dmg = data.damage and data.damage.health
-        if not dmg or dmg <= 0 then return end
+        -- Report every successful hit, even 0 health damage: hand-to-hand drains fatigue first
+        -- (health stays full), but the blow still lands -> it must count as a crime / contact.
+        local dmg = (data.damage and data.damage.health) or 0
         core.sendGlobalEvent('MP_GhostHit', { ghost = self.object, dmg = dmg })
     end },
 }
