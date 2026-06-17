@@ -10,7 +10,8 @@ local euti  = require('openmw.util')          -- vector3 / transform
 local cfg   = require('scripts.mp.config')
 local P     = require('scripts.mp.protocol')
 local util  = require('scripts.mp.util')
-local n, started = 0, false
+local n, started, clock = 0, false, 0
+local lastSeen  = {}   -- peer -> clock (s) of its last PLAYER_STATE; stale => disconnected
 local playerPos = {}   -- peer -> last known {x, y, z}
 local lastSent  = {}   -- peer -> { actorId -> {x, y, z, yaw, hp} }
 local proxies   = {}   -- peer -> proxy actor (a server-side body for the connected player)
@@ -55,7 +56,7 @@ local function changed(prev, x, y, z, yaw, hp)
     return hp ~= prev.hp
 end
 return { engineHandlers = { onUpdate = function(dt)
-    n = n + 1
+    n = n + 1; clock = clock + dt
     if not started then net.listen(cfg.port); started = true; print('[MP] server listening :' .. cfg.port) end
     local pl = util.getPlayer()
 
@@ -76,9 +77,28 @@ return { engineHandlers = { onUpdate = function(dt)
         end
     end
 
+    -- Reap disconnected peers: free the proxy body + every per-peer table. The transport does
+    -- NOT reliably drop a peer when its client dies (a half-open TCP socket lingers in
+    -- net.peers()), so we key off liveness instead: clients send PLAYER_STATE every frame, so
+    -- no update for cfg-many seconds means gone. Without this a dropped client leaves an
+    -- invisible proxy actor in the world (NPCs keep targeting it) and the peer tables leak.
+    if n % 30 == 0 then
+        for peer, t in pairs(lastSeen) do
+            if clock - t > 5 then
+                local px = proxies[peer]
+                if px then pcall(function() px.enabled = false end) end
+                proxies[peer], proxyHp[peer], playerPos[peer] = nil, nil, nil
+                lastSent[peer], pstats[peer], pstatted[peer] = nil, nil, nil
+                pequip[peer], pinfo[peer], lastSeen[peer] = nil, nil, nil
+                print('[MP] reaped disconnected peer ' .. peer)
+            end
+        end
+    end
+
     for _, m in ipairs(net.poll()) do
         if m.event == P.PLAYER_STATE then
             local isNew = playerPos[m.peer] == nil
+            lastSeen[m.peer] = clock
             playerPos[m.peer] = { x = m.data.x, y = m.data.y, z = m.data.z }
             updateProxy(m.peer, m.data.x, m.data.y, m.data.z, m.data.yaw)
             if isNew then   -- a fresh joiner: hand it everyone's cached appearance up front (no fargoth flicker)
