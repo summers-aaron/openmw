@@ -118,6 +118,7 @@ return { engineHandlers = { onUpdate = function(dt)
             end
             avatarEquip[d.pid] = d.equip
         elseif m.event == P.PLAYER_DAMAGE then pl:sendEvent('MP_PlayerDamage', { dmg = d.dmg })   -- health write is self-context
+        elseif m.event == P.PLAYER_BOUNTY then pl:sendEvent('MP_SetBounty', { amount = d.amount })  -- setCrimeLevel is self-context
         elseif m.event == P.WORLD_TIME then
             local delta = (d.t - core.getGameTime()) / 3600   -- advanceTime takes hours
             if math.abs(delta) > 1 / 60 then pcall(function() world.advanceTime(delta) end) end   -- correct drift > 1 game-min

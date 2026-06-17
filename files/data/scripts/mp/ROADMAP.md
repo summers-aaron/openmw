@@ -143,11 +143,16 @@ Make the world itself consistent, not just actors. Mostly Lua, reusing the repli
     frac=0 / overrode the ready pose), so it was reverted. Needs a non-destructive approach (e.g.
     only overlay during an actual swing window, or drive a one-shot attack event, not continuous
     re-seat) and must not disturb the weapon-ready/locomotion pose.
-- Crime — guards react to a player-proxy's crimes (proxy makes this possible). Needs GPU client.
-  Interim TEST hook (`cfg.aggroGuards`, default ON): `authority.lua` forces guards (NPC class
-  contains "guard") within `cfg.aggroRadius` to `StartAIPackage Combat` on each player's proxy, so
-  NPC→player combat can be exercised in the open with no crime system. Verified headless: "imperial
-  guard aggro -> peer 1" + proxy took damage relayed to the client. Set `aggroGuards=false` to stop.
+- **Crime (assault/murder) — DONE (server enforcement verified; client attack→bounty needs GPU).**
+  The engine crime system tracks only the single placeholder player, so the server drives it for the
+  per-peer proxies. Hitting a lawful NPC (`types.NPC.objectIsInstance`; creatures are free game) adds
+  a bounty to the attacker — `cfg.assaultBounty`, or `cfg.murderBounty` if the blow is lethal. Guards
+  (NPC class contains "guard") within `cfg.aggroRadius` of a proxy pursue it ONLY while that player's
+  bounty > 0 (replaces the old always-on aggro hack). Bounty is relayed to the client
+  (`PLAYER_BOUNTY` → `client/crime.lua` → `types.Player.setCrimeLevel`) for the native HUD. Verified
+  headless: no bounty ⇒ guards peaceful; inject bounty ⇒ guards aggro next tick. `cfg.crimeEnabled`
+  master switch. TODO: pay-off/jail/clear bounty, witness line-of-sight, theft/trespass (need
+  containers), self-defence exemption (currently any hit on an NPC is a crime).
 
 ### Phase D — Social
 - Chat, player trading, grouping/party. Net layer is ready; mostly new message types + UI.

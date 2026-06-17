@@ -22,11 +22,18 @@ local pequip    = {}   -- peer -> last equipment ({slot->recordId}) to put on th
 local pinfo     = {}   -- peer -> last REMOTE_INFO payload (cached so new joiners get it at once)
 local aanim     = {}   -- actorId -> {la, ua} active animation groups (reported by animread.lua)
 local aggroed   = {}   -- actorId -> true: guard already sent into combat (don't re-issue every tick)
+local bounty    = {}   -- peer -> crime bounty (guards hunt a player whose bounty > 0)
 local function hpOf(a) local ok, h = pcall(function() return types.Actor.stats.dynamic.health(a).current end); return ok and h or 0 end
 local function findActor(id)
     for _, a in ipairs(world.activeActors) do if tostring(a.id) == id then return a end end
 end
 local function isProxy(o) for _, px in pairs(proxies) do if px == o then return true end end return false end
+local function isNpc(a) local ok, r = pcall(function() return types.NPC.objectIsInstance(a) end); return ok and r end
+local function addBounty(peer, amt)   -- record a crime + push the new bounty to that client's HUD
+    bounty[peer] = (bounty[peer] or 0) + amt
+    net.send(peer, P.PLAYER_BOUNTY, { amount = bounty[peer] })
+    print(string.format('[MP] peer %d bounty +%d -> %d', peer, amt, bounty[peer]))
+end
 -- keep a server-side proxy actor at the client's reported player transform, and relay any
 -- health it loses (NPCs hitting it) back to that client. Players never see proxies (they're
 -- excluded from broadcasts); the proxy exists so the server's world can target/hit the player.
@@ -97,6 +104,7 @@ return { engineHandlers = { onUpdate = function(dt)
                 proxies[peer], proxyHp[peer], playerPos[peer] = nil, nil, nil
                 lastSent[peer], pstats[peer], pstatted[peer] = nil, nil, nil
                 pequip[peer], pinfo[peer], lastSeen[peer] = nil, nil, nil
+                bounty[peer] = nil
                 print('[MP] reaped disconnected peer ' .. peer)
             end
         end
@@ -129,11 +137,18 @@ return { engineHandlers = { onUpdate = function(dt)
             -- health writes are self-context only; route damage to the actor's local script
             local a = findActor(m.data.id)
             if a then
-                a:sendEvent('MP_Damage', { dmg = m.data.dmg or 0 })
+                local dmg = m.data.dmg or 0
+                a:sendEvent('MP_Damage', { dmg = dmg })
                 invalidate(m.data.id)
+                -- crime: hitting a lawful NPC is an assault (a murder if the blow is lethal). Bounty
+                -- earns guard enforcement below. Creatures (wildlife) are free game. hpOf reads the
+                -- pre-damage health (MP_Damage is deferred), so current-dmg<=0 means this hit kills.
+                if cfg.crimeEnabled and isNpc(a) then
+                    addBounty(m.peer, (hpOf(a) - dmg <= 0) and cfg.murderBounty or cfg.assaultBounty)
+                end
                 local px = proxies[m.peer]                 -- make it fight back at the attacker's proxy
                 if px then a:sendEvent('StartAIPackage', { type = 'Combat', target = px }) end
-                print(string.format('[MP] ATTACK -> %s for %.0f%s', a.recordId, m.data.dmg or 0, px and ' (retaliating)' or ''))
+                print(string.format('[MP] ATTACK -> %s for %.0f%s', a.recordId, dmg, px and ' (retaliating)' or ''))
             end
         elseif m.event == P.PLAYER_STATS then
             pstats[m.peer] = m.data                       -- store for the (next) proxy
@@ -149,11 +164,12 @@ return { engineHandlers = { onUpdate = function(dt)
         end
     end
 
-    -- TEST hook (no crime system yet): force nearby guards to attack each player's proxy, so the
-    -- NPC->player combat path (pursue, hit proxy, relay PLAYER_DAMAGE) can be exercised in the open.
-    if cfg.aggroGuards and n % 60 == 0 then
+    -- Crime enforcement: guards near a WANTED player's proxy (bounty > 0) pursue it. The engine
+    -- crime system tracks only the single placeholder player, so we drive guard reaction here for
+    -- each per-peer proxy.
+    if cfg.crimeEnabled and n % 60 == 0 then
         for peer, px in pairs(proxies) do
-            if px and hpOf(px) > 0 then
+            if px and hpOf(px) > 0 and (bounty[peer] or 0) > 0 then
                 local pp = px.position
                 for _, a in ipairs(world.activeActors) do
                     if a ~= pl and not isProxy(a) and not aggroed[tostring(a.id)] then

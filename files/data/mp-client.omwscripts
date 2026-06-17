@@ -4,6 +4,7 @@ PLAYER: scripts/mp/client/suppress.lua
 PLAYER: scripts/mp/client/playerdamage.lua
 PLAYER: scripts/mp/client/death.lua
 PLAYER: scripts/mp/client/playeranim.lua
+PLAYER: scripts/mp/client/crime.lua
 NPC,CREATURE: scripts/mp/client/ghosthit.lua
 NPC,CREATURE: scripts/mp/client/ghostanim.lua
 NPC,CREATURE: scripts/mp/equip.lua

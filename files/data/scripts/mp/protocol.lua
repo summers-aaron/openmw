@@ -10,4 +10,5 @@ return {
     PVP_ATTACK    = 'pvp',          -- client -> server: this client's player hit player <pid> for <dmg>
     PLAYER_STATS  = 'pstats',       -- client -> server: this client's stats (health/level/attributes/skills) for its proxy
     WORLD_TIME    = 'wtime',        -- server -> clients: authoritative game time (seconds) to sync day/night
+    PLAYER_BOUNTY = 'pbounty',      -- server -> client: your current crime bounty (server tracks it; client shows the HUD)
 }
