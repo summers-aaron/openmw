@@ -101,9 +101,9 @@ return { engineHandlers = { onUpdate = function(dt)
             else
                 local key = 'n:' .. d.id
                 sample(key, d.rec, d.x, d.y, d.z, d.yaw)
-                local ak = (d.la or '') .. '|' .. (d.ua or '')   -- replicate the actor's animation groups
+                local ak = (d.la or '') .. '|' .. (d.ua or '') .. '|' .. tostring(d.st)   -- groups + draw stance
                 local g = ghosts[key]
-                if g and d.la and ak ~= ghostAnim[key] then ghostAnim[key] = ak; pcall(function() g:sendEvent('MP_Anim', { la = d.la, ua = d.ua }) end) end
+                if g and d.la and ak ~= ghostAnim[key] then ghostAnim[key] = ak; pcall(function() g:sendEvent('MP_Anim', { la = d.la, ua = d.ua, st = d.st }) end) end
             end
         elseif m.event == P.REMOTE_PLAYER then remotePos[d.pid] = { x = d.x, y = d.y, z = d.z, yaw = d.yaw, la = d.la, ua = d.ua }
         elseif m.event == P.REMOTE_INFO then

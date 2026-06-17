@@ -8,8 +8,9 @@
 --  * VELOCITY fallback: until the first MP_Anim, infer a gait from position deltas.
 local self = require('openmw.self')
 local anim = require('openmw.animation')
+local types = require('openmw.types')
 
-local replicated, rgroup = false, nil
+local replicated, rgroup, rst = false, nil, nil
 local function play(group)
     if not group or group == '' or group == rgroup then return end
     rgroup = group
@@ -63,5 +64,9 @@ return {
     eventHandlers = { MP_Anim = function(e)
         replicated = true
         play(e.la)   -- la = locomotion group; play full-body so arms swing with the gait
+        if e.st ~= nil and e.st ~= rst then   -- draw/sheathe the weapon so armed NPCs look armed
+            rst = e.st
+            pcall(function() types.Actor.setStance(self, e.st) end)
+        end
     end },
 }
