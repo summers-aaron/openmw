@@ -16,6 +16,7 @@ return {
     -- one player, so the server drives this for the per-peer proxies).
     crimeEnabled  = true,      -- master switch for the crime/guard-enforcement system
     aggroRadius   = 3000,      -- units: guards within this range of a wanted player's proxy pursue it
+    arrestRadius  = 450,       -- units: a pursuing guard this close has "reached" the player (arrest prompt; AiFollow stops ~300u out)
     assaultBounty = 40,        -- bounty added for hitting a lawful NPC
     murderBounty  = 1000,      -- bounty added when the hit kills a lawful NPC
     -- Spawn point applied on boot to every role's player (server placeholder + clients), so

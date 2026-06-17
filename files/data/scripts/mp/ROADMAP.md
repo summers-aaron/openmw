@@ -149,10 +149,15 @@ Make the world itself consistent, not just actors. Mostly Lua, reusing the repli
   a bounty to the attacker — `cfg.assaultBounty`, or `cfg.murderBounty` if the blow is lethal. Guards
   (NPC class contains "guard") within `cfg.aggroRadius` of a proxy pursue it ONLY while that player's
   bounty > 0 (replaces the old always-on aggro hack). Bounty is relayed to the client
-  (`PLAYER_BOUNTY` → `client/crime.lua` → `types.Player.setCrimeLevel`) for the native HUD. Verified
-  headless: no bounty ⇒ guards peaceful; inject bounty ⇒ guards aggro next tick. `cfg.crimeEnabled`
-  master switch. TODO: pay-off/jail/clear bounty, witness line-of-sight, theft/trespass (need
-  containers), self-defence exemption (currently any hit on an NPC is a crime).
+  (`PLAYER_BOUNTY` → `client/crime.lua` → `types.Player.setCrimeLevel`) for the native HUD.
+  **Arrest, not instant attack:** a wanted player is approached with `AiFollow` (weapon sheathed,
+  no attack); when a guard reaches them (`cfg.arrestRadius`) the client shows an arrest prompt
+  (`ARREST` event). Guards escalate to `AiCombat` ONLY once the player RESISTS (strikes a guard).
+  The engine `AiPursue`/arrest path is hardwired to the single real player (refuses a non-player
+  target, opens dialogue on reach), so we drive Follow/Combat on the proxies ourselves. Verified
+  headless: bounty ⇒ guard Follow ⇒ arrest prompt at ~390u ⇒ resist ⇒ Combat. `cfg.crimeEnabled`
+  master switch. TODO: pay-off/jail/clear bounty (needs dialogue/UI), witness line-of-sight,
+  theft/trespass (need containers), self-defence exemption (any hit on an NPC is currently a crime).
 
 ### Phase D — Social
 - Chat, player trading, grouping/party. Net layer is ready; mostly new message types + UI.

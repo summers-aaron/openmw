@@ -24,12 +24,15 @@ local aanim     = {}   -- actorId -> {la, ua} active animation groups (reported 
 local aggroed   = {}   -- actorId -> true: guard already sent into combat (don't re-issue every tick)
 local bounty    = {}   -- peer -> crime bounty (guards hunt a player whose bounty > 0)
 local assaulted = {}   -- peer -> { victimId -> true }: assault is charged once per victim, not per hit
+local resisting = {}   -- peer -> true once the player attacks a guard (escalates arrest to combat)
+local arrested  = {}   -- peer -> true once a pursuing guard reached them (one arrest prompt)
 local function hpOf(a) local ok, h = pcall(function() return types.Actor.stats.dynamic.health(a).current end); return ok and h or 0 end
 local function findActor(id)
     for _, a in ipairs(world.activeActors) do if tostring(a.id) == id then return a end end
 end
 local function isProxy(o) for _, px in pairs(proxies) do if px == o then return true end end return false end
 local function isNpc(a) local ok, r = pcall(function() return types.NPC.objectIsInstance(a) end); return ok and r end
+local function isGuard(a) local ok, c = pcall(function() return types.NPC.record(a).class end); return ok and c and tostring(c):lower():find('guard') ~= nil end
 local function addBounty(peer, amt)   -- record a crime + push the new bounty to that client's HUD
     bounty[peer] = (bounty[peer] or 0) + amt
     net.send(peer, P.PLAYER_BOUNTY, { amount = bounty[peer] })
@@ -105,7 +108,7 @@ return { engineHandlers = { onUpdate = function(dt)
                 proxies[peer], proxyHp[peer], playerPos[peer] = nil, nil, nil
                 lastSent[peer], pstats[peer], pstatted[peer] = nil, nil, nil
                 pequip[peer], pinfo[peer], lastSeen[peer] = nil, nil, nil
-                bounty[peer], assaulted[peer] = nil, nil
+                bounty[peer], assaulted[peer], resisting[peer], arrested[peer] = nil, nil, nil, nil
                 print('[MP] reaped disconnected peer ' .. peer)
             end
         end
@@ -145,6 +148,7 @@ return { engineHandlers = { onUpdate = function(dt)
                 -- is murder. Creatures (wildlife) are free game. hpOf reads pre-damage health
                 -- (MP_Damage is deferred), so health damage that takes it to <=0 means this hit kills.
                 if cfg.crimeEnabled and isNpc(a) then
+                    if isGuard(a) then resisting[m.peer] = true end   -- striking a guard = resisting arrest
                     if dmg > 0 and hpOf(a) - dmg <= 0 then
                         addBounty(m.peer, cfg.murderBounty)
                     else
@@ -173,22 +177,29 @@ return { engineHandlers = { onUpdate = function(dt)
         end
     end
 
-    -- Crime enforcement: guards near a WANTED player's proxy (bounty > 0) pursue it. The engine
-    -- crime system tracks only the single placeholder player, so we drive guard reaction here for
-    -- each per-peer proxy.
+    -- Crime enforcement: guards near a WANTED player's proxy (bounty > 0) ARREST it -- they Follow
+    -- (approach, weapon sheathed, no attack), not fight. They escalate to Combat only once the
+    -- player resists (strikes a guard). The engine crime/AiPursue path is hardwired to the single
+    -- real player, so we drive this for the per-peer proxies. AiFollow takes any target; AiPursue
+    -- would refuse a non-player.
     if cfg.crimeEnabled and n % 60 == 0 then
         for peer, px in pairs(proxies) do
             if px and hpOf(px) > 0 and (bounty[peer] or 0) > 0 then
                 local pp = px.position
+                local want = resisting[peer] and 'Combat' or 'Follow'
                 for _, a in ipairs(world.activeActors) do
-                    if a ~= pl and not isProxy(a) and not aggroed[tostring(a.id)] then
-                        local ok, cls = pcall(function() return types.NPC.record(a).class end)
-                        if ok and cls and tostring(cls):lower():find('guard') then
-                            if (a.position - pp):length() < cfg.aggroRadius then
-                                a:sendEvent('StartAIPackage', { type = 'Combat', target = px })
-                                aggroed[tostring(a.id)] = true
-                                print('[MP] guard ' .. a.recordId .. ' aggro -> peer ' .. peer)
-                            end
+                    if a ~= pl and not isProxy(a) and isGuard(a) then
+                        local id = tostring(a.id)
+                        local dist = (a.position - pp):length()
+                        if dist < cfg.aggroRadius and aggroed[id] ~= want then
+                            a:sendEvent('StartAIPackage', { type = want, target = px })
+                            aggroed[id] = want
+                            print('[MP] guard ' .. a.recordId .. ' ' .. want:lower() .. ' -> peer ' .. peer)
+                        end
+                        -- arrest prompt once a pursuing guard reaches the player
+                        if want == 'Follow' and not arrested[peer] and dist < (cfg.arrestRadius or 250) then
+                            arrested[peer] = true
+                            net.send(peer, P.ARREST, {})
                         end
                     end
                 end

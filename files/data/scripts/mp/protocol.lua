@@ -11,4 +11,5 @@ return {
     PLAYER_STATS  = 'pstats',       -- client -> server: this client's stats (health/level/attributes/skills) for its proxy
     WORLD_TIME    = 'wtime',        -- server -> clients: authoritative game time (seconds) to sync day/night
     PLAYER_BOUNTY = 'pbounty',      -- server -> client: your current crime bounty (server tracks it; client shows the HUD)
+    ARREST        = 'arrest',       -- server -> client: a guard reached you to arrest (surrender or resist)
 }
