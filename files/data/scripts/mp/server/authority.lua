@@ -184,7 +184,7 @@ return { engineHandlers = { onUpdate = function(dt)
                             local yaw, hp = util.yaw(a), hpOf(a)
                             if keepalive or changed(cache[id], p.x, p.y, p.z, yaw, hp) then
                                 local ag = aanim[id]
-                                net.send(peer, P.ACTOR_STATE, { id = id, rec = a.recordId, x = p.x, y = p.y, z = p.z, yaw = yaw, hp = hp, la = ag and ag.la, ua = ag and ag.ua, st = ag and ag.st })
+                                net.send(peer, P.ACTOR_STATE, { id = id, rec = a.recordId, x = p.x, y = p.y, z = p.z, yaw = yaw, hp = hp, la = ag and ag.la, ua = ag and ag.ua, st = ag and ag.st, wt = ag and ag.wt })
                                 cache[id] = { x = p.x, y = p.y, z = p.z, yaw = yaw, hp = hp }
                                 sent = sent + 1
                             end
@@ -199,7 +199,7 @@ end },
 -- actor animation groups, reported by server/animread.lua (getActiveGroup is self-context)
 eventHandlers = {
     MP_ActorAnim = function(e)
-        aanim[e.id] = { la = e.la, ua = e.ua, st = e.st }
-        invalidate(e.id)   -- force the next ACTOR_STATE to carry the new groups/stance
+        aanim[e.id] = { la = e.la, ua = e.ua, st = e.st, wt = e.wt }
+        invalidate(e.id)   -- force the next ACTOR_STATE to carry the new groups/stance (wt streams mid-swing)
     end,
 } }

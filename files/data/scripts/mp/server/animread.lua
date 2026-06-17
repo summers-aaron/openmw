@@ -6,14 +6,23 @@ local self  = require('openmw.self')
 local anim  = require('openmw.animation')
 local core  = require('openmw.core')
 local types = require('openmw.types')
+-- Weapon/attack groups: the Torso group is one of these ONLY during an actual swing/cast (the
+-- ready stance and movement use the idle1h/walkforward1h variants instead). So when the upper
+-- group is one of these we stream the playhead time (wt) and the ghost overlays the swing.
+local ATTACK = {
+    weapononehand = true, weapontwohand = true, weapontwowide = true,
+    bowandarrow = true, crossbow = true, throwweapon = true, handtohand = true, spellcast = true,
+}
 local last
 return { engineHandlers = { onUpdate = function(dt)
     local lo = anim.getActiveGroup(self.object, anim.BONE_GROUP.LowerBody)
     local up = anim.getActiveGroup(self.object, anim.BONE_GROUP.Torso)
     local st = types.Actor.getStance(self.object)
+    local wt
+    if ATTACK[up] then wt = anim.getCurrentTime(self.object, up) end   -- mid-swing: stream the playhead
     local key = lo .. '|' .. up .. '|' .. st
-    if key ~= last then
+    if key ~= last or wt then
         last = key
-        core.sendGlobalEvent('MP_ActorAnim', { id = tostring(self.object.id), la = lo, ua = up, st = st })
+        core.sendGlobalEvent('MP_ActorAnim', { id = tostring(self.object.id), la = lo, ua = up, st = st, wt = wt })
     end
 end } }

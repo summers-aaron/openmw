@@ -103,7 +103,8 @@ return { engineHandlers = { onUpdate = function(dt)
                 sample(key, d.rec, d.x, d.y, d.z, d.yaw)
                 local ak = (d.la or '') .. '|' .. (d.ua or '') .. '|' .. tostring(d.st)   -- groups + draw stance
                 local g = ghosts[key]
-                if g and d.la and ak ~= ghostAnim[key] then ghostAnim[key] = ak; pcall(function() g:sendEvent('MP_Anim', { la = d.la, ua = d.ua, st = d.st }) end) end
+                -- forward on change, or every frame while a swing playhead (wt) is streaming
+                if g and d.la and (ak ~= ghostAnim[key] or d.wt) then ghostAnim[key] = ak; pcall(function() g:sendEvent('MP_Anim', { la = d.la, ua = d.ua, st = d.st, wt = d.wt }) end) end
             end
         elseif m.event == P.REMOTE_PLAYER then remotePos[d.pid] = { x = d.x, y = d.y, z = d.z, yaw = d.yaw, la = d.la, ua = d.ua }
         elseif m.event == P.REMOTE_INFO then
