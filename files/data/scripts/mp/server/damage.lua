@@ -11,8 +11,11 @@ return { eventHandlers = {
         print(string.format('[MP] %s hp %.0f -> %.0f%s', self.object.recordId, before, h.current, h.current <= 0 and ' (DEAD)' or ''))
     end,
     MP_SetStats = function(s)
-        -- isolate each group: a failure in one must not skip the others
-        if s.health then pcall(function() local h = types.Actor.stats.dynamic.health(self); h.base = s.health; h.current = s.health end) end
+        -- The proxy is a durable damage-relay target, not a real combatant: give it a large
+        -- health pool so NPC damage relays to the real player (client-side) without the proxy
+        -- dying and dropping the attackers' aggro. Other stats stay real so the engine's hit
+        -- chance / damage against the proxy match the real player.
+        pcall(function() local h = types.Actor.stats.dynamic.health(self); h.base = 100000; h.current = 100000 end)
         if s.level then pcall(function() types.Actor.stats.level(self).current = s.level end) end
         local na, nk = 0, 0
         for id, v in pairs(s.attr or {}) do if pcall(function() types.Actor.stats.attributes[id](self).base = v end) then na = na + 1 end end

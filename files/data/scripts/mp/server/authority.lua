@@ -38,8 +38,14 @@ local function updateProxy(peer, x, y, z, yaw)
         if not ok then return end
         proxies[peer] = o; px = o; proxyHp[peer] = nil; created = true; pstatted[peer] = false
     end
-    if created and pstats[peer] then px:sendEvent('MP_SetStats', pstats[peer]); pstatted[peer] = true end   -- give a fresh proxy the player's stats
-    if created and pequip[peer] then util.giveEquipment(px, pequip[peer]) end                                -- ...and equipment
+    -- A fresh proxy starts with the placeholder body's (low) health; pin its durable health pool
+    -- immediately (MP_SetStats forces a large pool) so it can't be killed before the player's real
+    -- stats arrive. Only mark stats "applied" once the real stats are actually present.
+    if created then
+        px:sendEvent('MP_SetStats', pstats[peer] or {})
+        if pstats[peer] then pstatted[peer] = true end
+        if pequip[peer] then util.giveEquipment(px, pequip[peer]) end
+    end
     pcall(function() px:teleport('', euti.vector3(x, y, z), { rotation = euti.transform.rotateZ(yaw or 0) }) end)
     local hp = hpOf(px)
     if proxyHp[peer] and hp < proxyHp[peer] then
