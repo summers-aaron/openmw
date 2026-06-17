@@ -10,6 +10,7 @@ return {
     keepaliveEvery = 60,       -- frames: force-send every in-range actor (refresh idle ghosts)
     moveThreshold = 2.0,       -- units: below this delta an actor is treated as idle (not sent)
     interpDelay = 0.07,        -- seconds: render ghosts this far in the past, lerping between updates (~2 ticks at 30 Hz)
+    saveEvery = 120,           -- seconds between server autosaves (persist.lua); world survives restart
     -- Spawn point applied on boot to every role's player (server placeholder + clients), so
     -- the server simulates the same area the players are in. Middle of Seyda Neen.
     spawnCell = '',                              -- '' = exterior worldspace

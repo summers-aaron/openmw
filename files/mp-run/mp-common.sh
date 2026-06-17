@@ -43,12 +43,25 @@ _build_common_args() {
 
 # run_server  -> dedicated authority, headless + GPU/display-less (offscreen EGL)
 run_server() {
-    _build_common_args config-server userdata-server
+    # Persistence: the server is a real OpenMW playthrough; its world is native save state.
+    # server/persist.lua autosaves to a fixed slot. Keep saves by default so the world
+    # survives restarts; RESET_WORLD=1 wipes them for a fresh start.
+    [ "${RESET_WORLD:-0}" = "1" ] && rm -rf "$RUN_DIR/userdata-server/saves" 2>/dev/null
+    KEEP_SAVES=1 _build_common_args config-server userdata-server
+    # Resume the autosave if one exists; otherwise start a fresh new-game (char-gen bypass).
+    local save startup=(--skip-menu)
+    save=$(ls "$RUN_DIR/userdata-server/saves"/*/mp_autosave.omwsave 2>/dev/null | head -n1)
+    if [ -n "$save" ]; then
+        echo "[mp] server: resuming saved world: $save"
+        startup=(--load-savegame "$save")
+    else
+        echo "[mp] server: no save found, fresh world"
+    fi
     echo "[mp] server: headless, offscreen, content=mp-server.omwscripts"
     env -u DISPLAY -u WAYLAND_DISPLAY SDL_VIDEODRIVER=offscreen \
         "$OPENMW_BIN" "${_common_args[@]}" \
         --content mp-server.omwscripts \
-        --headless --skip-menu --no-sound --no-grab "$@"
+        --headless --no-sound --no-grab "${startup[@]}" "$@"
 }
 
 # run_client <1|2> [extra args]  -> visible playable client (client 1 or 2)

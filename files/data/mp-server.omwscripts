@@ -1,5 +1,6 @@
 GLOBAL: scripts/mp/spawn.lua
 GLOBAL: scripts/mp/server/authority.lua
+MENU: scripts/mp/server/persist.lua
 NPC,CREATURE: scripts/mp/server/damage.lua
 NPC,CREATURE: scripts/mp/server/animread.lua
 NPC,CREATURE: scripts/mp/equip.lua
