@@ -21,6 +21,7 @@ local pstatted  = {}   -- peer -> whether the live proxy already had stats appli
 local pequip    = {}   -- peer -> last equipment ({slot->recordId}) to put on the proxy
 local pinfo     = {}   -- peer -> last REMOTE_INFO payload (cached so new joiners get it at once)
 local aanim     = {}   -- actorId -> {la, ua} active animation groups (reported by animread.lua)
+local aggroed   = {}   -- actorId -> true: guard already sent into combat (don't re-issue every tick)
 local function hpOf(a) local ok, h = pcall(function() return types.Actor.stats.dynamic.health(a).current end); return ok and h or 0 end
 local function findActor(id)
     for _, a in ipairs(world.activeActors) do if tostring(a.id) == id then return a end end
@@ -138,6 +139,28 @@ return { engineHandlers = { onUpdate = function(dt)
             if px then
                 px:sendEvent('MP_Damage', { dmg = m.data.dmg or 0 })
                 print(string.format('[MP] PVP: peer %d hit peer %d for %.0f', m.peer, m.data.pid, m.data.dmg or 0))
+            end
+        end
+    end
+
+    -- TEST hook (no crime system yet): force nearby guards to attack each player's proxy, so the
+    -- NPC->player combat path (pursue, hit proxy, relay PLAYER_DAMAGE) can be exercised in the open.
+    if cfg.aggroGuards and n % 60 == 0 then
+        for peer, px in pairs(proxies) do
+            if px and hpOf(px) > 0 then
+                local pp = px.position
+                for _, a in ipairs(world.activeActors) do
+                    if a ~= pl and not isProxy(a) and not aggroed[tostring(a.id)] then
+                        local ok, cls = pcall(function() return types.NPC.record(a).class end)
+                        if ok and cls and tostring(cls):lower():find('guard') then
+                            if (a.position - pp):length() < cfg.aggroRadius then
+                                a:sendEvent('StartAIPackage', { type = 'Combat', target = px })
+                                aggroed[tostring(a.id)] = true
+                                print('[MP] guard ' .. a.recordId .. ' aggro -> peer ' .. peer)
+                            end
+                        end
+                    end
+                end
             end
         end
     end
