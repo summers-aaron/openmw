@@ -115,6 +115,12 @@ Make the world itself consistent, not just actors. Mostly Lua, reusing the repli
   `ghosthit.lua` reports `damage.health` regardless of `sourceType`. So player→target spell/ranged
   damage flows through the existing path; NPC→player via the proxy health-watch (catches any
   health drop). TODO: non-damage magic effects (paralyze/drain/buffs) + projectile/spell VISUALS.
+- **Hit feedback on relayed damage — DONE.** A relayed hit only wrote `health.current`, which
+  skips the engine's hit reaction (the hit lands on the server proxy, not the client body).
+  `client/playerdamage.lua` now also plays a random `hitN` recovery animation, the "Health Damage"
+  sound, and a red full-screen flash (a fading `openmw.ui` Image + a tiny bundled white texture
+  `scripts/mp/mp_white.png`, since the engine hit fader isn't Lua-exposed). Knockback is not
+  reproduced (vanilla only knocks back on knockdown). Needs GPU client to verify visuals/audio.
 - **Animation — DONE (faithful replication, NPCs AND player avatars).** Replaced the
   velocity-inference hack with real active-group replication on every ghost:
   - NPCs: `server/animread.lua` (per actor, self-ctx) reads `getActiveGroup(LowerBody/Torso)`,
