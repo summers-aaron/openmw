@@ -1,6 +1,7 @@
-# Headless OpenMW build environment — Ubuntu 24.04 stock repos, no PPA, no game package.
+# OpenMW build environment — Ubuntu 24.04 stock repos, no PPA, no game package.
 # All build deps come straight from universe; the old Dockerfile's ppa:openmw/openmw
-# doesn't publish a release for Noble, which is why it failed.
+# doesn't publish a release for Noble, which is why it failed. Includes Qt6 so the GUI
+# tools (openmw-launcher, openmw-wizard, openmw-cs) build alongside the engine.
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -30,6 +31,16 @@ RUN git clone --depth 1 --branch MyGUI3.4.3 https://github.com/MyGUI/mygui.git /
     && cmake --build /tmp/mygui/build -j"$(nproc)" \
     && cmake --install /tmp/mygui/build \
     && rm -rf /tmp/mygui
+
+# Qt6 — required to build the GUI tools (openmw-launcher, openmw-wizard, openmw-cs).
+# Added as its own layer so the apt/MyGUI layers above stay cached. OpenMW needs the
+# Core/Widgets/Network/OpenGL(+Widgets)/Svg modules plus the Linguist tools (lrelease).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        qt6-base-dev qt6-base-dev-tools \
+        qt6-tools-dev qt6-tools-dev-tools qt6-l10n-tools \
+        libqt6svg6-dev libqt6opengl6-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir /openmw
 WORKDIR /openmw
