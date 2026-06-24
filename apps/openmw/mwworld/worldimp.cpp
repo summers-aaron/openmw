@@ -363,10 +363,10 @@ namespace MWWorld
 
         mStore.clearDynamic();
 
-        if (mPlayer)
+        if (mPlayers.hasLocalPlayer())
         {
-            mPlayer->clear();
-            mPlayer->set(mStore.get<ESM::NPC>().find(ESM::RefId::stringRefId("Player")));
+            mPlayers.getLocalPlayer().clear();
+            mPlayers.getLocalPlayer().set(mStore.get<ESM::NPC>().find(PlayerRegistry::localPlayerId()));
         }
 
         mDoorStates.clear();
@@ -412,7 +412,7 @@ namespace MWWorld
         mStore.write(writer, progress); // dynamic Store must be written (and read) before Cells, so that
                                         // references to custom made records will be recognized
         mWorldModel.write(writer, progress); // the player's cell needs to be loaded before the player
-        mPlayer->write(writer, progress);
+        mPlayers.getLocalPlayer().write(writer, progress);
         mGlobalVariables.write(writer, progress);
         mWeatherManager->write(writer, progress);
         mProjectileManager->write(writer, progress);
@@ -452,7 +452,7 @@ namespace MWWorld
                 }
 
                 mStore.checkPlayer();
-                mPlayer->readRecord(reader, type);
+                mPlayers.getLocalPlayer().readRecord(reader, type);
                 break;
             case ESM::REC_CSTA:
                 // We need to rebuild the ESMStore index in order to be able to lookup dynamic records while loading the
@@ -514,7 +514,7 @@ namespace MWWorld
 
     MWWorld::Player& World::getPlayer()
     {
-        return *mPlayer;
+        return mPlayers.getLocalPlayer();
     }
 
     const std::vector<int>& World::getESMVersions() const
@@ -601,9 +601,9 @@ namespace MWWorld
     {
         Ptr ret;
         // the player is always in an active cell.
-        if (name == "Player")
+        if (name == PlayerRegistry::localPlayerId())
         {
-            return mPlayer->getPlayer();
+            return mPlayers.getLocalPlayerPtr();
         }
 
         for (CellStore* cellstore : mWorldScene->getActiveCells())
@@ -633,7 +633,7 @@ namespace MWWorld
             }
         }
 
-        Ptr ptr = mPlayer->getPlayer().getClass().getContainerStore(mPlayer->getPlayer()).search(name);
+        Ptr ptr = mPlayers.getLocalPlayerPtr().getClass().getContainerStore(mPlayers.getLocalPlayerPtr()).search(name);
 
         return ptr;
     }
@@ -907,7 +907,7 @@ namespace MWWorld
         else
             maxDistance = getMaxActivationDistance();
 
-        const MWWorld::Ptr player = mPlayer->getPlayer();
+        const MWWorld::Ptr player = mPlayers.getLocalPlayerPtr();
         const float telekinesisMagnitude = player.getClass()
                                                .getCreatureStats(player)
                                                .getMagicEffects()
@@ -993,7 +993,7 @@ namespace MWWorld
         CellStore* currCell = ptr.isInCell()
             ? ptr.getCell()
             : nullptr; // currCell == nullptr should only happen for player, during initial startup
-        bool isPlayer = ptr == mPlayer->getPlayer();
+        bool isPlayer = ptr == mPlayers.getLocalPlayerPtr();
         bool haveToMove = isPlayer || (currCell && mWorldScene->isCellActive(*currCell));
         MWWorld::Ptr newPtr = ptr;
 
@@ -1568,7 +1568,7 @@ namespace MWWorld
 
         updateNavigator();
 
-        mPlayer->update();
+        mPlayers.getLocalPlayer().update();
 
         mPhysics->debugDraw();
 
@@ -2046,7 +2046,7 @@ namespace MWWorld
         Ptr dropped
             = copy ? copyObjectToCell(object, cell, pos, amount, true) : moveObjectToCell(object, cell, pos, true);
 
-        if (actor == mPlayer->getPlayer()) // Only call if dropped by player
+        if (actor == mPlayers.getLocalPlayerPtr()) // Only call if dropped by player
             PCDropped(dropped);
         return dropped;
     }
@@ -2219,9 +2219,9 @@ namespace MWWorld
 
     void World::setupPlayer()
     {
-        const ESM::NPC* player = mStore.get<ESM::NPC>().find(ESM::RefId::stringRefId("Player"));
-        if (!mPlayer)
-            mPlayer = std::make_unique<MWWorld::Player>(player);
+        const ESM::NPC* player = mStore.get<ESM::NPC>().find(PlayerRegistry::localPlayerId());
+        if (!mPlayers.hasLocalPlayer())
+            mPlayers.createLocalPlayer(player);
         else
         {
             // Remove the old CharacterController
@@ -2231,10 +2231,10 @@ namespace MWWorld
             mRendering->removePlayer(getPlayerPtr());
             MWBase::Environment::get().getLuaManager()->objectRemovedFromScene(getPlayerPtr());
 
-            mPlayer->set(player);
+            mPlayers.getLocalPlayer().set(player);
         }
 
-        Ptr ptr = mPlayer->getPlayer();
+        Ptr ptr = mPlayers.getLocalPlayerPtr();
         mRendering->setupPlayer(ptr);
         MWBase::Environment::get().getLuaManager()->setupPlayer(ptr);
     }
@@ -2272,7 +2272,7 @@ namespace MWWorld
 
         CellStore* currentCell = mWorldScene->getCurrentCell();
 
-        Ptr player = mPlayer->getPlayer();
+        Ptr player = mPlayers.getLocalPlayerPtr();
 
         const MWPhysics::Actor* actor = mPhysics->getActor(player);
         if (!actor)
@@ -2288,7 +2288,7 @@ namespace MWWorld
             || isFlying(player))
             result |= Rest_PlayerIsInAir;
 
-        if (mPlayer->enemiesNearby())
+        if (mPlayers.getLocalPlayer().enemiesNearby())
             result |= Rest_EnemiesAreNearby;
 
         if (!currentCell->getCell()->noSleep() && !player.getClass().getNpcStats(player).isWerewolf())
@@ -3056,7 +3056,7 @@ namespace MWWorld
         // If we are in exterior, check the weather manager.
         // In interiors there are no precipitations and sun, so check the ambient
         // Looks like pseudo-exteriors considered as interiors in this case
-        MWWorld::CellStore* cell = mPlayer->getPlayer().getCell();
+        MWWorld::CellStore* cell = mPlayers.getLocalPlayerPtr().getCell();
         if (cell->isExterior())
         {
             float hour = getTimeStamp().getHour();
@@ -3143,7 +3143,7 @@ namespace MWWorld
     {
         if (ptr.getCell()->isExterior())
         {
-            return getClosestMarkerFromExteriorPosition(mPlayer->getLastKnownExteriorPosition(), id);
+            return getClosestMarkerFromExteriorPosition(mPlayers.getLocalPlayer().getLastKnownExteriorPosition(), id);
         }
 
         // Search for a 'nearest' marker, counting each cell between the starting
@@ -3303,9 +3303,9 @@ namespace MWWorld
     void World::updateWeather(float duration, bool paused)
     {
         bool isExterior = isCellExterior() || isCellQuasiExterior();
-        if (mPlayer->wasTeleported())
+        if (mPlayers.getLocalPlayer().wasTeleported())
         {
-            mPlayer->setTeleported(false);
+            mPlayers.getLocalPlayer().setTeleported(false);
 
             const ESM::RefId& playerRegion = getPlayerPtr().getCell()->getCell()->getRegion();
             mWeatherManager->playerTeleported(playerRegion, isExterior);
@@ -3439,12 +3439,12 @@ namespace MWWorld
 
     MWWorld::Ptr World::getPlayerPtr()
     {
-        return mPlayer->getPlayer();
+        return mPlayers.getLocalPlayerPtr();
     }
 
     MWWorld::ConstPtr World::getPlayerConstPtr() const
     {
-        return mPlayer->getConstPlayer();
+        return mPlayers.getLocalPlayerConstPtr();
     }
 
     void World::updateDialogueGlobals()
@@ -3513,7 +3513,7 @@ namespace MWWorld
 
             int bounty = player.getClass().getNpcStats(player).getBounty();
             player.getClass().getNpcStats(player).setBounty(0);
-            mPlayer->recordCrimeId();
+            mPlayers.getLocalPlayer().recordCrimeId();
             confiscateStolenItems(player);
 
             static int iDaysinPrisonMod = mStore.get<ESM::GameSetting>().find("iDaysinPrisonMod")->mValue.getInteger();
@@ -3528,7 +3528,7 @@ namespace MWWorld
                 player.getClass().getCreatureStats(player).setAttackingOrSpell(false);
             }
 
-            mPlayer->setDrawState(MWMechanics::DrawState::Nothing);
+            mPlayers.getLocalPlayer().setDrawState(MWMechanics::DrawState::Nothing);
             mGoToJail = false;
 
             MWBase::Environment::get().getWindowManager()->removeGuiMode(MWGui::GM_Dialogue);
