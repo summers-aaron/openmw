@@ -87,6 +87,12 @@ namespace OpenMW
 
         addOption("no-grab", bpo::value<bool>()->implicit_value(true)->default_value(false), "Don't grab mouse cursor");
 
+        addOption("dedicated", bpo::value<bool>()->implicit_value(true)->default_value(false),
+            "Run as a headless dedicated server: install null window/input/sound managers, never "
+            "present frames, and skip viewer traversal, so the world simulation (time, AI, physics, "
+            "scripts) runs without a GUI/audio/input client. Still constructs the OSG rendering "
+            "pipeline and needs a GL context (zero-GL is a later milestone).");
+
         addOption("export-fonts", bpo::value<bool>()->implicit_value(true)->default_value(false),
             "Export Morrowind .fnt fonts to PNG image and XML file in current directory");
 

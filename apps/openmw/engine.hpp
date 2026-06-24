@@ -15,6 +15,8 @@
 
 #include "mwbase/environment.hpp"
 
+#include "runmode.hpp"
+
 namespace Resource
 {
     class ResourceSystem;
@@ -73,18 +75,10 @@ namespace MWState
     class StateManager;
 }
 
-namespace MWGui
+namespace MWBase
 {
     class WindowManager;
-}
-
-namespace MWInput
-{
     class InputManager;
-}
-
-namespace MWSound
-{
     class SoundManager;
 }
 
@@ -136,13 +130,13 @@ namespace OMW
         osg::ref_ptr<SceneUtil::WorkQueue> mWorkQueue;
         std::unique_ptr<SceneUtil::UnrefQueue> mUnrefQueue;
         std::unique_ptr<MWWorld::World> mWorld;
-        std::unique_ptr<MWSound::SoundManager> mSoundManager;
+        std::unique_ptr<MWBase::SoundManager> mSoundManager;
         std::unique_ptr<MWScript::ScriptManager> mScriptManager;
-        std::unique_ptr<MWGui::WindowManager> mWindowManager;
+        std::unique_ptr<MWBase::WindowManager> mWindowManager;
         std::unique_ptr<MWMechanics::MechanicsManager> mMechanicsManager;
         std::unique_ptr<MWDialogue::DialogueManager> mDialogueManager;
         std::unique_ptr<MWDialogue::Journal> mJournal;
-        std::unique_ptr<MWInput::InputManager> mInputManager;
+        std::unique_ptr<MWBase::InputManager> mInputManager;
         std::unique_ptr<MWState::StateManager> mStateManager;
         std::unique_ptr<MWLua::LuaManager> mLuaManager;
         std::unique_ptr<MWLua::Worker> mLuaWorker;
@@ -165,6 +159,7 @@ namespace OMW
 
         std::unique_ptr<Stereo::Manager> mStereoManager;
 
+        RunMode mRunMode;
         bool mSkipMenu;
         bool mUseSound;
         bool mCompileAll;
@@ -246,6 +241,11 @@ namespace OMW
         void setSkipMenu(bool skipMenu, bool newGame);
 
         void setGrabMouse(bool grab) { mGrab = grab; }
+
+        /// Select how this process participates in the simulation. Dedicated runs the
+        /// server half headlessly with null client managers; default is Integrated (SP).
+        void setRunMode(RunMode mode) { mRunMode = mode; }
+        bool isDedicated() const { return OMW::isDedicated(mRunMode); }
 
         /// Initialise and enter main loop.
         void go();
