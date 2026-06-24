@@ -183,9 +183,9 @@ namespace MWWorld
     RefData::RefData(RefData&& other) = default;
     RefData& RefData::operator=(RefData&& other) = default;
 
-    void RefData::setBaseNode(osg::ref_ptr<SceneUtil::PositionAttitudeTransform> base)
+    void RefData::setBaseNode(SceneUtil::PositionAttitudeTransform* base)
     {
-        mBaseNode = std::move(base);
+        mBaseNode = base;
     }
 
     SceneUtil::PositionAttitudeTransform* RefData::getBaseNode()

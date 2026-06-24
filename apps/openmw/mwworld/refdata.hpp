@@ -8,8 +8,6 @@
 #include "../mwscript/locals.hpp"
 #include "../mwworld/customdata.hpp"
 
-#include <osg/ref_ptr>
-
 #include <memory>
 #include <string>
 
@@ -43,7 +41,12 @@ namespace MWWorld
 
     class RefData
     {
-        osg::ref_ptr<SceneUtil::PositionAttitudeTransform> mBaseNode;
+        // Client-side scene-graph node for this reference. Non-owning: the node is owned
+        // by the scene graph (its cell parent), the RenderingManager (the player node) or
+        // the object-paging system, all of which outlive the node's membership here. It is
+        // a raw pointer (not osg::ref_ptr) so refdata.hpp carries no OSG dependency and is
+        // null for references that are not rendered — e.g. on a headless server.
+        SceneUtil::PositionAttitudeTransform* mBaseNode;
 
         MWScript::Locals mLocals;
         std::shared_ptr<MWLua::LocalScripts> mLuaScripts;
@@ -100,8 +103,8 @@ namespace MWWorld
         /// Return base node (can be a null pointer).
         const SceneUtil::PositionAttitudeTransform* getBaseNode() const;
 
-        /// Set base node (can be a null pointer).
-        void setBaseNode(osg::ref_ptr<SceneUtil::PositionAttitudeTransform> base);
+        /// Set base node (can be a null pointer). Non-owning; see mBaseNode.
+        void setBaseNode(SceneUtil::PositionAttitudeTransform* base);
 
         void setLocals(const ESM::Script& script);
 
