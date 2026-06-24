@@ -2,6 +2,7 @@
 #define GAME_RENDER_MWSCENE_H
 
 #include <utility>
+#include "rendermode.hpp"
 
 #include <map>
 #include <vector>

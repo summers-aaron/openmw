@@ -4,6 +4,7 @@
 #include "luamanagerimp.hpp"
 
 #include "../mwbase/environment.hpp"
+#include "../mwbase/worldrendering.hpp"
 #include "../mwbase/mechanicsmanager.hpp"
 #include "../mwbase/world.hpp"
 
@@ -37,7 +38,7 @@ namespace MWLua
                 }));
 
         api["toggleRenderMode"] = [context](MWRender::RenderMode value) {
-            context.mLuaManager->addAction([value] { MWBase::Environment::get().getWorld()->toggleRenderMode(value); });
+            context.mLuaManager->addAction([value] { MWBase::Environment::get().getWorldRendering()->toggleRenderMode(value); });
         };
 
         api["toggleGodMode"] = []() { MWBase::Environment::get().getWorld()->toggleGodMode(); };
@@ -66,12 +67,12 @@ namespace MWLua
 
         api["setNavMeshRenderMode"] = [context](Settings::NavMeshRenderMode value) {
             context.mLuaManager->addAction(
-                [value] { MWBase::Environment::get().getWorld()->getRenderingManager()->setNavMeshMode(value); });
+                [value] { MWBase::Environment::get().getWorldRendering()->getRenderingManager()->setNavMeshMode(value); });
         };
 
         api["triggerShaderReload"] = [context]() {
             context.mLuaManager->addAction([] {
-                auto world = MWBase::Environment::get().getWorld();
+                auto world = MWBase::Environment::get().getWorldRendering();
 
                 world->getRenderingManager()
                     ->getResourceSystem()
@@ -84,7 +85,7 @@ namespace MWLua
 
         api["setShaderHotReloadEnabled"] = [context](bool value) {
             context.mLuaManager->addAction([value] {
-                auto world = MWBase::Environment::get().getWorld();
+                auto world = MWBase::Environment::get().getWorldRendering();
                 world->getRenderingManager()
                     ->getResourceSystem()
                     ->getSceneManager()

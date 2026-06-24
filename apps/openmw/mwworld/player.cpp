@@ -19,6 +19,7 @@
 #include "../mwworld/worldmodel.hpp"
 
 #include "../mwbase/environment.hpp"
+#include "../mwbase/worldrendering.hpp"
 #include "../mwbase/luamanager.hpp"
 #include "../mwbase/mechanicsmanager.hpp"
 #include "../mwbase/windowmanager.hpp"
@@ -460,7 +461,7 @@ namespace MWWorld
     {
         auto player = getPlayer();
         const auto world = MWBase::Environment::get().getWorld();
-        const auto rendering = world->getRenderingManager();
+        const auto rendering = MWBase::Environment::get().getWorldRendering()->getRenderingManager();
         auto& store = world->getStore();
         auto& playerClass = player.getClass();
         const auto windowMgr = MWBase::Environment::get().getWindowManager();
