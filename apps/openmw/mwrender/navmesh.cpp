@@ -1,4 +1,5 @@
 #include "navmesh.hpp"
+#include "rendermode.hpp"
 
 #include "vismask.hpp"
 

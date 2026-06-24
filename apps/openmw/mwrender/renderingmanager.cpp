@@ -1,4 +1,5 @@
 #include "renderingmanager.hpp"
+#include "rendermode.hpp"
 
 #include <cstdlib>
 

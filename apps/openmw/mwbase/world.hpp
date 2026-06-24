@@ -17,8 +17,6 @@
 #include "../mwworld/ptr.hpp"
 #include "../mwworld/spellcaststate.hpp"
 
-#include "../mwrender/rendermode.hpp"
-
 namespace osg
 {
     class Vec3f;
@@ -67,10 +65,9 @@ namespace MWPhysics
 
 namespace MWRender
 {
+    // Camera / RenderingManager / PostProcessor moved to MWBase::WorldRendering.
+    // Animation stays: gameplay reads text-key timing through getAnimation() (until M6).
     class Animation;
-    class Camera;
-    class RenderingManager;
-    class PostProcessor;
 }
 
 namespace MWMechanics
@@ -325,10 +322,6 @@ namespace MWBase
         /// collisions and gravity.
         /// \return Resulting mode
 
-        virtual bool toggleRenderMode(MWRender::RenderMode mode) = 0;
-        ///< Toggle a render mode.
-        ///< \return Resulting mode
-
         virtual MWWorld::Ptr placeObject(
             const MWWorld::Ptr& object, float cursorX, float cursorY, int amount, bool copy = true)
             = 0;
@@ -364,7 +357,6 @@ namespace MWBase
 
         virtual osg::Matrixf getActorHeadTransform(const MWWorld::ConstPtr& actor) const = 0;
 
-        virtual MWRender::Camera* getCamera() = 0;
         virtual void togglePOV(bool force = false) = 0;
         virtual bool isFirstPerson() const = 0;
         virtual bool isPreviewModeEnabled() const = 0;
@@ -434,8 +426,6 @@ namespace MWBase
         virtual const MWRender::Animation* getAnimation(const MWWorld::ConstPtr& ptr) const = 0;
         virtual void reattachPlayerCamera() = 0;
 
-        /// \todo this does not belong here
-        virtual void screenshot(osg::Image* image, int w, int h) = 0;
 
         /// Find default position inside exterior cell specified by name
         /// \return empty RefId if exterior with given name not exists, the cell's RefId otherwise
@@ -597,9 +587,6 @@ namespace MWBase
 
         virtual Misc::Rng::Generator& getPrng() = 0;
 
-        virtual MWRender::RenderingManager* getRenderingManager() = 0;
-
-        virtual MWRender::PostProcessor* getPostProcessor() = 0;
 
         virtual MWWorld::DateTimeManager* getTimeManager() = 0;
 

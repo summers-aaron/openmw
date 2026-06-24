@@ -26,6 +26,7 @@
 #include <components/vfs/pathutil.hpp>
 
 #include "../mwbase/environment.hpp"
+#include "../mwbase/worldrendering.hpp"
 #include "../mwbase/luamanager.hpp"
 #include "../mwbase/mechanicsmanager.hpp"
 #include "../mwbase/soundmanager.hpp"
@@ -991,7 +992,7 @@ namespace MWWorld
 
         MWBase::Environment::get().getWindowManager()->changeCell(mCurrentCell);
 
-        MWBase::Environment::get().getWorld()->getPostProcessor()->setExteriorFlag(cell.getCell()->isQuasiExterior());
+        MWBase::Environment::get().getWorldRendering()->getPostProcessor()->setExteriorFlag(cell.getCell()->isQuasiExterior());
     }
 
     void Scene::changeToExteriorCell(
@@ -1012,7 +1013,7 @@ namespace MWWorld
         if (changeEvent)
             MWBase::Environment::get().getWindowManager()->fadeScreenIn(0.5);
 
-        MWBase::Environment::get().getWorld()->getPostProcessor()->setExteriorFlag(true);
+        MWBase::Environment::get().getWorldRendering()->getPostProcessor()->setExteriorFlag(true);
     }
 
     CellStore* Scene::getCurrentCell()

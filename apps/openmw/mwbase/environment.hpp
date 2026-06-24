@@ -25,6 +25,7 @@ namespace MWWorld
 namespace MWBase
 {
     class World;
+    class WorldRendering;
     class ScriptManager;
     class DialogueManager;
     class Journal;
@@ -44,6 +45,7 @@ namespace MWBase
         static Environment* sThis;
 
         World* mWorld = nullptr;
+        WorldRendering* mWorldRendering = nullptr;
         MWWorld::WorldModel* mWorldModel = nullptr;
         MWWorld::Scene* mWorldScene = nullptr;
         MWWorld::ESMStore* mESMStore = nullptr;
@@ -71,6 +73,7 @@ namespace MWBase
         Environment& operator=(const Environment&) = delete;
 
         void setWorld(World& value) { mWorld = &value; }
+        void setWorldRendering(WorldRendering& value) { mWorldRendering = &value; }
         void setWorldModel(MWWorld::WorldModel& value) { mWorldModel = &value; }
         void setWorldScene(MWWorld::Scene& value) { mWorldScene = &value; }
         void setESMStore(MWWorld::ESMStore& value) { mESMStore = &value; }
@@ -98,6 +101,7 @@ namespace MWBase
         void setL10nManager(L10n::Manager& value) { mL10nManager = &value; }
 
         Misc::NotNullPtr<World> getWorld() const { return mWorld; }
+        Misc::NotNullPtr<WorldRendering> getWorldRendering() const { return mWorldRendering; }
         Misc::NotNullPtr<MWWorld::WorldModel> getWorldModel() const { return mWorldModel; }
         Misc::NotNullPtr<MWWorld::Scene> getWorldScene() const { return mWorldScene; }
         Misc::NotNullPtr<MWWorld::ESMStore> getESMStore() const { return mESMStore; }

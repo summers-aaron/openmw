@@ -22,6 +22,7 @@
 #include "../mwmechanics/creaturestats.hpp"
 
 #include "../mwbase/environment.hpp"
+#include "../mwbase/worldrendering.hpp"
 #include "../mwbase/world.hpp"
 
 #include "luaevents.hpp"
@@ -333,7 +334,7 @@ namespace MWLua
             });
             objectT["getBoundingBox"] = [](const ObjectT& o) {
                 MWRender::RenderingManager* renderingManager
-                    = MWBase::Environment::get().getWorld()->getRenderingManager();
+                    = MWBase::Environment::get().getWorldRendering()->getRenderingManager();
                 osg::BoundingBox bb = renderingManager->getCullSafeBoundingBox(o.ptr());
                 return LuaUtil::Box{ bb.center(), bb._max - bb.center() };
             };

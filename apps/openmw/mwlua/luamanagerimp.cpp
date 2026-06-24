@@ -24,6 +24,7 @@
 
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
+#include "../mwbase/worldrendering.hpp"
 
 #include "../mwrender/bonegroup.hpp"
 #include "../mwrender/postprocessor.hpp"
@@ -386,7 +387,7 @@ namespace MWLua
     {
         LuaUi::clearGameInterface();
         mUiResourceManager.clear();
-        MWBase::Environment::get().getWorld()->getPostProcessor()->disableDynamicShaders();
+        MWBase::Environment::get().getWorldRendering()->getPostProcessor()->disableDynamicShaders();
         mActiveLocalScripts.clear();
         mLuaEvents.clear();
         mEngineEvents.clear();

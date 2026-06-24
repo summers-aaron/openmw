@@ -57,6 +57,7 @@
 #include <components/settings/values.hpp>
 
 #include "../mwbase/environment.hpp"
+#include "../mwbase/worldrendering.hpp"
 #include "../mwbase/inputmanager.hpp"
 #include "../mwbase/luamanager.hpp"
 #include "../mwbase/soundmanager.hpp"
@@ -2356,7 +2357,7 @@ namespace MWGui
 
     void WindowManager::togglePostProcessorHud()
     {
-        if (!MWBase::Environment::get().getWorld()->getPostProcessor()->isEnabled())
+        if (!MWBase::Environment::get().getWorldRendering()->getPostProcessor()->isEnabled())
         {
             messageBox("#{OMWEngine:PostProcessingIsNotEnabled}");
             return;

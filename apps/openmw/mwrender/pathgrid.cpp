@@ -1,4 +1,5 @@
 #include "pathgrid.hpp"
+#include "rendermode.hpp"
 
 #include <cassert>
 

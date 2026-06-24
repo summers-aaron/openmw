@@ -6,6 +6,7 @@
 #include <components/misc/strings/format.hpp>
 
 #include "../mwbase/environment.hpp"
+#include "../mwbase/worldrendering.hpp"
 #include "../mwbase/world.hpp"
 #include "../mwrender/postprocessor.hpp"
 
@@ -67,7 +68,7 @@ namespace MWLua
         return [context](const Shader& shader, const std::string& name, const T& value) {
             context.mLuaManager->addAction(
                 [=] {
-                    MWBase::Environment::get().getWorld()->getPostProcessor()->setUniform(shader.mShader, name, value);
+                    MWBase::Environment::get().getWorldRendering()->getPostProcessor()->setUniform(shader.mShader, name, value);
                 },
                 "SetUniformShaderAction");
         };
@@ -78,7 +79,7 @@ namespace MWLua
     {
         return [context](const Shader& shader, const std::string& name, const sol::table& table) {
             auto targetSize
-                = MWBase::Environment::get().getWorld()->getPostProcessor()->getUniformSize(shader.mShader, name);
+                = MWBase::Environment::get().getWorldRendering()->getPostProcessor()->getUniformSize(shader.mShader, name);
 
             if (!targetSize.has_value())
                 throw std::runtime_error(Misc::StringUtils::format("Failed setting uniform array '%s'", name));
@@ -100,7 +101,7 @@ namespace MWLua
 
             context.mLuaManager->addAction(
                 [shader, name, values = std::move(values)] {
-                    MWBase::Environment::get().getWorld()->getPostProcessor()->setUniform(shader.mShader, name, values);
+                    MWBase::Environment::get().getWorldRendering()->getPostProcessor()->setUniform(shader.mShader, name, values);
                 },
                 "SetUniformShaderAction");
         };
@@ -126,7 +127,7 @@ namespace MWLua
                 context.mLuaManager->addAction([=, &self] {
                     self.mQueuedAction = Shader::Action_None;
 
-                    if (MWBase::Environment::get().getWorld()->getPostProcessor()->enableTechnique(self.mShader, pos)
+                    if (MWBase::Environment::get().getWorldRendering()->getPostProcessor()->enableTechnique(self.mShader, pos)
                         == MWRender::PostProcessor::Status_Error)
                         throw std::runtime_error("Failed enabling shader '" + self.mShader->getName() + "'");
                 });
@@ -138,7 +139,7 @@ namespace MWLua
                 context.mLuaManager->addAction([&] {
                     self.mQueuedAction = Shader::Action_None;
 
-                    if (MWBase::Environment::get().getWorld()->getPostProcessor()->disableTechnique(self.mShader)
+                    if (MWBase::Environment::get().getWorldRendering()->getPostProcessor()->disableTechnique(self.mShader)
                         == MWRender::PostProcessor::Status_Error)
                         throw std::runtime_error("Failed disabling shader '" + self.mShader->getName() + "'");
                 });
@@ -149,7 +150,7 @@ namespace MWLua
                     return true;
                 else if (self.mQueuedAction == Shader::Action_Disable)
                     return false;
-                return MWBase::Environment::get().getWorld()->getPostProcessor()->isTechniqueEnabled(self.mShader);
+                return MWBase::Environment::get().getWorldRendering()->getPostProcessor()->isTechniqueEnabled(self.mShader);
             };
 
             shader["name"] = sol::readonly_property(
@@ -176,7 +177,7 @@ namespace MWLua
         }
 
         api["load"] = [](const std::string& name) {
-            Shader shader{ MWBase::Environment::get().getWorld()->getPostProcessor()->loadTechnique(name, false) };
+            Shader shader{ MWBase::Environment::get().getWorldRendering()->getPostProcessor()->loadTechnique(name, false) };
 
             if (!shader.mShader || !shader.mShader->isValid())
                 throw std::runtime_error(Misc::StringUtils::format("Failed loading shader '%s'", name));
@@ -187,7 +188,7 @@ namespace MWLua
         api["getChain"] = [context]() {
             sol::table chain(context.sol(), sol::create);
 
-            for (const auto& shader : MWBase::Environment::get().getWorld()->getPostProcessor()->getChain())
+            for (const auto& shader : MWBase::Environment::get().getWorldRendering()->getPostProcessor()->getChain())
             {
                 // Don't expose internal shaders to the API, they should be invisible to the user
                 if (shader->getInternal())

@@ -26,6 +26,7 @@
 
 #include "../mwbase/dialoguemanager.hpp"
 #include "../mwbase/environment.hpp"
+#include "../mwbase/worldrendering.hpp"
 #include "../mwbase/inputmanager.hpp"
 #include "../mwbase/journal.hpp"
 #include "../mwbase/luamanager.hpp"
@@ -857,7 +858,7 @@ void MWState::StateManager::writeScreenshot(std::vector<char>& imageData) const
 
     osg::ref_ptr<osg::Image> screenshot(new osg::Image);
 
-    MWBase::Environment::get().getWorld()->screenshot(screenshot.get(), screenshotW, screenshotH);
+    MWBase::Environment::get().getWorldRendering()->screenshot(screenshot.get(), screenshotW, screenshotH);
 
     osgDB::ReaderWriter* readerwriter = osgDB::Registry::instance()->getReaderWriterForExtension("jpg");
     if (!readerwriter)

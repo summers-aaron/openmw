@@ -11,6 +11,7 @@
 #include <components/vfs/pathutil.hpp>
 
 #include "../mwbase/world.hpp"
+#include "../mwbase/worldrendering.hpp"
 
 #include "contentloader.hpp"
 #include "esmstore.hpp"
@@ -83,7 +84,7 @@ namespace MWWorld
 
     /// \brief The game world and its visual representation
 
-    class World final : public MWBase::World
+    class World final : public MWBase::World, public MWBase::WorldRendering
     {
     private:
         Resource::ResourceSystem* mResourceSystem;
