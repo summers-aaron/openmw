@@ -2228,14 +2228,18 @@ namespace MWWorld
             MWBase::Environment::get().getMechanicsManager()->remove(getPlayerPtr(), true);
             mNavigator->removeAgent(getPathfindingAgentBounds(getPlayerConstPtr()));
             mPhysics->remove(getPlayerPtr());
-            mRendering->removePlayer(getPlayerPtr());
+            if (!MWBase::Environment::get().isDedicated())
+                mRendering->removePlayer(getPlayerPtr());
             MWBase::Environment::get().getLuaManager()->objectRemovedFromScene(getPlayerPtr());
 
             mPlayers.getLocalPlayer().set(player);
         }
 
         Ptr ptr = mPlayers.getLocalPlayerPtr();
-        mRendering->setupPlayer(ptr);
+        // The dedicated server has no rendering client: skip building the player's scene node
+        // and animation. The reference's base node stays null, which the simulation handles.
+        if (!MWBase::Environment::get().isDedicated())
+            mRendering->setupPlayer(ptr);
         MWBase::Environment::get().getLuaManager()->setupPlayer(ptr);
     }
 
@@ -2245,10 +2249,18 @@ namespace MWWorld
 
         MWWorld::Ptr player = getPlayerPtr();
 
-        mRendering->renderPlayer(player);
-        MWRender::NpcAnimation* anim = static_cast<MWRender::NpcAnimation*>(mRendering->getAnimation(player));
-        player.getClass().getInventoryStore(player).setInvListener(anim);
-        player.getClass().getInventoryStore(player).setContListener(anim);
+        // Visual player construction (scene node, NpcAnimation, inventory view listeners,
+        // particles) is client-only and needs the skeleton/body meshes; skip it on a headless
+        // dedicated server. The simulation setup below — scale/rotation, mechanics, physics
+        // actor and navigator agent — always runs.
+        const bool dedicated = MWBase::Environment::get().isDedicated();
+        if (!dedicated)
+        {
+            mRendering->renderPlayer(player);
+            MWRender::NpcAnimation* anim = static_cast<MWRender::NpcAnimation*>(mRendering->getAnimation(player));
+            player.getClass().getInventoryStore(player).setInvListener(anim);
+            player.getClass().getInventoryStore(player).setContListener(anim);
+        }
 
         scaleObject(player, player.getCellRef().getScale(), true); // apply race height
         rotateObject(player, osg::Vec3f(), MWBase::RotationFlag_inverseOrder | MWBase::RotationFlag_adjust);
@@ -2259,7 +2271,8 @@ namespace MWWorld
         mPhysics->remove(getPlayerPtr());
         mPhysics->addActor(getPlayerPtr(), getPlayerPtr().getClass().getCorrectedModel(getPlayerPtr()));
 
-        applyLoopingParticles(player);
+        if (!dedicated)
+            applyLoopingParticles(player);
 
         const DetourNavigator::AgentBounds agentBounds = getPathfindingAgentBounds(getPlayerConstPtr());
         if (!mNavigator->addAgent(agentBounds))
