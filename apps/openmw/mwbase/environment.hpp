@@ -3,8 +3,6 @@
 
 #include <components/misc/notnullptr.hpp>
 
-#include "../runmode.hpp"
-
 #include <memory>
 
 namespace Resource
@@ -64,7 +62,6 @@ namespace MWBase
         L10n::Manager* mL10nManager = nullptr;
         float mFrameRateLimit = 0;
         float mFrameDuration = 0;
-        OMW::RunMode mRunMode = OMW::RunMode::Integrated;
 
     public:
         Environment();
@@ -136,11 +133,6 @@ namespace MWBase
         void setFrameRateLimit(float value) { mFrameRateLimit = value; }
 
         float getFrameDuration() const { return mFrameDuration; }
-
-        void setRunMode(OMW::RunMode value) { mRunMode = value; }
-        OMW::RunMode getRunMode() const { return mRunMode; }
-        /// True when running as a headless dedicated server (no rendering/GUI/audio client).
-        bool isDedicated() const { return OMW::isDedicated(mRunMode); }
 
         void setFrameDuration(float value) { mFrameDuration = value; }
 
