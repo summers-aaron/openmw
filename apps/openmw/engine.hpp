@@ -160,6 +160,7 @@ namespace OMW
         std::unique_ptr<Stereo::Manager> mStereoManager;
 
         RunMode mRunMode;
+        unsigned mMaxFrames = 0;
         bool mSkipMenu;
         bool mUseSound;
         bool mCompileAll;
@@ -246,6 +247,10 @@ namespace OMW
         /// server half headlessly with null client managers; default is Integrated (SP).
         void setRunMode(RunMode mode) { mRunMode = mode; }
         bool isDedicated() const { return OMW::isDedicated(mRunMode); }
+
+        /// Run at most this many simulation frames then quit (0 = unlimited). Intended for
+        /// headless/dedicated bounded runs and automated testing.
+        void setMaxFrames(unsigned frames) { mMaxFrames = frames; }
 
         /// Initialise and enter main loop.
         void go();

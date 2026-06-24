@@ -87,6 +87,10 @@ namespace OpenMW
 
         addOption("no-grab", bpo::value<bool>()->implicit_value(true)->default_value(false), "Don't grab mouse cursor");
 
+        addOption("frames", bpo::value<unsigned int>()->default_value(0),
+            "Run at most this many simulation frames then quit (0 = unlimited). Useful for "
+            "headless/dedicated bounded runs and automated testing.");
+
         addOption("dedicated", bpo::value<bool>()->implicit_value(true)->default_value(false),
             "Run as a headless dedicated server: install null window/input/sound managers, never "
             "present frames, and skip viewer traversal, so the world simulation (time, AI, physics, "

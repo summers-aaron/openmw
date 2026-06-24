@@ -92,6 +92,13 @@ namespace MWLua
 
     LuaManager::~LuaManager()
     {
+        // Clear the Lua UI element registries while the Lua state is still alive (members are
+        // destroyed after this body). Otherwise the static sGameElements/sMenuElements maps are
+        // torn down at process exit, after the Lua state, and unref into a dead state — which
+        // crashes a dedicated server, whose NullWindowManager never runs the WindowManager::clear()
+        // that normally empties them.
+        LuaUi::clearGameInterface();
+        LuaUi::clearMenuInterface();
         LuaUi::clearSettings();
     }
 

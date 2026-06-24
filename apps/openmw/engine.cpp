@@ -1079,8 +1079,19 @@ void OMW::Engine::go()
     MWWorld::DateTimeManager& timeManager = *mWorld->getTimeManager();
     Misc::FrameRateLimiter frameRateLimiter = Misc::makeFrameRateLimiter(mEnvironment.getFrameRateLimit());
     const std::chrono::steady_clock::duration maxSimulationInterval(std::chrono::milliseconds(200));
+    unsigned simFrames = 0;
+    const double startGameTime = timeManager.getGameTime();
     while (!mViewer->done() && !mStateManager->hasQuitRequest())
     {
+        // Bounded run (--frames): tick a fixed number of simulation frames then quit. Used
+        // for headless/dedicated runs and automated testing where there is no window to close.
+        if (mMaxFrames != 0 && simFrames >= mMaxFrames)
+        {
+            Log(Debug::Info) << "Reached frame limit (" << mMaxFrames << "); game time advanced "
+                             << (timeManager.getGameTime() - startGameTime) << "s over the run. Quitting.";
+            break;
+        }
+
         const double dt = std::chrono::duration_cast<std::chrono::duration<double>>(
                               std::min(frameRateLimiter.getLastFrameDuration(), maxSimulationInterval))
                               .count()
@@ -1101,6 +1112,7 @@ void OMW::Engine::go()
             timeManager.setSimulationTime(timeManager.getSimulationTime() + dt);
             timeManager.setRenderingSimulationTime(timeManager.getRenderingSimulationTime() + dt);
         }
+        ++simFrames;
 
         if (stats)
         {
