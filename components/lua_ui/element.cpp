@@ -280,6 +280,11 @@ namespace LuaUi
 
     void Element::create(uint64_t depth)
     {
+        // The Lua UI layer is built on MyGUI. On a headless server (no window manager) MyGUI
+        // is never initialized, so UI elements are inert: client UI scripts may run but their
+        // widget operations do nothing, rather than dereferencing a null MyGUI::Gui.
+        if (!MyGUI::Gui::getInstancePtr())
+            return;
         if (mState == New)
         {
             assert(!mRoot);
@@ -293,6 +298,8 @@ namespace LuaUi
 
     void Element::update()
     {
+        if (!MyGUI::Gui::getInstancePtr())
+            return; // headless server: UI is inert (see Element::create)
         if (mState == Update)
         {
             assert(mRoot);

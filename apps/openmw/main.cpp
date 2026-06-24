@@ -77,6 +77,8 @@ bool parseOptions(int argc, char** argv, OMW::Engine& engine, Files::Configurati
     if (variables["dedicated"].as<bool>())
         engine.setRunMode(OMW::RunMode::Dedicated);
 
+    engine.setMaxFrames(variables["frames"].as<unsigned int>());
+
     // Font encoding settings
     std::string encoding(variables["encoding"].as<std::string>());
     Log(Debug::Info) << ToUTF8::encodingUsingMessage(encoding);
