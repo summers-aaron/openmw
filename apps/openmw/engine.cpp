@@ -1,7 +1,9 @@
 #include "engine.hpp"
 
+#include <atomic>
 #include <cerrno>
 #include <chrono>
+#include <csignal>
 #include <future>
 #include <system_error>
 
@@ -93,6 +95,16 @@
 
 namespace
 {
+    // Set by the SIGINT/SIGTERM handler installed for the dedicated server so the main loop can
+    // shut down gracefully (docker stop / systemd stop / Ctrl+C). Only an async-signal-safe
+    // atomic store happens in the handler; the loop does the actual teardown.
+    std::atomic_bool sShutdownRequested{ false };
+
+    void requestShutdownHandler(int)
+    {
+        sShutdownRequested.store(true, std::memory_order_relaxed);
+    }
+
     void checkSDLError(int ret)
     {
         if (ret != 0)
@@ -1075,6 +1087,15 @@ void OMW::Engine::go()
         mWindowManager->executeInConsole(mStartupScript);
     }
 
+    // A dedicated server has no window to close, so let SIGINT/SIGTERM (Ctrl+C, docker stop,
+    // systemd stop) request a graceful shutdown. Installed only for the dedicated server so
+    // singleplayer keeps the default signal behaviour.
+    if (isDedicated())
+    {
+        std::signal(SIGINT, &requestShutdownHandler);
+        std::signal(SIGTERM, &requestShutdownHandler);
+    }
+
     // Start the main rendering loop
     MWWorld::DateTimeManager& timeManager = *mWorld->getTimeManager();
     Misc::FrameRateLimiter frameRateLimiter = Misc::makeFrameRateLimiter(mEnvironment.getFrameRateLimit());
@@ -1083,6 +1104,12 @@ void OMW::Engine::go()
     const double startGameTime = timeManager.getGameTime();
     while (!mViewer->done() && !mStateManager->hasQuitRequest())
     {
+        if (sShutdownRequested.load(std::memory_order_relaxed))
+        {
+            Log(Debug::Info) << "Shutdown signal received; quitting.";
+            break;
+        }
+
         // Bounded run (--frames): tick a fixed number of simulation frames then quit. Used
         // for headless/dedicated runs and automated testing where there is no window to close.
         if (mMaxFrames != 0 && simFrames >= mMaxFrames)
