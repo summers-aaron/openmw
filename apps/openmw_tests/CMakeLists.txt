@@ -19,9 +19,6 @@ file(GLOB UNITTEST_SRC_FILES
 
     mwnull/testnullmanagers.cpp
 
-    bootdata/genbootdata.cpp
-    ${CMAKE_SOURCE_DIR}/apps/opencs/model/world/defaultgmsts.cpp
-
     mwgui/tooltips.cpp
     mwgui/weightedsearch.cpp
 
