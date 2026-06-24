@@ -83,6 +83,10 @@
 
 #include "mwnet/loopbacktransport.hpp"
 
+#include "mwnull/nullinputmanager.hpp"
+#include "mwnull/nullsoundmanager.hpp"
+#include "mwnull/nullwindowmanager.hpp"
+
 #include "mwstate/statemanagerimp.hpp"
 
 #include "profile.hpp"
@@ -225,7 +229,10 @@ bool OMW::Engine::frame(unsigned frameNumber, float frametime)
         {
             ScopedProfile<UserStatsType::Sound> profile(frameStart, frameNumber, *timer, *stats);
 
-            if (!mWindowManager->isWindowVisible())
+            // The dedicated server's window is intentionally hidden (so isWindowVisible() is
+            // false). Don't let that pause the simulation — the whole point is to keep ticking
+            // the world without a visible window.
+            if (!isDedicated() && !mWindowManager->isWindowVisible())
             {
                 mSoundManager->pausePlayback();
                 return false;
@@ -354,19 +361,28 @@ bool OMW::Engine::frame(unsigned frameNumber, float frametime)
 
     mStereoManager->updateSettings(Settings::camera().mNearClip, Settings::camera().mViewingDistance);
 
-    mViewer->eventTraversal();
-    mViewer->updateTraversal();
+    // A dedicated server never presents frames: skip the OSG viewer traversals (event/update/
+    // rendering) and the crosshair-focus update, which are pure client presentation. The Lua
+    // worker below is part of the simulation, not rendering, so it always runs.
+    const bool dedicated = isDedicated();
 
-    // update focus object for GUI
+    if (!dedicated)
     {
-        ScopedProfile<UserStatsType::Focus> profile(frameStart, frameNumber, *timer, *stats);
-        mWorld->updateFocusObject();
+        mViewer->eventTraversal();
+        mViewer->updateTraversal();
+
+        // update focus object for GUI
+        {
+            ScopedProfile<UserStatsType::Focus> profile(frameStart, frameNumber, *timer, *stats);
+            mWorld->updateFocusObject();
+        }
     }
 
     // if there is a separate Lua thread, it starts the update now
     mLuaWorker->allowUpdate(frameStart, frameNumber, *stats);
 
-    mViewer->renderingTraversals();
+    if (!dedicated)
+        mViewer->renderingTraversals();
 
     mLuaWorker->finishUpdate(frameStart, frameNumber, *stats);
 
@@ -380,6 +396,7 @@ OMW::Engine::Engine(Files::ConfigurationManager& configurationManager)
     , mSelectDepthFormatOperation(new SceneUtil::SelectDepthFormatOperation())
     , mSelectColorFormatOperation(new SceneUtil::Color::SelectColorFormatOperation())
     , mStereoManager(nullptr)
+    , mRunMode(RunMode::Integrated)
     , mSkipMenu(false)
     , mUseSound(true)
     , mCompileAll(false)
@@ -522,7 +539,10 @@ void OMW::Engine::createWindow()
         posY = SDL_WINDOWPOS_UNDEFINED_DISPLAY(screen);
     }
 
-    Uint32 flags = SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
+    // A dedicated server keeps the window hidden (a GL context is still required for the
+    // OSG rendering pipeline at this milestone, but no frames are ever presented).
+    Uint32 flags = SDL_WINDOW_OPENGL | (isDedicated() ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN)
+        | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
     if (windowMode == Settings::WindowMode::Fullscreen)
         flags |= SDL_WINDOW_FULLSCREEN;
     else if (windowMode == Settings::WindowMode::WindowedFullscreen)
@@ -841,17 +861,27 @@ void OMW::Engine::prepareEngine()
     mStereoManager->disableStereoForNode(guiRoot);
     rootNode->addChild(guiRoot);
 
-    mWindowManager = std::make_unique<MWGui::WindowManager>(mWindow, mViewer, guiRoot, mResourceSystem.get(),
-        mWorkQueue.get(), mCfgMgr.getLogPath(), mScriptConsoleMode, mTranslationDataStorage, mEncoding, mExportFonts,
-        Version::getOpenmwVersionDescription(), mCfgMgr);
+    if (isDedicated())
+    {
+        // Headless dedicated server: the client subsystems (MyGUI, SDL input, OpenAL) are
+        // replaced by inert null managers. The server-half simulation still runs in full.
+        mWindowManager = std::make_unique<MWNull::NullWindowManager>();
+        mInputManager = std::make_unique<MWNull::NullInputManager>();
+        mSoundManager = std::make_unique<MWNull::NullSoundManager>();
+    }
+    else
+    {
+        mWindowManager = std::make_unique<MWGui::WindowManager>(mWindow, mViewer, guiRoot, mResourceSystem.get(),
+            mWorkQueue.get(), mCfgMgr.getLogPath(), mScriptConsoleMode, mTranslationDataStorage, mEncoding,
+            mExportFonts, Version::getOpenmwVersionDescription(), mCfgMgr);
+
+        mInputManager = std::make_unique<MWInput::InputManager>(mWindow, mViewer, mScreenCaptureHandler, keybinderUser,
+            keybinderUserExists, userGameControllerdb, gameControllerdb, mGrab);
+
+        mSoundManager = std::make_unique<MWSound::SoundManager>(mVFS.get(), mUseSound);
+    }
     mEnvironment.setWindowManager(*mWindowManager);
-
-    mInputManager = std::make_unique<MWInput::InputManager>(mWindow, mViewer, mScreenCaptureHandler, keybinderUser,
-        keybinderUserExists, userGameControllerdb, gameControllerdb, mGrab);
     mEnvironment.setInputManager(*mInputManager);
-
-    // Create sound system
-    mSoundManager = std::make_unique<MWSound::SoundManager>(mVFS.get(), mUseSound);
     mEnvironment.setSoundManager(*mSoundManager);
 
     // Create the world

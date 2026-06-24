@@ -17,6 +17,8 @@ file(GLOB UNITTEST_SRC_FILES
 
     mwnet/testloopback.cpp
 
+    mwnull/testnullmanagers.cpp
+
     mwgui/tooltips.cpp
     mwgui/weightedsearch.cpp
 

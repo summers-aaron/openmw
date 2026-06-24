@@ -279,7 +279,7 @@ namespace MWSound
         void pausePlayback() override;
         void resumePlayback() override;
 
-        void update(float duration);
+        void update(float duration) override;
 
         void setListenerPosDir(
             const osg::Vec3f& pos, const osg::Vec3f& dir, const osg::Vec3f& up, bool underwater) override;

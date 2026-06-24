@@ -120,6 +120,10 @@ add_openmw_dir (mwnet
     message sessiontransport loopbacktransport
     )
 
+add_openmw_dir (mwnull
+    nullsoundmanager nullwindowmanager nullinputmanager
+    )
+
 # Main executable
 
 add_library(openmw-lib STATIC

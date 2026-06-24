@@ -238,6 +238,10 @@ namespace MWBase
 
         virtual void updatePtr(const MWWorld::ConstPtr& old, const MWWorld::ConstPtr& updated) = 0;
 
+        /// Per-frame update. Promoted to the interface so the engine drives it through a base
+        /// pointer; the null no-ops it.
+        virtual void update(float duration) = 0;
+
         void setSimulationTimeScale(float scale) { mSimulationTimeScale = scale; }
         float getSimulationTimeScale() const { return mSimulationTimeScale; }
 
