@@ -81,6 +81,8 @@
 
 #include "mwmechanics/mechanicsmanagerimp.hpp"
 
+#include "mwnet/loopbacktransport.hpp"
+
 #include "mwstate/statemanagerimp.hpp"
 
 #include "profile.hpp"
@@ -187,6 +189,17 @@ void OMW::Engine::executeLocalScripts()
     }
 }
 
+void OMW::Engine::pumpTransport()
+{
+    // The heartbeat is the only traffic at M1: an empty reliable message sent each tick.
+    // Pump the transport and drain whatever the peer delivered. Loopback hands the
+    // heartbeat straight back in-process and we discard it, so SP is byte-identical; the
+    // point is purely that the simulation already flows through the seam.
+    mTransport->send(MWNet::Message{ MWNet::Channel::Reliable, {} });
+    mTransport->update();
+    mTransport->receive();
+}
+
 bool OMW::Engine::frame(unsigned frameNumber, float frametime)
 {
     const osg::Timer_t frameStart = mViewer->getStartTick();
@@ -194,6 +207,8 @@ bool OMW::Engine::frame(unsigned frameNumber, float frametime)
     osg::Stats* const stats = mViewer->getViewerStats();
 
     mEnvironment.setFrameDuration(frametime);
+
+    pumpTransport();
 
     try
     {
@@ -418,6 +433,7 @@ OMW::Engine::~Engine()
     mLuaWorker = nullptr;
     mLuaManager = nullptr;
     mL10nManager = nullptr;
+    mTransport = nullptr;
 
     mScriptContext = nullptr;
 
@@ -724,6 +740,11 @@ void OMW::Engine::prepareEngine()
 {
     mStateManager = std::make_unique<MWState::StateManager>(mCfgMgr.getUserDataPath() / "saves", mContentFiles);
     mEnvironment.setStateManager(*mStateManager);
+
+    // Integrated singleplayer is "a local server + one local client in one process" joined by
+    // an in-process loopback transport. Other run modes (networked client, dedicated server)
+    // will swap in a real transport here; loopback does no serialization, so SP is unchanged.
+    mTransport = std::make_unique<MWNet::LoopbackTransport>();
 
     const bool stereoEnabled = Settings::stereo().mStereoEnabled || osg::DisplaySettings::instance().get()->getStereo();
     mStereoManager = std::make_unique<Stereo::Manager>(
