@@ -1561,6 +1561,8 @@ namespace MWWorld
         // The same thing for "in jail" flag: reset it if:
         // 1. Player was in jail
         // 2. Jailing window was closed
+        // The jail window is a client flow; a headless server reports containsMode(GM_Jail) == false
+        // (no GUI), which simply clears the flag — jail "serving" is driven by the client.
         if (mPlayerInJail && !mGoToJail && !MWBase::Environment::get().getWindowManager()->containsMode(MWGui::GM_Jail))
             mPlayerInJail = false;
 
@@ -2384,6 +2386,9 @@ namespace MWWorld
 
     void World::hurtStandingActors(const ConstPtr& object, float healthPerSecond)
     {
+        // Hazard damage is suppressed while the local client has a GUI open. On a headless
+        // dedicated server NullWindowManager reports isGuiMode() == false, so hazard damage
+        // applies because the shared world is running — which is the correct server behaviour.
         if (MWBase::Environment::get().getWindowManager()->isGuiMode())
             return;
 
@@ -2418,6 +2423,8 @@ namespace MWWorld
 
     void World::hurtCollidingActors(const ConstPtr& object, float healthPerSecond)
     {
+        // See hurtStandingActors: headless servers report isGuiMode() == false, so the shared
+        // world's hazard damage applies correctly.
         if (MWBase::Environment::get().getWindowManager()->isGuiMode())
             return;
 
