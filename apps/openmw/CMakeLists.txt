@@ -116,6 +116,10 @@ add_openmw_dir (mwbase
     inputmanager windowmanager statemanager luamanager
     )
 
+add_openmw_dir (mwnet
+    message sessiontransport loopbacktransport
+    )
+
 # Main executable
 
 add_library(openmw-lib STATIC

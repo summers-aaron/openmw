@@ -103,6 +103,11 @@ namespace MWMechanics
     class MechanicsManager;
 }
 
+namespace MWNet
+{
+    class ISessionTransport;
+}
+
 namespace MWDialogue
 {
     class DialogueManager;
@@ -142,6 +147,7 @@ namespace OMW
         std::unique_ptr<MWLua::LuaManager> mLuaManager;
         std::unique_ptr<MWLua::Worker> mLuaWorker;
         std::unique_ptr<L10n::Manager> mL10nManager;
+        std::unique_ptr<MWNet::ISessionTransport> mTransport;
         MWBase::Environment mEnvironment;
         ToUTF8::FromType mEncoding;
         std::unique_ptr<ToUTF8::Utf8Encoder> mEncoder;
@@ -191,6 +197,13 @@ namespace OMW
         Engine& operator=(const Engine&);
 
         void executeLocalScripts();
+
+        /// Send a heartbeat through the session transport and drain anything the
+        /// peer delivered. In integrated singleplayer the transport is loopback,
+        /// so this is an in-process round-trip with no observable effect; it
+        /// exists so the simulation already runs "through the transport" before
+        /// real messages flow across it (M9+).
+        void pumpTransport();
 
         bool frame(unsigned frameNumber, float dt);
 
