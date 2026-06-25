@@ -7,8 +7,9 @@ namespace MWNet
     namespace
     {
         constexpr std::uint8_t sVersion = 1;
-        // Smallest encoded CombatHit: attacker RefNum (4+4) + victim RefNum (4+4).
-        constexpr std::uint32_t sMinHitBytes = 16;
+        // Smallest encoded CombatHit: attacker RefNum (4+4) + victim RefNum (4+4) + damage
+        // (float, 4) + health-damage flag (1).
+        constexpr std::uint32_t sMinHitBytes = 21;
     }
 
     std::vector<std::byte> serializeActions(const ActionBatch& batch)
@@ -24,6 +25,8 @@ namespace MWNet
             writer.write(hit.mAttacker.mContentFile);
             writer.write(hit.mVictim.mIndex);
             writer.write(hit.mVictim.mContentFile);
+            writer.write(hit.mDamage);
+            writer.write(static_cast<std::uint8_t>(hit.mHealthDamage ? 1 : 0));
         }
         return out;
     }
@@ -46,9 +49,12 @@ namespace MWNet
         for (std::uint32_t i = 0; i < count; ++i)
         {
             CombatHit hit;
+            std::uint8_t healthDamage = 0;
             if (!reader.read(hit.mAttacker.mIndex) || !reader.read(hit.mAttacker.mContentFile)
-                || !reader.read(hit.mVictim.mIndex) || !reader.read(hit.mVictim.mContentFile))
+                || !reader.read(hit.mVictim.mIndex) || !reader.read(hit.mVictim.mContentFile)
+                || !reader.read(hit.mDamage) || !reader.read(healthDamage))
                 return std::nullopt;
+            hit.mHealthDamage = healthDamage != 0;
             batch.mHits.push_back(hit);
         }
         return batch;

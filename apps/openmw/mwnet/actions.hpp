@@ -12,13 +12,18 @@ namespace MWNet
 {
     /// A melee hit a peer's player landed on a host-owned actor. Clients don't own the
     /// world, so they can't resolve a hit on an NPC themselves — they report it and the
-    /// host applies it authoritatively (aggro now; validated damage later). mAttacker is
-    /// the attacking player's network id (so the host can target its avatar); mVictim is
-    /// the struck actor's world RefNum.
+    /// host applies it authoritatively. mAttacker is the attacking player's network id (so
+    /// the host can target its avatar); mVictim is the struck actor's world RefNum. mDamage
+    /// is the real damage the client computed with the full hit formula (weapon, strength,
+    /// skill, resist, block); mHealthDamage selects health (weapons) vs fatigue (a
+    /// non-knockout hand-to-hand hit). The host trusts the client's number for now;
+    /// re-validating it host-side is a later hardening step.
     struct CombatHit
     {
         ESM::RefNum mAttacker;
         ESM::RefNum mVictim;
+        float mDamage = 0.f;
+        bool mHealthDamage = true;
 
         friend bool operator==(const CombatHit&, const CombatHit&) = default;
     };

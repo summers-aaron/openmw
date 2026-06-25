@@ -627,14 +627,10 @@ namespace MWClass
             return;
 
         // Server-authoritative melee (M11): a struck actor owned by the host belongs to the
-        // shared world, not us, so we don't resolve the hit locally — we report it and the host
-        // applies it. In single-player nothing is remote-owned, so this never triggers.
-        if (ptr == MWMechanics::getPlayer() && victim.getRefData().isRemoteOwned())
-        {
-            if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
-                replicator->reportHit(victim.getCellRef().getRefNum());
-            return;
-        }
+        // shared world, not us. We still run the full local damage formula below (so the
+        // reported number is the real one), but instead of applying it we hand it to the host.
+        // In single-player nothing is remote-owned, so this never triggers.
+        const bool remoteVictim = ptr == MWMechanics::getPlayer() && victim.getRefData().isRemoteOwned();
 
         if (ptr == MWMechanics::getPlayer())
             MWBase::Environment::get().getWindowManager()->setEnemy(victim);
@@ -642,6 +638,14 @@ namespace MWClass
         float damage = 0.0f;
         if (!success)
         {
+            // A missed swing at a host-owned actor still makes it notice us: report a
+            // zero-damage hit so the host aggros, and don't touch the local replica.
+            if (remoteVictim)
+            {
+                if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+                    replicator->reportHit(victim.getCellRef().getRefNum(), 0.f, true);
+                return;
+            }
             MWBase::Environment::get().getLuaManager()->onHit(ptr, victim, weapon, MWWorld::Ptr(), type, attackStrength,
                 damage, false, hitPosition, false, MWMechanics::DamageSourceType::Melee);
             MWMechanics::reduceWeaponCondition(damage, false, weapon, ptr);
@@ -713,6 +717,16 @@ namespace MWClass
 
         if (victim == MWMechanics::getPlayer() && MWBase::Environment::get().getWorld()->getGodModeState())
             damage = 0;
+
+        // Host-owned victim: damage is now the real, fully-resolved number, but applying it is
+        // the host's job. Report it (the host reduces the actor's health/fatigue and aggros)
+        // and skip the local application so our replica isn't double-hit.
+        if (remoteVictim)
+        {
+            if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+                replicator->reportHit(victim.getCellRef().getRefNum(), damage, healthdmg);
+            return;
+        }
 
         MWMechanics::diseaseContact(victim, ptr);
 

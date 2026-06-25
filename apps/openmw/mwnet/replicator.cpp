@@ -270,18 +270,20 @@ namespace MWNet
             if (aggressor.isEmpty() || !aggressor.isInCell())
                 continue;
 
-            // Authoritative reaction: the struck actor aggros onto the reporting peer's avatar,
-            // and takes damage. The damage is a crude placeholder (a fixed amount) — proper
-            // server-side resolution would re-run the attack with the attacker's real stats and
-            // weapon; what matters here is that the hit lands authoritatively and its result
-            // (lost health, eventually death) replicates back via CreatureStats.
+            // Authoritative reaction: the struck actor aggros onto the reporting peer's avatar
+            // and takes the real damage the client computed (health for weapons, fatigue for a
+            // non-knockout hand-to-hand hit). The host owns this actor and runs full mechanics,
+            // so death (health <= 0) and its consequences play out here and replicate back via
+            // CreatureStats. (Trusting the client's number; host-side re-validation is later.)
             mechanics.startCombat(victim, aggressor, nullptr);
             MWMechanics::CreatureStats& victimStats = victim.getClass().getCreatureStats(victim);
-            MWMechanics::DynamicStat<float> health = victimStats.getHealth();
-            health.setCurrent(health.getCurrent() - 8.f, true);
-            victimStats.setHealth(health);
-            Log(Debug::Verbose) << "Applied combat hit: " << victim.getCellRef().getRefId() << " -> "
-                                << health.getCurrent() << " hp, aggroes onto remote player " << hit.mAttacker.mIndex;
+            const int index = hit.mHealthDamage ? 0 : 2; // 0 = health, 2 = fatigue
+            MWMechanics::DynamicStat<float> stat = victimStats.getDynamic(index);
+            stat.setCurrent(stat.getCurrent() - hit.mDamage, true);
+            victimStats.setDynamic(index, stat);
+            Log(Debug::Verbose) << "Applied combat hit: " << victim.getCellRef().getRefId() << " -"
+                                << hit.mDamage << (hit.mHealthDamage ? " hp -> " : " fatigue -> ") << stat.getCurrent()
+                                << ", aggroes onto remote player " << hit.mAttacker.mIndex;
         }
     }
 }

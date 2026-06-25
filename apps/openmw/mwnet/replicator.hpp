@@ -49,9 +49,13 @@ namespace MWNet
         /// network ids, so every client sees every other client's player, not just the host's.
         void setRelayAvatars(bool value) { mRelayAvatars = value; }
 
-        /// Report (from combat code on a client) that our player struck a host-owned actor.
-        /// Queued for the host, which resolves it authoritatively.
-        void reportHit(ESM::RefNum victim) { mOutgoingHits.push_back({ mLocalPlayerNetId, victim }); }
+        /// Report (from combat code on a client) that our player struck a host-owned actor
+        /// for a computed amount of damage. Queued for the host, which resolves it
+        /// authoritatively. healthDamage selects health vs fatigue.
+        void reportHit(ESM::RefNum victim, float damage, bool healthDamage)
+        {
+            mOutgoingHits.push_back({ mLocalPlayerNetId, victim, damage, healthDamage });
+        }
 
         /// Drain this tick's reported actions for sending.
         ActionBatch takeOutgoingActions()
