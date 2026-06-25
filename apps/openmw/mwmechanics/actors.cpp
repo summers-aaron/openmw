@@ -1799,6 +1799,12 @@ namespace MWMechanics
             if (!stats.isDead())
                 continue;
 
+            // A remote-owned actor died in the shared world: the host already resolved the
+            // authoritative consequences (soul trap, kill counts, the actorDied Lua hook), so
+            // here we only play the death animation and do the local visual/physics cleanup —
+            // re-running the consequences on every client would double-count and double-fire.
+            const bool remoteOwned = actor.getPtr().getRefData().isRemoteOwned();
+
             MWBase::Environment::get().getWorld()->removeActorPath(actor.getPtr());
             CharacterController::KillResult killResult = actor.getCharacterController().kill();
             if (killResult == CharacterController::Result_DeathAnimStarted)
@@ -1808,17 +1814,21 @@ namespace MWMechanics
                 // for NPCs since some of the npc death animation files are missing them.
                 MWBase::Environment::get().getDialogueManager()->say(actor.getPtr(), ESM::RefId::stringRefId("hit"));
 
-                // Apply soultrap
-                if (actor.getPtr().getType() == ESM::Creature::sRecordId)
-                    soulTrap(actor.getPtr());
+                if (!remoteOwned)
+                {
+                    // Apply soultrap
+                    if (actor.getPtr().getType() == ESM::Creature::sRecordId)
+                        soulTrap(actor.getPtr());
 
-                if (cls.isEssential(actor.getPtr()))
-                    MWBase::Environment::get().getWindowManager()->messageBox("#{sKilledEssential}");
+                    if (cls.isEssential(actor.getPtr()))
+                        MWBase::Environment::get().getWindowManager()->messageBox("#{sKilledEssential}");
+                }
             }
             else if (killResult == CharacterController::Result_DeathAnimJustFinished)
             {
                 const bool isPlayer = actor.getPtr() == getPlayer();
-                notifyDied(actor.getPtr());
+                if (!remoteOwned)
+                    notifyDied(actor.getPtr());
 
                 // Reset magic effects and recalculate derived effects
                 // One case where we need this is to make sure bound items are removed upon death
