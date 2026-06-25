@@ -27,8 +27,12 @@ namespace MWNet
         /// Read the world's active actors and build the delta of changed transforms.
         SnapshotDelta sampleDelta();
 
-        /// Apply a received delta to remotely-owned entities (none in SP/loopback).
-        void applyDelta(const SnapshotDelta& delta);
+        /// Apply an authoritative delta: move each entity already present locally to the
+        /// transform the authority reported. Entities not present yet are skipped (remote
+        /// instantiation is a later step). Returns how many entities were moved. The caller
+        /// must only invoke this for genuinely remote/authoritative deltas — never for a
+        /// loopback echo of our own state, which would perturb the local simulation.
+        std::size_t applyDelta(const SnapshotDelta& delta);
     };
 }
 

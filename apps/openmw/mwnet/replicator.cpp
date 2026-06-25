@@ -10,6 +10,7 @@
 #include "../mwworld/cellref.hpp"
 #include "../mwworld/ptr.hpp"
 #include "../mwworld/refdata.hpp"
+#include "../mwworld/worldmodel.hpp"
 
 namespace MWNet
 {
@@ -59,12 +60,24 @@ namespace MWNet
         return delta;
     }
 
-    void Replicator::applyDelta(const SnapshotDelta& delta)
+    std::size_t Replicator::applyDelta(const SnapshotDelta& delta)
     {
-        // Single-player / loopback: every entity in the world is locally authoritative,
-        // so a received delta is this peer's own echo and must not be re-applied (doing so
-        // would perturb physics and break SP byte-identity). M11 adds remotely owned
-        // entities (other players' actors); their transforms are applied here.
-        (void)delta;
+        MWBase::World& world = *MWBase::Environment::get().getWorld();
+        MWWorld::WorldModel& worldModel = *MWBase::Environment::get().getWorldModel();
+
+        std::size_t applied = 0;
+        for (const EntityState& entity : delta.mEntities)
+        {
+            if (!entity.mTransform)
+                continue;
+            const MWWorld::Ptr ptr = worldModel.getPtr(entity.mId);
+            if (ptr.isEmpty())
+                continue; // not present locally yet — remote instantiation is a later step
+
+            world.moveObject(ptr, entity.mTransform->mPosition);
+            world.rotateObject(ptr, entity.mTransform->mRotation, MWBase::RotationFlag_none);
+            ++applied;
+        }
+        return applied;
     }
 }
