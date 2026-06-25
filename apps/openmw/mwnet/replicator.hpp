@@ -3,11 +3,13 @@
 
 #include <cstdint>
 #include <map>
+#include <vector>
 
 #include <components/esm3/refnum.hpp>
 
 #include "../mwworld/ptr.hpp"
 
+#include "actions.hpp"
 #include "snapshot.hpp"
 
 namespace MWNet
@@ -30,10 +32,29 @@ namespace MWNet
         // This peer's own player network id (role-based: host vs client), so we never
         // instantiate an avatar for our own player echoed back.
         ESM::RefNum mLocalPlayerNetId;
+        // Hits this peer's player landed on host-owned actors, awaiting send to the host.
+        std::vector<CombatHit> mOutgoingHits;
 
     public:
         /// Identify this peer's player on the wire (host and each client get distinct ids).
         void setLocalPlayerNetId(ESM::RefNum id) { mLocalPlayerNetId = id; }
+
+        /// Report (from combat code on a client) that our player struck a host-owned actor.
+        /// Queued for the host, which resolves it authoritatively.
+        void reportHit(ESM::RefNum victim) { mOutgoingHits.push_back({ mLocalPlayerNetId, victim }); }
+
+        /// Drain this tick's reported actions for sending.
+        ActionBatch takeOutgoingActions()
+        {
+            ActionBatch batch;
+            batch.mHits = std::move(mOutgoingHits);
+            mOutgoingHits.clear();
+            return batch;
+        }
+
+        /// Apply received actions authoritatively (host only): make each struck actor aggro
+        /// onto the reporting peer's avatar.
+        void applyActions(const ActionBatch& batch);
 
         /// Read the world's active actors (and this peer's player) and build the delta.
         SnapshotDelta sampleDelta();

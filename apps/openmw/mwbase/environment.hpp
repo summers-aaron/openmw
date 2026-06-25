@@ -24,6 +24,11 @@ namespace MWWorld
     class Scene;
 }
 
+namespace MWNet
+{
+    class Replicator;
+}
+
 namespace MWBase
 {
     class World;
@@ -65,6 +70,7 @@ namespace MWBase
         float mFrameRateLimit = 0;
         float mFrameDuration = 0;
         OMW::RunMode mRunMode = OMW::RunMode::Integrated;
+        MWNet::Replicator* mReplicator = nullptr;
 
     public:
         Environment();
@@ -102,6 +108,11 @@ namespace MWBase
         void setResourceSystem(Resource::ResourceSystem& value) { mResourceSystem = &value; }
 
         void setL10nManager(L10n::Manager& value) { mL10nManager = &value; }
+
+        /// The network replicator, or nullptr outside a running session (e.g. before init).
+        /// Combat code reports hits on host-owned actors through it.
+        void setReplicator(MWNet::Replicator& value) { mReplicator = &value; }
+        MWNet::Replicator* getReplicator() const { return mReplicator; }
 
         Misc::NotNullPtr<World> getWorld() const { return mWorld; }
         Misc::NotNullPtr<WorldRendering> getWorldRendering() const { return mWorldRendering; }
