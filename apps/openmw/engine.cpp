@@ -940,26 +940,30 @@ void OMW::Engine::prepareEngine()
     mStereoManager->disableStereoForNode(guiRoot);
     rootNode->addChild(guiRoot);
 
+    // Headless dedicated server: the client subsystems (MyGUI, SDL input, OpenAL) are
+    // replaced by inert null managers. The server-half simulation still runs in full.
+    // The WindowManager must be registered before the InputManager is constructed —
+    // MWInput::MouseManager reads getWindowManager()->getScalingFactor() in its ctor.
+    if (isDedicated())
+        mWindowManager = std::make_unique<MWNull::NullWindowManager>();
+    else
+        mWindowManager = std::make_unique<MWGui::WindowManager>(mWindow, mViewer, guiRoot, mResourceSystem.get(),
+            mWorkQueue.get(), mCfgMgr.getLogPath(), mScriptConsoleMode, mTranslationDataStorage, mEncoding,
+            mExportFonts, Version::getOpenmwVersionDescription(), mCfgMgr);
+    mEnvironment.setWindowManager(*mWindowManager);
+
     if (isDedicated())
     {
-        // Headless dedicated server: the client subsystems (MyGUI, SDL input, OpenAL) are
-        // replaced by inert null managers. The server-half simulation still runs in full.
-        mWindowManager = std::make_unique<MWNull::NullWindowManager>();
         mInputManager = std::make_unique<MWNull::NullInputManager>();
         mSoundManager = std::make_unique<MWNull::NullSoundManager>();
     }
     else
     {
-        mWindowManager = std::make_unique<MWGui::WindowManager>(mWindow, mViewer, guiRoot, mResourceSystem.get(),
-            mWorkQueue.get(), mCfgMgr.getLogPath(), mScriptConsoleMode, mTranslationDataStorage, mEncoding,
-            mExportFonts, Version::getOpenmwVersionDescription(), mCfgMgr);
-
         mInputManager = std::make_unique<MWInput::InputManager>(mWindow, mViewer, mScreenCaptureHandler, keybinderUser,
             keybinderUserExists, userGameControllerdb, gameControllerdb, mGrab);
 
         mSoundManager = std::make_unique<MWSound::SoundManager>(mVFS.get(), mUseSound);
     }
-    mEnvironment.setWindowManager(*mWindowManager);
     mEnvironment.setInputManager(*mInputManager);
     mEnvironment.setSoundManager(*mSoundManager);
 
