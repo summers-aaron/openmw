@@ -55,6 +55,12 @@ namespace MWLua
         void callEventHandlers();
         void callMenuEventHandlers();
 
+        // Move out the events finalized since the last call, for replication over the
+        // session transport (M10). finalizeEventBatch mirrors each frame's events here
+        // before callEventHandlers dispatches and clears the live batch; draining this
+        // copy does not affect local dispatch, so single-player stays byte-identical.
+        void takeReplicatedEvents(std::vector<Global>& globalOut, std::vector<Local>& localOut);
+
         void load(lua_State* lua, ESM::ESMReader& esm, const std::map<int, int>& contentFileMapping,
             const LuaUtil::UserdataSerializer* serializer);
         void save(ESM::ESMWriter& esm) const;
@@ -67,6 +73,9 @@ namespace MWLua
         std::vector<Global> mGlobalEventBatch;
         std::vector<Local> mLocalEventBatch;
         std::vector<Global> mMenuEvents;
+        // Copies of finalized events awaiting collection by the replication layer (M10).
+        std::vector<Global> mReplicatedGlobalEvents;
+        std::vector<Local> mReplicatedLocalEvents;
     };
 
 }

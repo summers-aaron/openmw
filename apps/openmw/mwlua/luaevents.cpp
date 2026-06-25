@@ -25,6 +25,8 @@ namespace MWLua
         mNewGlobalEventBatch.clear();
         mNewLocalEventBatch.clear();
         mMenuEvents.clear();
+        mReplicatedGlobalEvents.clear();
+        mReplicatedLocalEvents.clear();
     }
 
     void LuaEvents::finalizeEventBatch()
@@ -33,6 +35,20 @@ namespace MWLua
         mNewLocalEventBatch.swap(mLocalEventBatch);
         mNewGlobalEventBatch.clear();
         mNewLocalEventBatch.clear();
+        // Mirror this frame's finalized events for replication before callEventHandlers
+        // dispatches and clears the live batch (M10).
+        mReplicatedGlobalEvents.insert(
+            mReplicatedGlobalEvents.end(), mGlobalEventBatch.begin(), mGlobalEventBatch.end());
+        mReplicatedLocalEvents.insert(
+            mReplicatedLocalEvents.end(), mLocalEventBatch.begin(), mLocalEventBatch.end());
+    }
+
+    void LuaEvents::takeReplicatedEvents(std::vector<Global>& globalOut, std::vector<Local>& localOut)
+    {
+        globalOut = std::move(mReplicatedGlobalEvents);
+        localOut = std::move(mReplicatedLocalEvents);
+        mReplicatedGlobalEvents.clear();
+        mReplicatedLocalEvents.clear();
     }
 
     void LuaEvents::callEventHandlers()

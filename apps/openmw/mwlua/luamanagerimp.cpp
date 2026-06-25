@@ -36,6 +36,8 @@
 #include "../mwworld/scene.hpp"
 #include "../mwworld/worldmodel.hpp"
 
+#include "../mwnet/events.hpp"
+
 #include "luabindings.hpp"
 #include "playerscripts.hpp"
 #include "types/types.hpp"
@@ -315,6 +317,32 @@ namespace MWLua
     void LuaManager::synchronizedUpdate()
     {
         mLua.protectedCall([&](LuaUtil::LuaView&) { synchronizedUpdateUnsafe(); });
+    }
+
+    MWNet::EventBatch LuaManager::collectOutgoingEvents()
+    {
+        std::vector<LuaEvents::Global> globals;
+        std::vector<LuaEvents::Local> locals;
+        mLuaEvents.takeReplicatedEvents(globals, locals);
+
+        MWNet::EventBatch batch;
+        batch.mGlobal.reserve(globals.size());
+        for (LuaEvents::Global& event : globals)
+            batch.mGlobal.push_back({ std::move(event.mEventName), std::move(event.mEventData) });
+        batch.mLocal.reserve(locals.size());
+        for (LuaEvents::Local& event : locals)
+            batch.mLocal.push_back({ event.mDest, std::move(event.mEventName), std::move(event.mEventData) });
+        return batch;
+    }
+
+    void LuaManager::injectIncomingEvents(const MWNet::EventBatch& batch)
+    {
+        // Single-player / loopback: every entity is locally authoritative, so a received
+        // batch is this peer's own echo and must not be re-applied (doing so would dispatch
+        // every event twice and change SP behaviour). M11 will, for each event, check the
+        // area-of-interest subscription and re-queue remote peers' events via
+        // addGlobalEvent/addLocalEvent so they run at the next synchronizedUpdate.
+        (void)batch;
     }
 
     void LuaManager::synchronizedUpdateUnsafe()
