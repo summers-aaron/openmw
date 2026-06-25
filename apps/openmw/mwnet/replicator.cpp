@@ -162,6 +162,22 @@ namespace MWNet
                 sampleStats(actor));
         }
 
+        // Host relay: re-broadcast each connected client's player (the avatar we hold) under its
+        // own network id, so every client learns about every other client's player — not just the
+        // host's. A client receiving its own id back ignores it (mLocalPlayerNetId check in apply).
+        if (mRelayAvatars)
+        {
+            for (const auto& [netId, avatar] : mAvatars)
+            {
+                if (avatar.isEmpty() || !avatar.isInCell())
+                    continue;
+                const ESM::Position& pos = avatar.getRefData().getPosition();
+                include(netId,
+                    TransformState{ pos.asVec3(), osg::Vec3f(pos.rot[0], pos.rot[1], pos.rot[2]) },
+                    sampleStats(avatar));
+            }
+        }
+
         return delta;
     }
 

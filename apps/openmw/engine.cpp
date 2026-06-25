@@ -1,5 +1,6 @@
 #include "engine.hpp"
 
+#include <random>
 #include <atomic>
 #include <cerrno>
 #include <chrono>
@@ -874,12 +875,22 @@ void OMW::Engine::prepareEngine()
     mReplicator = std::make_unique<MWNet::Replicator>();
     mEnvironment.setReplicator(*mReplicator);
     // Give this peer's player a network identity so other peers can show it as an avatar.
-    // Distinct per role; single-player leaves it unset (no player is replicated). One client
-    // is id 1 here — distinct ids for many clients need the join handshake (a later step).
+    // The host is the fixed authority (id 0); each client self-assigns a random non-zero id
+    // so any number of clients get distinct identities without a handshake (collision is ~1 in
+    // 4 billion). The host also relays clients' players to one another so they see each other.
+    // Single-player leaves the id unset (no player is replicated).
     if (!mConnectHost.empty())
-        mReplicator->setLocalPlayerNetId(ESM::RefNum{ 1, MWNet::sNetPlayerContentFile });
+    {
+        std::uint32_t id = std::random_device{}();
+        if (id == 0)
+            id = 1; // never collide with the host's id 0
+        mReplicator->setLocalPlayerNetId(ESM::RefNum{ id, MWNet::sNetPlayerContentFile });
+    }
     else if (mListenPort != 0)
+    {
         mReplicator->setLocalPlayerNetId(ESM::RefNum{ 0, MWNet::sNetPlayerContentFile });
+        mReplicator->setRelayAvatars(true);
+    }
 
     const bool stereoEnabled = Settings::stereo().mStereoEnabled || osg::DisplaySettings::instance().get()->getStereo();
     mStereoManager = std::make_unique<Stereo::Manager>(
