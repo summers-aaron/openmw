@@ -26,6 +26,11 @@
 #include "object.hpp"
 #include "objectlists.hpp"
 
+namespace MWNet
+{
+    struct EventBatch;
+}
+
 namespace MWLua
 {
     // \brief LuaManager is the central interface through which the engine invokes lua scripts.
@@ -65,6 +70,21 @@ namespace MWLua
         // Called by engine.cpp from the main thread between InputManager and MechanicsManager updates.
         // Can use the scene graph and applies the actions queued during update()
         void synchronizedUpdate();
+
+        // \brief Collect this peer's pending Lua events for replication (M10).
+        //
+        // Drains the events mirrored at finalizeEventBatch time (before local dispatch
+        // clears the live batch) as a transport-ready EventBatch. Draining the side copy
+        // does not alter local dispatch, so single-player stays byte-identical.
+        MWNet::EventBatch collectOutgoingEvents();
+
+        // \brief Inject Lua events received from a remote peer (M10).
+        //
+        // In single-player / loopback every entity is locally authoritative, so a
+        // received batch is this peer's own echo and is NOT re-applied. M11 injects
+        // remote peers' events here (filtered by area-of-interest subscription),
+        // applied at the next synchronizedUpdate.
+        void injectIncomingEvents(const MWNet::EventBatch& batch);
 
         // Normally it is called by `synchronizedUpdate` every frame.
         // Additionally must be called before making a save to ensure that there are no pending delayed

@@ -17,6 +17,7 @@ file(GLOB UNITTEST_SRC_FILES
 
     mwnet/testloopback.cpp
     mwnet/testsnapshot.cpp
+    mwnet/testevents.cpp
 
     mwnull/testnullmanagers.cpp
 

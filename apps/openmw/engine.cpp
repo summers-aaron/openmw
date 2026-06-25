@@ -83,6 +83,7 @@
 
 #include "mwmechanics/mechanicsmanagerimp.hpp"
 
+#include "mwnet/events.hpp"
 #include "mwnet/loopbacktransport.hpp"
 #include "mwnet/replicator.hpp"
 #include "mwnet/snapshot.hpp"
@@ -215,23 +216,45 @@ void OMW::Engine::pumpTransport()
     // loopback the delta is handed straight back in-process; applyDelta is a no-op
     // because every entity is locally authoritative, so SP stays byte-identical while
     // the full sample -> serialize -> transport -> deserialize path is exercised.
+    // M9: post-tick transform delta on the Unreliable (latest-wins) channel.
     const MWNet::SnapshotDelta delta = mReplicator->sampleDelta();
     mTransport->send(MWNet::Message{ MWNet::Channel::Unreliable, MWNet::serializeSnapshot(delta) });
+
+    // M10: this peer's Lua events on the Reliable (ordered, guaranteed) channel.
+    const MWNet::EventBatch outgoingEvents = mLuaManager->collectOutgoingEvents();
+    if (!outgoingEvents.empty())
+        mTransport->send(MWNet::Message{ MWNet::Channel::Reliable, MWNet::serializeEvents(outgoingEvents) });
+
     mTransport->update();
+
     std::size_t receivedEntities = 0;
+    std::size_t receivedEvents = 0;
     for (const MWNet::Message& message : mTransport->receive())
     {
         // Never trust a payload: a real peer (M11) can send malformed bytes; drop them.
-        if (const std::optional<MWNet::SnapshotDelta> received = MWNet::deserializeSnapshot(message.mPayload))
+        // The channel tags the payload kind (transforms vs events).
+        if (message.mChannel == MWNet::Channel::Unreliable)
         {
-            receivedEntities += received->mEntities.size();
-            mReplicator->applyDelta(*received);
+            if (const std::optional<MWNet::SnapshotDelta> received = MWNet::deserializeSnapshot(message.mPayload))
+            {
+                receivedEntities += received->mEntities.size();
+                mReplicator->applyDelta(*received);
+            }
+        }
+        else if (const std::optional<MWNet::EventBatch> received = MWNet::deserializeEvents(message.mPayload))
+        {
+            receivedEvents += received->mGlobal.size() + received->mLocal.size();
+            mLuaManager->injectIncomingEvents(*received);
         }
     }
-    // Verbose-only replication throughput (off by default), throttled to ~once per 300 ticks.
-    if (delta.mTick % 300 == 0)
+
+    // Verbose-only replication throughput (off by default), throttled to ~once per 300 ticks
+    // but always logged on any tick that actually carried Lua events.
+    if (delta.mTick % 300 == 0 || !outgoingEvents.empty())
         Log(Debug::Verbose) << "Replication tick " << delta.mTick << ": sent " << delta.mEntities.size()
-                            << " changed-entity delta(s), round-tripped " << receivedEntities;
+                            << " changed-entity delta(s) [round-tripped " << receivedEntities << "], "
+                            << (outgoingEvents.mGlobal.size() + outgoingEvents.mLocal.size())
+                            << " Lua event(s) [round-tripped " << receivedEvents << "]";
 }
 
 bool OMW::Engine::frame(unsigned frameNumber, float frametime)

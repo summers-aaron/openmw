@@ -117,7 +117,7 @@ add_openmw_dir (mwbase
     )
 
 add_openmw_dir (mwnet
-    message sessiontransport loopbacktransport snapshot replicator
+    message sessiontransport loopbacktransport snapshot replicator events
     )
 
 add_openmw_dir (mwnull
