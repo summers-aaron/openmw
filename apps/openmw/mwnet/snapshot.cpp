@@ -1,7 +1,6 @@
 #include "snapshot.hpp"
 
-#include <cstring>
-#include <type_traits>
+#include "bytestream.hpp"
 
 namespace MWNet
 {
@@ -16,55 +15,6 @@ namespace MWNet
 
         // Smallest possible encoded entity: RefNum (4 + 4) + field mask (1).
         constexpr std::uint32_t sMinEntityBytes = 9;
-
-        // Values cross the seam in host byte order. That is correct for the
-        // loopback (same process) and for the in-process server/client split;
-        // the real network transport (M11) is responsible for byte-order
-        // normalization across heterogeneous hosts.
-        class ByteWriter
-        {
-            std::vector<std::byte>& mOut;
-
-        public:
-            explicit ByteWriter(std::vector<std::byte>& out)
-                : mOut(out)
-            {
-            }
-
-            template <class T>
-            void write(const T& value)
-            {
-                static_assert(std::is_trivially_copyable_v<T>);
-                const auto* bytes = reinterpret_cast<const std::byte*>(&value);
-                mOut.insert(mOut.end(), bytes, bytes + sizeof(T));
-            }
-        };
-
-        class ByteReader
-        {
-            std::span<const std::byte> mData;
-            std::size_t mPos = 0;
-
-        public:
-            explicit ByteReader(std::span<const std::byte> data)
-                : mData(data)
-            {
-            }
-
-            // mPos never exceeds size(), so size() - mPos cannot underflow.
-            std::size_t remaining() const { return mData.size() - mPos; }
-
-            template <class T>
-            [[nodiscard]] bool read(T& value)
-            {
-                static_assert(std::is_trivially_copyable_v<T>);
-                if (sizeof(T) > remaining())
-                    return false;
-                std::memcpy(&value, mData.data() + mPos, sizeof(T));
-                mPos += sizeof(T);
-                return true;
-            }
-        };
     }
 
     std::vector<std::byte> serializeSnapshot(const SnapshotDelta& delta)
