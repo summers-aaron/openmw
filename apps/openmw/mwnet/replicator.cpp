@@ -10,6 +10,8 @@
 #include "../mwbase/mechanicsmanager.hpp"
 #include "../mwbase/world.hpp"
 
+#include "../mwmechanics/movement.hpp"
+
 #include "../mwworld/cellref.hpp"
 #include "../mwworld/cellstore.hpp"
 #include "../mwworld/class.hpp"
@@ -27,6 +29,24 @@ namespace MWNet
         // appearance (race/equipment) is a later step; "rat" is a record guaranteed
         // to exist in Morrowind data so instantiation can never fail on a missing id.
         constexpr std::string_view sAvatarRecord = "rat";
+
+        // Drive an applied actor's walk/idle animation from the motion it's about to make.
+        // The mechanics animation pass (CharacterController::update) still runs for remote-owned
+        // actors and selects the animation from their movement vector, but their AI is skipped so
+        // that vector is otherwise zero (idle while they slide). Set a forward component when the
+        // actor moved this tick so it plays its locomotion cycle. Call BEFORE moveObject, so the
+        // actor's current position is still the previous one. Approximate (always "forward" in the
+        // actor's facing); strafing/backwards blending and de-jitter are refinements.
+        void driveLocomotionAnimation(const MWWorld::Ptr& actor, const osg::Vec3f& newPosition)
+        {
+            if (!actor.getClass().isActor())
+                return;
+            osg::Vec3f step = newPosition - actor.getRefData().getPosition().asVec3();
+            step.z() = 0.f;
+            MWMechanics::Movement& movement = actor.getClass().getMovementSettings(actor);
+            movement.mPosition[0] = 0.f;
+            movement.mPosition[1] = step.length() > 0.5f ? 1.f : 0.f;
+        }
 
         ESM::Position toPosition(const TransformState& transform)
         {
@@ -156,6 +176,7 @@ namespace MWNet
                 MWWorld::Ptr& avatar = found->second;
                 if (avatar.isEmpty() || !avatar.isInCell())
                     continue;
+                driveLocomotionAnimation(avatar, entity.mTransform->mPosition);
                 world.moveObject(avatar, entity.mTransform->mPosition);
                 world.rotateObject(avatar, entity.mTransform->mRotation, MWBase::RotationFlag_none);
                 ++applied;
@@ -172,6 +193,7 @@ namespace MWNet
             // The host owns this entity: drive it purely from the authority and stop the
             // local simulation from fighting the applied pose (cease-remote-sim).
             ptr.getRefData().setRemoteOwned(true);
+            driveLocomotionAnimation(ptr, entity.mTransform->mPosition);
             world.moveObject(ptr, entity.mTransform->mPosition);
             world.rotateObject(ptr, entity.mTransform->mRotation, MWBase::RotationFlag_none);
             ++applied;
