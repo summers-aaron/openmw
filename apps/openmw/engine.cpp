@@ -240,8 +240,9 @@ void OMW::Engine::pumpTransport()
             if (const std::optional<MWNet::SnapshotDelta> snapshot = MWNet::deserializeSnapshot(message.mPayload))
             {
                 receivedEntities += snapshot->mEntities.size();
-                if (applyRemote)
-                    appliedEntities += mReplicator->applyDelta(*snapshot);
+                // Other peers' players always become avatars; world entities are applied
+                // only when this peer obeys the sender as an authority (a client of a host).
+                appliedEntities += mReplicator->applyDelta(*snapshot, applyRemote);
             }
         }
         else if (const std::optional<MWNet::EventBatch> events = MWNet::deserializeEvents(message.mPayload))
@@ -844,6 +845,13 @@ void OMW::Engine::prepareEngine()
         mSession = std::make_unique<MWNet::LoopbackSession>();
     }
     mReplicator = std::make_unique<MWNet::Replicator>();
+    // Give this peer's player a network identity so other peers can show it as an avatar.
+    // Distinct per role; single-player leaves it unset (no player is replicated). One client
+    // is id 1 here — distinct ids for many clients need the join handshake (a later step).
+    if (!mConnectHost.empty())
+        mReplicator->setLocalPlayerNetId(ESM::RefNum{ 1, MWNet::sNetPlayerContentFile });
+    else if (mListenPort != 0)
+        mReplicator->setLocalPlayerNetId(ESM::RefNum{ 0, MWNet::sNetPlayerContentFile });
 
     const bool stereoEnabled = Settings::stereo().mStereoEnabled || osg::DisplaySettings::instance().get()->getStereo();
     mStereoManager = std::make_unique<Stereo::Manager>(

@@ -13,6 +13,17 @@
 
 namespace MWNet
 {
+    /// Reserved RefNum content-file value marking a "player" entity in a snapshot.
+    /// A real world reference never uses it, so an EntityState whose mId.mContentFile
+    /// equals this is a peer's player (its mIndex is the peer's id), to be shown as an
+    /// avatar rather than matched against a local world reference.
+    inline constexpr std::int32_t sNetPlayerContentFile = -1000;
+
+    inline bool isNetPlayer(const ESM::RefNum& id)
+    {
+        return id.mContentFile == sNetPlayerContentFile;
+    }
+
     /// Replicated rigid-body state for one entity: world position and Euler
     /// rotation (matching ESM::Position's pos/rot). The canonical high-frequency
     /// field; other replicated fields (CreatureStats, equipment, active anim,
