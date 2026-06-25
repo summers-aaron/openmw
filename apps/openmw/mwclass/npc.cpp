@@ -626,11 +626,13 @@ namespace MWClass
         if (!MWMechanics::isInMeleeReach(ptr, victim, MWMechanics::getMeleeWeaponReach(ptr, weapon)))
             return;
 
-        // Server-authoritative melee (M11): a struck actor owned by the host belongs to the
-        // shared world, not us. We still run the full local damage formula below (so the
-        // reported number is the real one), but instead of applying it we hand it to the host.
-        // In single-player nothing is remote-owned, so this never triggers.
-        const bool remoteVictim = ptr == MWMechanics::getPlayer() && victim.getRefData().isRemoteOwned();
+        // Server-authoritative melee (M11): a struck actor that belongs to the shared world
+        // rather than this peer. We still run the full local damage formula below (so the
+        // reported number is the real one), but instead of applying it we hand it across the
+        // network: a client asks the host to resolve its hit; the host tells the owning client
+        // its player (avatar) was hit. In single-player nothing is remote-owned, so this never
+        // triggers.
+        const bool remoteVictim = victim.getRefData().isRemoteOwned();
 
         if (ptr == MWMechanics::getPlayer())
             MWBase::Environment::get().getWindowManager()->setEnemy(victim);
@@ -638,11 +640,13 @@ namespace MWClass
         float damage = 0.0f;
         if (!success)
         {
-            // A missed swing at a host-owned actor still makes it notice us: report a
-            // zero-damage hit so the host aggros, and don't touch the local replica.
+            // A missed player swing at a host-owned actor still makes it notice us: report a
+            // zero-damage hit so the host aggros. (A host actor missing an avatar needs no
+            // report.) Either way, never touch the remote-owned replica/avatar locally.
             if (remoteVictim)
             {
-                if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+                MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+                if (replicator && !replicator->isAuthority() && ptr == MWMechanics::getPlayer())
                     replicator->reportHit(victim.getCellRef().getRefNum(), 0.f, true);
                 return;
             }
@@ -718,13 +722,19 @@ namespace MWClass
         if (victim == MWMechanics::getPlayer() && MWBase::Environment::get().getWorld()->getGodModeState())
             damage = 0;
 
-        // Host-owned victim: damage is now the real, fully-resolved number, but applying it is
-        // the host's job. Report it (the host reduces the actor's health/fatigue and aggros)
-        // and skip the local application so our replica isn't double-hit.
+        // Remote-owned victim: damage is now the real, fully-resolved number, but applying it
+        // crosses the network. The host tells the avatar's owning client it was hit; a client
+        // asks the host to resolve its player's hit. Skip the local application either way so
+        // the replica/avatar isn't double-hit.
         if (remoteVictim)
         {
             if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
-                replicator->reportHit(victim.getCellRef().getRefNum(), damage, healthdmg);
+            {
+                if (replicator->isAuthority())
+                    replicator->reportRemotePlayerHit(victim, damage, healthdmg);
+                else if (ptr == MWMechanics::getPlayer())
+                    replicator->reportHit(victim.getCellRef().getRefNum(), damage, healthdmg);
+            }
             return;
         }
 

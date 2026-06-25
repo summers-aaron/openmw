@@ -38,8 +38,12 @@ namespace MWNet
         ESM::RefNum mLocalPlayerNetId;
         // Hits this peer's player landed on host-owned actors, awaiting send to the host.
         std::vector<CombatHit> mOutgoingHits;
+        // Host only: damage dealt to remote players' avatars, awaiting send to their owners.
+        std::vector<PlayerDamage> mOutgoingPlayerDamages;
         // Host only: re-broadcast clients' players (avatars) so clients see each other.
         bool mRelayAvatars = false;
+        // True on the host (the authority that resolves combat for the shared world).
+        bool mIsAuthority = false;
 
     public:
         /// Identify this peer's player on the wire (host and each client get distinct ids).
@@ -49,6 +53,11 @@ namespace MWNet
         /// network ids, so every client sees every other client's player, not just the host's.
         void setRelayAvatars(bool value) { mRelayAvatars = value; }
 
+        /// Mark this peer as the authority (the host). The authority resolves combat for the
+        /// shared world: it applies clients' reported hits and reports damage back to players.
+        void setAuthority(bool value) { mIsAuthority = value; }
+        bool isAuthority() const { return mIsAuthority; }
+
         /// Report (from combat code on a client) that our player struck a host-owned actor
         /// for a computed amount of damage. Queued for the host, which resolves it
         /// authoritatively. healthDamage selects health vs fatigue.
@@ -57,18 +66,29 @@ namespace MWNet
             mOutgoingHits.push_back({ mLocalPlayerNetId, victim, damage, healthDamage });
         }
 
+        /// Report (host only) that a host-owned actor dealt damage to a remote player's avatar,
+        /// so the owning client can apply it to its real player. A no-op off the authority or if
+        /// the struck Ptr isn't one of our avatars.
+        void reportRemotePlayerHit(const MWWorld::Ptr& avatar, float damage, bool healthDamage);
+
         /// Drain this tick's reported actions for sending.
         ActionBatch takeOutgoingActions()
         {
             ActionBatch batch;
             batch.mHits = std::move(mOutgoingHits);
+            batch.mPlayerDamages = std::move(mOutgoingPlayerDamages);
             mOutgoingHits.clear();
+            mOutgoingPlayerDamages.clear();
             return batch;
         }
 
         /// Apply received actions authoritatively (host only): make each struck actor aggro
-        /// onto the reporting peer's avatar.
+        /// onto the reporting peer's avatar and take the reported damage.
         void applyActions(const ActionBatch& batch);
+
+        /// Apply received player-damage reports (client only): subtract from this peer's real
+        /// player whatever the host says host-owned actors dealt to its avatar.
+        void applyIncomingPlayerDamage(const ActionBatch& batch);
 
         /// Read the world's active actors (and this peer's player) and build the delta.
         SnapshotDelta sampleDelta();

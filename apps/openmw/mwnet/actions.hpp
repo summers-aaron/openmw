@@ -28,12 +28,27 @@ namespace MWNet
         friend bool operator==(const CombatHit&, const CombatHit&) = default;
     };
 
+    /// Damage the host dealt to a remote player's avatar, flowing the other way: host -> the
+    /// owning client, which applies it to its real player. mTarget is that player's network id.
+    /// This is what makes combat bidirectional — host NPCs (or another player) can hurt you.
+    struct PlayerDamage
+    {
+        ESM::RefNum mTarget;
+        float mDamage = 0.f;
+        bool mHealthDamage = true;
+
+        friend bool operator==(const PlayerDamage&, const PlayerDamage&) = default;
+    };
+
     /// One frame's worth of reported actions crossing the transport (Reliable channel).
+    /// mHits flow client -> host (resolve my hit); mPlayerDamages flow host -> client (you
+    /// were hit). A given batch is populated by one side and consumed by the other.
     struct ActionBatch
     {
         std::vector<CombatHit> mHits;
+        std::vector<PlayerDamage> mPlayerDamages;
 
-        bool empty() const { return mHits.empty(); }
+        bool empty() const { return mHits.empty() && mPlayerDamages.empty(); }
 
         friend bool operator==(const ActionBatch&, const ActionBatch&) = default;
     };
