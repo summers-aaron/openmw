@@ -46,6 +46,12 @@ namespace MWNet
         /// Number of connected remote peers (0 for loopback, or a host nobody has
         /// joined yet).
         virtual std::size_t peerCount() const = 0;
+
+        /// True if received state comes from an authority this peer should obey (a
+        /// client obeys its host). False for loopback (own echo — never apply) and for
+        /// a host (a client is not authoritative over the world; server-authoritative
+        /// validation of client input is a later step).
+        virtual bool receivesAuthoritativeState() const { return false; }
     };
 
     /// Single-player / integrated: one in-process loopback peer (self).
@@ -103,6 +109,7 @@ namespace MWNet
         void broadcast(const Message& message) override;
         std::vector<ReceivedMessage> poll() override;
         std::size_t peerCount() const override;
+        bool receivesAuthoritativeState() const override { return true; }
 
     private:
         std::unique_ptr<NetworkTransport> mTransport;

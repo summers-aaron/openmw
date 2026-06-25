@@ -223,7 +223,12 @@ void OMW::Engine::pumpTransport()
     if (!outgoingEvents.empty())
         mSession->broadcast(MWNet::Message{ MWNet::Channel::Reliable, MWNet::serializeEvents(outgoingEvents) });
 
+    // Only a client obeys received state (the host is its authority). A loopback echo is
+    // our own state and a host's clients aren't authoritative, so in those roles received
+    // deltas are decoded/counted but never applied — keeping SP byte-identical.
+    const bool applyRemote = mSession->receivesAuthoritativeState();
     std::size_t receivedEntities = 0;
+    std::size_t appliedEntities = 0;
     std::size_t receivedEvents = 0;
     for (const MWNet::ReceivedMessage& received : mSession->poll())
     {
@@ -235,13 +240,15 @@ void OMW::Engine::pumpTransport()
             if (const std::optional<MWNet::SnapshotDelta> snapshot = MWNet::deserializeSnapshot(message.mPayload))
             {
                 receivedEntities += snapshot->mEntities.size();
-                mReplicator->applyDelta(*snapshot);
+                if (applyRemote)
+                    appliedEntities += mReplicator->applyDelta(*snapshot);
             }
         }
         else if (const std::optional<MWNet::EventBatch> events = MWNet::deserializeEvents(message.mPayload))
         {
             receivedEvents += events->mGlobal.size() + events->mLocal.size();
-            mLuaManager->injectIncomingEvents(*events);
+            if (applyRemote)
+                mLuaManager->injectIncomingEvents(*events);
         }
     }
 
@@ -250,7 +257,7 @@ void OMW::Engine::pumpTransport()
     if (delta.mTick % 300 == 0 || !outgoingEvents.empty() || mSession->peerCount() > 0)
         Log(Debug::Verbose) << "Replication tick " << delta.mTick << " [" << mSession->peerCount()
                             << " peer(s)]: sent " << delta.mEntities.size() << " changed-entity delta(s) [recv "
-                            << receivedEntities << "], "
+                            << receivedEntities << ", applied " << appliedEntities << "], "
                             << (outgoingEvents.mGlobal.size() + outgoingEvents.mLocal.size())
                             << " Lua event(s) [recv " << receivedEvents << "]";
 }
