@@ -83,6 +83,7 @@
 
 #include "mwmechanics/mechanicsmanagerimp.hpp"
 
+#include "mwnet/actions.hpp"
 #include "mwnet/events.hpp"
 #include "mwnet/replicator.hpp"
 #include "mwnet/session.hpp"
@@ -218,22 +219,35 @@ void OMW::Engine::pumpTransport()
     const MWNet::SnapshotDelta delta = mReplicator->sampleDelta();
     mSession->broadcast(MWNet::Message{ MWNet::Channel::Unreliable, MWNet::serializeSnapshot(delta) });
 
-    // M10: this peer's Lua events on the Reliable (ordered, guaranteed) channel.
+    // Reliable channel carries two payload kinds, distinguished by a leading byte:
+    // M10 Lua events, and client-reported combat actions. (Unreliable is always the snapshot.)
+    constexpr std::byte sKindEvents{ 0 };
+    constexpr std::byte sKindActions{ 1 };
+    const auto tagged = [](std::byte kind, std::vector<std::byte> payload) {
+        payload.insert(payload.begin(), kind);
+        return payload;
+    };
+
     const MWNet::EventBatch outgoingEvents = mLuaManager->collectOutgoingEvents();
     if (!outgoingEvents.empty())
-        mSession->broadcast(MWNet::Message{ MWNet::Channel::Reliable, MWNet::serializeEvents(outgoingEvents) });
+        mSession->broadcast(MWNet::Message{ MWNet::Channel::Reliable, tagged(sKindEvents, MWNet::serializeEvents(outgoingEvents)) });
 
-    // Only a client obeys received state (the host is its authority). A loopback echo is
-    // our own state and a host's clients aren't authoritative, so in those roles received
-    // deltas are decoded/counted but never applied — keeping SP byte-identical.
+    // This peer's reported hits on host-owned actors, for the host to resolve authoritatively.
+    const MWNet::ActionBatch outgoingActions = mReplicator->takeOutgoingActions();
+    if (!outgoingActions.empty())
+        mSession->broadcast(MWNet::Message{ MWNet::Channel::Reliable, tagged(sKindActions, MWNet::serializeActions(outgoingActions)) });
+
+    // Only a client obeys received state (the host is its authority); only the host resolves
+    // reported actions. A loopback echo is our own state, so in SP nothing is applied and it
+    // stays byte-identical.
     const bool applyRemote = mSession->receivesAuthoritativeState();
+    const bool authority = mSession->isAuthority();
     std::size_t receivedEntities = 0;
     std::size_t appliedEntities = 0;
     std::size_t receivedEvents = 0;
     for (const MWNet::ReceivedMessage& received : mSession->poll())
     {
         // Never trust a payload: a real peer can send malformed bytes; drop them.
-        // The channel tags the payload kind (transforms vs events).
         const MWNet::Message& message = received.mMessage;
         if (message.mChannel == MWNet::Channel::Unreliable)
         {
@@ -245,11 +259,24 @@ void OMW::Engine::pumpTransport()
                 appliedEntities += mReplicator->applyDelta(*snapshot, applyRemote);
             }
         }
-        else if (const std::optional<MWNet::EventBatch> events = MWNet::deserializeEvents(message.mPayload))
+        else if (!message.mPayload.empty()) // Reliable: leading byte selects events vs actions
         {
-            receivedEvents += events->mGlobal.size() + events->mLocal.size();
-            if (applyRemote)
-                mLuaManager->injectIncomingEvents(*events);
+            const std::span<const std::byte> body(message.mPayload.data() + 1, message.mPayload.size() - 1);
+            if (message.mPayload.front() == sKindEvents)
+            {
+                if (const std::optional<MWNet::EventBatch> events = MWNet::deserializeEvents(body))
+                {
+                    receivedEvents += events->mGlobal.size() + events->mLocal.size();
+                    if (applyRemote)
+                        mLuaManager->injectIncomingEvents(*events);
+                }
+            }
+            else if (message.mPayload.front() == sKindActions)
+            {
+                if (const std::optional<MWNet::ActionBatch> actions = MWNet::deserializeActions(body))
+                    if (authority)
+                        mReplicator->applyActions(*actions);
+            }
         }
     }
 
@@ -845,6 +872,7 @@ void OMW::Engine::prepareEngine()
         mSession = std::make_unique<MWNet::LoopbackSession>();
     }
     mReplicator = std::make_unique<MWNet::Replicator>();
+    mEnvironment.setReplicator(*mReplicator);
     // Give this peer's player a network identity so other peers can show it as an avatar.
     // Distinct per role; single-player leaves it unset (no player is replicated). One client
     // is id 1 here — distinct ids for many clients need the join handshake (a later step).

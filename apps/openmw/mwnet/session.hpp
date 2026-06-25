@@ -52,6 +52,10 @@ namespace MWNet
         /// a host (a client is not authoritative over the world; server-authoritative
         /// validation of client input is a later step).
         virtual bool receivesAuthoritativeState() const { return false; }
+
+        /// True if this peer is the authority over the shared world (the host) and so
+        /// resolves clients' reported actions. False for loopback and clients.
+        virtual bool isAuthority() const { return false; }
     };
 
     /// Single-player / integrated: one in-process loopback peer (self).
@@ -81,6 +85,7 @@ namespace MWNet
         void broadcast(const Message& message) override;
         std::vector<ReceivedMessage> poll() override;
         std::size_t peerCount() const override;
+        bool isAuthority() const override { return true; }
 
     private:
         struct Client

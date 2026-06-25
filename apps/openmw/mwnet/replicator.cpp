@@ -200,4 +200,30 @@ namespace MWNet
         }
         return applied;
     }
+
+    void Replicator::applyActions(const ActionBatch& batch)
+    {
+        MWBase::World& world = *MWBase::Environment::get().getWorld();
+        MWWorld::WorldModel& worldModel = *MWBase::Environment::get().getWorldModel();
+        MWBase::MechanicsManager& mechanics = *MWBase::Environment::get().getMechanicsManager();
+
+        for (const CombatHit& hit : batch.mHits)
+        {
+            const MWWorld::Ptr victim = worldModel.getPtr(hit.mVictim);
+            if (victim.isEmpty() || !victim.isInCell() || !victim.getClass().isActor())
+                continue;
+            const auto attackerAvatar = mAvatars.find(hit.mAttacker);
+            if (attackerAvatar == mAvatars.end())
+                continue; // we don't have an avatar for this peer's player yet
+            const MWWorld::Ptr& aggressor = attackerAvatar->second;
+            if (aggressor.isEmpty() || !aggressor.isInCell())
+                continue;
+
+            // Authoritative reaction: the struck actor aggros onto the reporting peer's avatar.
+            // (Damage waits on CreatureStats replication so HP can sync back.)
+            mechanics.startCombat(victim, aggressor, nullptr);
+            Log(Debug::Verbose) << "Applied combat hit: " << victim.getCellRef().getRefId()
+                                << " aggroes onto remote player " << hit.mAttacker.mIndex;
+        }
+    }
 }

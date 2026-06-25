@@ -24,6 +24,8 @@
 
 #include "../mwbase/dialoguemanager.hpp"
 #include "../mwbase/environment.hpp"
+
+#include "../mwnet/replicator.hpp"
 #include "../mwbase/luamanager.hpp"
 #include "../mwbase/mechanicsmanager.hpp"
 #include "../mwbase/soundmanager.hpp"
@@ -623,6 +625,16 @@ namespace MWClass
 
         if (!MWMechanics::isInMeleeReach(ptr, victim, MWMechanics::getMeleeWeaponReach(ptr, weapon)))
             return;
+
+        // Server-authoritative melee (M11): a struck actor owned by the host belongs to the
+        // shared world, not us, so we don't resolve the hit locally — we report it and the host
+        // applies it. In single-player nothing is remote-owned, so this never triggers.
+        if (ptr == MWMechanics::getPlayer() && victim.getRefData().isRemoteOwned())
+        {
+            if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+                replicator->reportHit(victim.getCellRef().getRefNum());
+            return;
+        }
 
         if (ptr == MWMechanics::getPlayer())
             MWBase::Environment::get().getWindowManager()->setEnemy(victim);
