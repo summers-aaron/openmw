@@ -97,6 +97,14 @@ namespace OpenMW
             "scripts) runs without a GUI/audio/input client. Still constructs the OSG rendering "
             "pipeline and needs a GL context (zero-GL is a later milestone).");
 
+        addOption("listen", bpo::value<int>()->default_value(0),
+            "Host a multiplayer session on this TCP port (0 = single-player, no networking). Accepts "
+            "clients and broadcasts the replication stream to them.");
+
+        addOption("connect", bpo::value<std::string>()->default_value(""),
+            "Join a multiplayer host as a client, given as host:port. Receives the host's "
+            "authoritative replication stream instead of looping back.");
+
         addOption("export-fonts", bpo::value<bool>()->implicit_value(true)->default_value(false),
             "Export Morrowind .fnt fonts to PNG image and XML file in current directory");
 

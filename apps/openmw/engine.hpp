@@ -1,7 +1,9 @@
 #ifndef ENGINE_H
 #define ENGINE_H
 
+#include <cstdint>
 #include <filesystem>
+#include <string>
 
 #include <components/compiler/extensions.hpp>
 #include <components/debug/debuglog.hpp>
@@ -99,7 +101,7 @@ namespace MWMechanics
 
 namespace MWNet
 {
-    class ISessionTransport;
+    class Session;
     class Replicator;
 }
 
@@ -142,8 +144,13 @@ namespace OMW
         std::unique_ptr<MWLua::LuaManager> mLuaManager;
         std::unique_ptr<MWLua::Worker> mLuaWorker;
         std::unique_ptr<L10n::Manager> mL10nManager;
-        std::unique_ptr<MWNet::ISessionTransport> mTransport;
+        std::unique_ptr<MWNet::Session> mSession;
         std::unique_ptr<MWNet::Replicator> mReplicator;
+        // Multiplayer session role (M11): a connect address makes this a client, a
+        // listen port makes it a host; neither is single-player (loopback).
+        std::string mConnectHost;
+        std::uint16_t mConnectPort = 0;
+        std::uint16_t mListenPort = 0;
         MWBase::Environment mEnvironment;
         ToUTF8::FromType mEncoding;
         std::unique_ptr<ToUTF8::Utf8Encoder> mEncoder;
@@ -249,6 +256,18 @@ namespace OMW
         /// server half headlessly with null client managers; default is Integrated (SP).
         void setRunMode(RunMode mode) { mRunMode = mode; }
         bool isDedicated() const { return OMW::isDedicated(mRunMode); }
+
+        /// Join a host as a network client (M11): the session connects to host:port and
+        /// receives the host's authoritative replication stream instead of looping back.
+        void setConnect(std::string host, std::uint16_t port)
+        {
+            mConnectHost = std::move(host);
+            mConnectPort = port;
+        }
+
+        /// Host a session on the given port (M11): accept clients and broadcast the
+        /// replication stream to them.
+        void setListen(std::uint16_t port) { mListenPort = port; }
 
         /// Run at most this many simulation frames then quit (0 = unlimited). Intended for
         /// headless/dedicated bounded runs and automated testing.
