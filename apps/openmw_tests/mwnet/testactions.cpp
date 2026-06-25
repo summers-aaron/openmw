@@ -19,11 +19,15 @@ namespace MWNet
         TEST(MWNetActionsTest, hitsRoundTrip)
         {
             ActionBatch batch;
-            batch.mHits.push_back({ ESM::RefNum{ 1, -1000 }, ESM::RefNum{ 42, 0 } });
-            batch.mHits.push_back({ ESM::RefNum{ 0, -1000 }, ESM::RefNum{ 0xffffff, 5 } });
+            batch.mHits.push_back({ ESM::RefNum{ 1, -1000 }, ESM::RefNum{ 42, 0 }, 13.5f, true });
+            batch.mHits.push_back({ ESM::RefNum{ 0, -1000 }, ESM::RefNum{ 0xffffff, 5 }, 4.f, false });
             const std::optional<ActionBatch> parsed = deserializeActions(serializeActions(batch));
             ASSERT_TRUE(parsed.has_value());
             EXPECT_EQ(*parsed, batch);
+            ASSERT_EQ(parsed->mHits.size(), 2u);
+            EXPECT_EQ(parsed->mHits[0].mDamage, 13.5f);
+            EXPECT_TRUE(parsed->mHits[0].mHealthDamage);
+            EXPECT_FALSE(parsed->mHits[1].mHealthDamage);
         }
 
         TEST(MWNetActionsTest, rejectsEmptyBuffer)
