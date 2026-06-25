@@ -73,12 +73,16 @@ namespace MWNet
             return delta;
 
         // This peer's own player, under its network id, so other peers can show it as an
-        // avatar. Only when a network role assigned an id (single-player leaves it unset).
+        // avatar. Sent EVERY tick (not delta-filtered): it's the entity peers care about
+        // most, so they should instantiate and track it immediately rather than waiting for
+        // a full-refresh tick. Only when a network role assigned an id (SP leaves it unset).
         if (mLocalPlayerNetId.isSet())
         {
             const ESM::Position& pos = player.getRefData().getPosition();
-            include(mLocalPlayerNetId,
-                TransformState{ pos.asVec3(), osg::Vec3f(pos.rot[0], pos.rot[1], pos.rot[2]) });
+            EntityState self;
+            self.mId = mLocalPlayerNetId;
+            self.mTransform = TransformState{ pos.asVec3(), osg::Vec3f(pos.rot[0], pos.rot[1], pos.rot[2]) };
+            delta.mEntities.push_back(self);
         }
 
         // All active actors near the player; an infinite radius enumerates every
