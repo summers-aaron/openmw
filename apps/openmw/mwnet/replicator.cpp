@@ -96,6 +96,10 @@ namespace MWNet
         {
             if (actor.isEmpty())
                 continue;
+            if (actor == player)
+                continue; // the local player is replicated only under its net id (above), never as
+                          // a world ref — otherwise peers sharing a save (same RefNum) would apply
+                          // each other's player onto their own, overwriting input
             if (actor.getRefData().isRemoteOwned())
                 continue; // owned by a peer — don't echo its entities back
             const ESM::RefNum id = actor.getCellRef().getRefNum();
