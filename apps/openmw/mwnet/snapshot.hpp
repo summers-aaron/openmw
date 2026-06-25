@@ -37,6 +37,18 @@ namespace MWNet
         friend bool operator==(const TransformState&, const TransformState&) = default;
     };
 
+    /// Current values of an actor's three dynamic stats (health, magicka, fatigue). Lets
+    /// the world's combat state — damage and death (health <= 0) — replicate, not just
+    /// where actors are.
+    struct DynamicStats
+    {
+        float mHealth;
+        float mMagicka;
+        float mFatigue;
+
+        friend bool operator==(const DynamicStats&, const DynamicStats&) = default;
+    };
+
     /// One entity's contribution to a delta. mId is the persistent global
     /// reference identity (the same RefNum used for save games and the cell
     /// graph). A field is present iff it changed since the last sent snapshot.
@@ -44,6 +56,7 @@ namespace MWNet
     {
         ESM::RefNum mId;
         std::optional<TransformState> mTransform;
+        std::optional<DynamicStats> mStats;
 
         friend bool operator==(const EntityState&, const EntityState&) = default;
     };

@@ -3,6 +3,8 @@
 
 #include <cstdint>
 #include <map>
+#include <optional>
+#include <utility>
 #include <vector>
 
 #include <components/esm3/refnum.hpp>
@@ -26,7 +28,9 @@ namespace MWNet
     class Replicator
     {
         std::uint32_t mTick = 0;
-        std::map<ESM::RefNum, TransformState> mLastSent;
+        // Last transform + stats sent per entity, so a change in EITHER triggers a resend
+        // (a dying-but-stationary actor's health must sync, not wait for the full refresh).
+        std::map<ESM::RefNum, std::pair<TransformState, std::optional<DynamicStats>>> mLastSent;
         // Avatars instantiated for other peers' players, keyed by their network id.
         std::map<ESM::RefNum, MWWorld::Ptr> mAvatars;
         // This peer's own player network id (role-based: host vs client), so we never

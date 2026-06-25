@@ -11,7 +11,8 @@ namespace MWNet
 
         // EntityState field bits (mFieldMask).
         constexpr std::uint8_t sFieldTransform = 1 << 0;
-        constexpr std::uint8_t sKnownFields = sFieldTransform;
+        constexpr std::uint8_t sFieldStats = 1 << 1;
+        constexpr std::uint8_t sKnownFields = sFieldTransform | sFieldStats;
 
         // Smallest possible encoded entity: RefNum (4 + 4) + field mask (1).
         constexpr std::uint32_t sMinEntityBytes = 9;
@@ -34,6 +35,8 @@ namespace MWNet
             std::uint8_t fieldMask = 0;
             if (entity.mTransform)
                 fieldMask |= sFieldTransform;
+            if (entity.mStats)
+                fieldMask |= sFieldStats;
             writer.write(fieldMask);
 
             if (entity.mTransform)
@@ -42,6 +45,12 @@ namespace MWNet
                     writer.write(entity.mTransform->mPosition[i]);
                 for (int i = 0; i < 3; ++i)
                     writer.write(entity.mTransform->mRotation[i]);
+            }
+            if (entity.mStats)
+            {
+                writer.write(entity.mStats->mHealth);
+                writer.write(entity.mStats->mMagicka);
+                writer.write(entity.mStats->mFatigue);
             }
         }
 
@@ -92,6 +101,13 @@ namespace MWNet
                     if (!reader.read(transform.mRotation[axis]))
                         return std::nullopt;
                 entity.mTransform = transform;
+            }
+            if (fieldMask & sFieldStats)
+            {
+                DynamicStats stats;
+                if (!reader.read(stats.mHealth) || !reader.read(stats.mMagicka) || !reader.read(stats.mFatigue))
+                    return std::nullopt;
+                entity.mStats = stats;
             }
 
             delta.mEntities.push_back(entity);
