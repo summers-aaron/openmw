@@ -77,6 +77,23 @@ bool parseOptions(int argc, char** argv, OMW::Engine& engine, Files::Configurati
     if (variables["dedicated"].as<bool>())
         engine.setRunMode(OMW::RunMode::Dedicated);
 
+    // Multiplayer session role (M11): --connect host:port joins as a client, --listen port hosts.
+    const std::string connect = variables["connect"].as<std::string>();
+    if (!connect.empty())
+    {
+        const std::size_t colon = connect.rfind(':');
+        if (colon == std::string::npos)
+            throw std::runtime_error("--connect expects host:port, got: " + connect);
+        engine.setConnect(connect.substr(0, colon),
+            static_cast<std::uint16_t>(std::stoi(connect.substr(colon + 1))));
+    }
+    else if (const int listenPort = variables["listen"].as<int>(); listenPort != 0)
+    {
+        if (listenPort < 1 || listenPort > 65535)
+            throw std::runtime_error("--listen port out of range: " + std::to_string(listenPort));
+        engine.setListen(static_cast<std::uint16_t>(listenPort));
+    }
+
     engine.setMaxFrames(variables["frames"].as<unsigned int>());
 
     // Font encoding settings

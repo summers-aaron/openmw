@@ -84,8 +84,8 @@
 #include "mwmechanics/mechanicsmanagerimp.hpp"
 
 #include "mwnet/events.hpp"
-#include "mwnet/loopbacktransport.hpp"
 #include "mwnet/replicator.hpp"
+#include "mwnet/session.hpp"
 #include "mwnet/snapshot.hpp"
 
 #include "mwnull/nullinputmanager.hpp"
@@ -210,51 +210,49 @@ void OMW::Engine::executeLocalScripts()
 
 void OMW::Engine::pumpTransport()
 {
-    // M9: the seam now carries the real post-tick snapshot/delta instead of a heartbeat.
-    // Sample the changed transforms of active actors, send them as an unreliable
-    // (latest-wins) message, then drain and decode whatever the peer delivered. Over
-    // loopback the delta is handed straight back in-process; applyDelta is a no-op
-    // because every entity is locally authoritative, so SP stays byte-identical while
-    // the full sample -> serialize -> transport -> deserialize path is exercised.
+    // Broadcast this peer's post-tick state to the session, then apply whatever peers
+    // delivered. The session abstracts the role: single-player loops back to itself
+    // (so applyDelta/injectIncomingEvents are no-ops on the echo and SP stays byte-
+    // identical), a host fans out to every client, a client sends to its host.
     // M9: post-tick transform delta on the Unreliable (latest-wins) channel.
     const MWNet::SnapshotDelta delta = mReplicator->sampleDelta();
-    mTransport->send(MWNet::Message{ MWNet::Channel::Unreliable, MWNet::serializeSnapshot(delta) });
+    mSession->broadcast(MWNet::Message{ MWNet::Channel::Unreliable, MWNet::serializeSnapshot(delta) });
 
     // M10: this peer's Lua events on the Reliable (ordered, guaranteed) channel.
     const MWNet::EventBatch outgoingEvents = mLuaManager->collectOutgoingEvents();
     if (!outgoingEvents.empty())
-        mTransport->send(MWNet::Message{ MWNet::Channel::Reliable, MWNet::serializeEvents(outgoingEvents) });
-
-    mTransport->update();
+        mSession->broadcast(MWNet::Message{ MWNet::Channel::Reliable, MWNet::serializeEvents(outgoingEvents) });
 
     std::size_t receivedEntities = 0;
     std::size_t receivedEvents = 0;
-    for (const MWNet::Message& message : mTransport->receive())
+    for (const MWNet::ReceivedMessage& received : mSession->poll())
     {
-        // Never trust a payload: a real peer (M11) can send malformed bytes; drop them.
+        // Never trust a payload: a real peer can send malformed bytes; drop them.
         // The channel tags the payload kind (transforms vs events).
+        const MWNet::Message& message = received.mMessage;
         if (message.mChannel == MWNet::Channel::Unreliable)
         {
-            if (const std::optional<MWNet::SnapshotDelta> received = MWNet::deserializeSnapshot(message.mPayload))
+            if (const std::optional<MWNet::SnapshotDelta> snapshot = MWNet::deserializeSnapshot(message.mPayload))
             {
-                receivedEntities += received->mEntities.size();
-                mReplicator->applyDelta(*received);
+                receivedEntities += snapshot->mEntities.size();
+                mReplicator->applyDelta(*snapshot);
             }
         }
-        else if (const std::optional<MWNet::EventBatch> received = MWNet::deserializeEvents(message.mPayload))
+        else if (const std::optional<MWNet::EventBatch> events = MWNet::deserializeEvents(message.mPayload))
         {
-            receivedEvents += received->mGlobal.size() + received->mLocal.size();
-            mLuaManager->injectIncomingEvents(*received);
+            receivedEvents += events->mGlobal.size() + events->mLocal.size();
+            mLuaManager->injectIncomingEvents(*events);
         }
     }
 
     // Verbose-only replication throughput (off by default), throttled to ~once per 300 ticks
-    // but always logged on any tick that actually carried Lua events.
-    if (delta.mTick % 300 == 0 || !outgoingEvents.empty())
-        Log(Debug::Verbose) << "Replication tick " << delta.mTick << ": sent " << delta.mEntities.size()
-                            << " changed-entity delta(s) [round-tripped " << receivedEntities << "], "
+    // but always logged on any tick that carried Lua events or with peers connected.
+    if (delta.mTick % 300 == 0 || !outgoingEvents.empty() || mSession->peerCount() > 0)
+        Log(Debug::Verbose) << "Replication tick " << delta.mTick << " [" << mSession->peerCount()
+                            << " peer(s)]: sent " << delta.mEntities.size() << " changed-entity delta(s) [recv "
+                            << receivedEntities << "], "
                             << (outgoingEvents.mGlobal.size() + outgoingEvents.mLocal.size())
-                            << " Lua event(s) [round-tripped " << receivedEvents << "]";
+                            << " Lua event(s) [recv " << receivedEvents << "]";
 }
 
 bool OMW::Engine::frame(unsigned frameNumber, float frametime)
@@ -504,7 +502,7 @@ OMW::Engine::~Engine()
     mLuaManager = nullptr;
     mL10nManager = nullptr;
     mReplicator = nullptr;
-    mTransport = nullptr;
+    mSession = nullptr;
 
     mScriptContext = nullptr;
 
@@ -817,10 +815,27 @@ void OMW::Engine::prepareEngine()
     mStateManager = std::make_unique<MWState::StateManager>(mCfgMgr.getUserDataPath() / "saves", mContentFiles);
     mEnvironment.setStateManager(*mStateManager);
 
-    // Integrated singleplayer is "a local server + one local client in one process" joined by
-    // an in-process loopback transport. Other run modes (networked client, dedicated server)
-    // will swap in a real transport here; loopback does no serialization, so SP is unchanged.
-    mTransport = std::make_unique<MWNet::LoopbackTransport>();
+    // Pick the session role (M11). A connect address joins a host as a client; a listen
+    // port hosts; neither is single-player, which loops back to itself in-process (no
+    // serialization round-trip changes nothing, so SP stays byte-identical).
+    if (!mConnectHost.empty())
+    {
+        Log(Debug::Info) << "Joining host " << mConnectHost << ":" << mConnectPort << " as a network client";
+        std::unique_ptr<MWNet::ClientSession> client = MWNet::ClientSession::connect(mConnectHost, mConnectPort);
+        if (!client)
+            throw std::runtime_error("Failed to connect to host " + mConnectHost + ":" + std::to_string(mConnectPort));
+        mSession = std::move(client);
+    }
+    else if (mListenPort != 0)
+    {
+        auto host = std::make_unique<MWNet::HostSession>(mListenPort);
+        Log(Debug::Info) << "Hosting a network session on port " << host->port();
+        mSession = std::move(host);
+    }
+    else
+    {
+        mSession = std::make_unique<MWNet::LoopbackSession>();
+    }
     mReplicator = std::make_unique<MWNet::Replicator>();
 
     const bool stereoEnabled = Settings::stereo().mStereoEnabled || osg::DisplaySettings::instance().get()->getStereo();
