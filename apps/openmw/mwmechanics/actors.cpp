@@ -1539,6 +1539,13 @@ namespace MWMechanics
             {
                 if (actor.isInvalid())
                     continue;
+                // Cease-remote-sim (M11): an actor owned by the host on a network client is
+                // driven purely by applied snapshots, so skip its local AI/movement/character
+                // update — otherwise the local simulation fights the authoritative pose and the
+                // actor jitters. In single-player nothing is ever flagged remote-owned, so this
+                // is byte-identical.
+                if (actor.getPtr().getRefData().isRemoteOwned())
+                    continue;
                 const bool isPlayer = actor.getPtr() == player;
                 CharacterController& ctrl = actor.getCharacterController();
                 MWBase::LuaManager::ActorControls* luaControls

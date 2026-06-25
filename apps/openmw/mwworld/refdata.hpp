@@ -67,6 +67,11 @@ namespace MWWorld
     private:
         bool mChanged : 1;
 
+        /// Owned by a remote authority (the host) on a network client: the local
+        /// simulation does not drive it; its state comes from applied snapshots.
+        /// Runtime-only, never stored in the save game.
+        bool mRemoteOwned : 1;
+
         void copy(const RefData& refData);
 
         void cleanup();
@@ -117,6 +122,11 @@ namespace MWWorld
 
         /// Returns true if the object was deleted by a content file.
         bool isDeletedByContentFile() const;
+
+        /// Mark/query whether this object is driven by a remote authority (M11): on a
+        /// network client the host owns it, so the local simulation must not move it.
+        void setRemoteOwned(bool value) { mRemoteOwned = value; }
+        bool isRemoteOwned() const { return mRemoteOwned; }
 
         MWScript::Locals& getLocals();
 

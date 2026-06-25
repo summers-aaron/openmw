@@ -19,6 +19,13 @@ namespace MWNet
         SnapshotDelta delta;
         delta.mTick = mTick++;
 
+        // Periodically send every owned actor, not just the changed ones. Deltas alone only
+        // teach a client about entities that move, so an actor idle on the host would never be
+        // claimed and the client would keep simulating (and jittering) it. A full refresh lets
+        // the client mark all host-owned actors remote-owned within sFullSnapshotInterval ticks.
+        constexpr std::uint32_t sFullSnapshotInterval = 60;
+        const bool fullSnapshot = (delta.mTick % sFullSnapshotInterval) == 0;
+
         MWBase::World& world = *MWBase::Environment::get().getWorld();
         const MWWorld::Ptr player = world.getPlayerPtr();
         if (player.isEmpty())
@@ -35,6 +42,8 @@ namespace MWNet
         {
             if (actor.isEmpty())
                 continue;
+            if (actor.getRefData().isRemoteOwned())
+                continue; // owned by the host — don't echo its own entities back to it
             const ESM::RefNum id = actor.getCellRef().getRefNum();
             if (!id.isSet())
                 continue; // no stable network identity (e.g. the player ref) — PlayerRegistry handles it in M11
@@ -46,8 +55,8 @@ namespace MWNet
             const auto [it, inserted] = mLastSent.try_emplace(id, transform);
             if (!inserted)
             {
-                if (it->second == transform)
-                    continue; // unchanged since last send — omit from the delta
+                if (!fullSnapshot && it->second == transform)
+                    continue; // unchanged since last send — omit (except on a full-refresh tick)
                 it->second = transform;
             }
 
@@ -71,9 +80,12 @@ namespace MWNet
             if (!entity.mTransform)
                 continue;
             const MWWorld::Ptr ptr = worldModel.getPtr(entity.mId);
-            if (ptr.isEmpty())
-                continue; // not present locally yet — remote instantiation is a later step
+            if (ptr.isEmpty() || !ptr.isInCell())
+                continue; // not present / not loaded into an active cell yet — moveObject needs a cell
 
+            // The host owns this entity: drive it purely from the authority and stop the
+            // local simulation from fighting the applied pose (cease-remote-sim).
+            ptr.getRefData().setRemoteOwned(true);
             world.moveObject(ptr, entity.mTransform->mPosition);
             world.rotateObject(ptr, entity.mTransform->mRotation, MWBase::RotationFlag_none);
             ++applied;
