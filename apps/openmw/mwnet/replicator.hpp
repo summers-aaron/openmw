@@ -38,10 +38,16 @@ namespace MWNet
         ESM::RefNum mLocalPlayerNetId;
         // Hits this peer's player landed on host-owned actors, awaiting send to the host.
         std::vector<CombatHit> mOutgoingHits;
+        // Host only: re-broadcast clients' players (avatars) so clients see each other.
+        bool mRelayAvatars = false;
 
     public:
         /// Identify this peer's player on the wire (host and each client get distinct ids).
         void setLocalPlayerNetId(ESM::RefNum id) { mLocalPlayerNetId = id; }
+
+        /// Host only: relay other peers' players (the avatars we hold) back out under their
+        /// network ids, so every client sees every other client's player, not just the host's.
+        void setRelayAvatars(bool value) { mRelayAvatars = value; }
 
         /// Report (from combat code on a client) that our player struck a host-owned actor.
         /// Queued for the host, which resolves it authoritatively.
