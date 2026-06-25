@@ -55,6 +55,26 @@ namespace MWNet
             EXPECT_EQ(parsed->mEntities[0].mTransform->mPosition, osg::Vec3f(123.456f, 124.456f, 125.456f));
         }
 
+        TEST(MWNetSnapshotTest, statsRoundTrip)
+        {
+            SnapshotDelta delta;
+            EntityState withStats = makeEntity(5, 1, makeTransform(3.f));
+            withStats.mStats = DynamicStats{ 42.5f, 10.f, 0.f }; // health 42.5, magicka 10, fatigue 0
+            delta.mEntities.push_back(withStats);
+            EntityState statsOnly;
+            statsOnly.mId = ESM::RefNum{ 9, 2 };
+            statsOnly.mStats = DynamicStats{ 0.f, 0.f, 0.f }; // dead, no transform
+            delta.mEntities.push_back(statsOnly);
+
+            const std::optional<SnapshotDelta> parsed = deserializeSnapshot(serializeSnapshot(delta));
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(*parsed, delta);
+            ASSERT_EQ(parsed->mEntities.size(), 2u);
+            ASSERT_TRUE(parsed->mEntities[0].mStats.has_value());
+            EXPECT_EQ(parsed->mEntities[0].mStats->mHealth, 42.5f);
+            EXPECT_FALSE(parsed->mEntities[1].mTransform.has_value());
+        }
+
         TEST(MWNetSnapshotTest, rejectsEmptyBuffer)
         {
             EXPECT_FALSE(deserializeSnapshot(std::span<const std::byte>{}).has_value());

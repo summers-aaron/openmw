@@ -10,7 +10,9 @@
 #include "../mwbase/mechanicsmanager.hpp"
 #include "../mwbase/world.hpp"
 
+#include "../mwmechanics/creaturestats.hpp"
 #include "../mwmechanics/movement.hpp"
+#include "../mwmechanics/stat.hpp"
 
 #include "../mwworld/cellref.hpp"
 #include "../mwworld/cellstore.hpp"
@@ -48,6 +50,30 @@ namespace MWNet
             movement.mPosition[1] = step.length() > 0.5f ? 1.f : 0.f;
         }
 
+        std::optional<DynamicStats> sampleStats(const MWWorld::Ptr& actor)
+        {
+            if (!actor.getClass().isActor())
+                return std::nullopt;
+            const MWMechanics::CreatureStats& stats = actor.getClass().getCreatureStats(actor);
+            return DynamicStats{ stats.getHealth().getCurrent(), stats.getMagicka().getCurrent(),
+                stats.getFatigue().getCurrent() };
+        }
+
+        void applyStats(const MWWorld::Ptr& actor, const DynamicStats& values)
+        {
+            if (!actor.getClass().isActor())
+                return;
+            MWMechanics::CreatureStats& stats = actor.getClass().getCreatureStats(actor);
+            const float current[3] = { values.mHealth, values.mMagicka, values.mFatigue };
+            for (int i = 0; i < 3; ++i)
+            {
+                MWMechanics::DynamicStat<float> dynamic = stats.getDynamic(i);
+                // The host is authoritative: accept its value as-is, including <= 0 (death).
+                dynamic.setCurrent(current[i], true, true);
+                stats.setDynamic(i, dynamic);
+            }
+        }
+
         ESM::Position toPosition(const TransformState& transform)
         {
             ESM::Position position{};
@@ -73,17 +99,20 @@ namespace MWNet
         constexpr std::uint32_t sFullSnapshotInterval = 60;
         const bool fullSnapshot = (delta.mTick % sFullSnapshotInterval) == 0;
 
-        const auto include = [&](const ESM::RefNum& id, const TransformState& transform) {
-            const auto [it, inserted] = mLastSent.try_emplace(id, transform);
+        const auto include = [&](const ESM::RefNum& id, const TransformState& transform,
+                                 std::optional<DynamicStats> stats) {
+            std::pair<TransformState, std::optional<DynamicStats>> current{ transform, stats };
+            const auto [it, inserted] = mLastSent.try_emplace(id, current);
             if (!inserted)
             {
-                if (!fullSnapshot && it->second == transform)
-                    return; // unchanged since last send — omit (except on a full-refresh tick)
-                it->second = transform;
+                if (!fullSnapshot && it->second == current)
+                    return; // neither transform nor stats changed — omit (except on a full-refresh tick)
+                it->second = current;
             }
             EntityState entity;
             entity.mId = id;
             entity.mTransform = transform;
+            entity.mStats = stats;
             delta.mEntities.push_back(entity);
         };
 
@@ -102,6 +131,7 @@ namespace MWNet
             EntityState self;
             self.mId = mLocalPlayerNetId;
             self.mTransform = TransformState{ pos.asVec3(), osg::Vec3f(pos.rot[0], pos.rot[1], pos.rot[2]) };
+            self.mStats = sampleStats(player);
             delta.mEntities.push_back(self);
         }
 
@@ -127,8 +157,9 @@ namespace MWNet
                 continue; // no stable network identity (e.g. the player ref, sent above)
 
             const ESM::Position& position = actor.getRefData().getPosition();
-            include(id, TransformState{ position.asVec3(),
-                          osg::Vec3f(position.rot[0], position.rot[1], position.rot[2]) });
+            include(id,
+                TransformState{ position.asVec3(), osg::Vec3f(position.rot[0], position.rot[1], position.rot[2]) },
+                sampleStats(actor));
         }
 
         return delta;
@@ -179,6 +210,8 @@ namespace MWNet
                 driveLocomotionAnimation(avatar, entity.mTransform->mPosition);
                 world.moveObject(avatar, entity.mTransform->mPosition);
                 world.rotateObject(avatar, entity.mTransform->mRotation, MWBase::RotationFlag_none);
+                if (entity.mStats)
+                    applyStats(avatar, *entity.mStats);
                 ++applied;
                 continue;
             }
@@ -196,6 +229,8 @@ namespace MWNet
             driveLocomotionAnimation(ptr, entity.mTransform->mPosition);
             world.moveObject(ptr, entity.mTransform->mPosition);
             world.rotateObject(ptr, entity.mTransform->mRotation, MWBase::RotationFlag_none);
+            if (entity.mStats)
+                applyStats(ptr, *entity.mStats);
             ++applied;
         }
         return applied;
@@ -219,11 +254,18 @@ namespace MWNet
             if (aggressor.isEmpty() || !aggressor.isInCell())
                 continue;
 
-            // Authoritative reaction: the struck actor aggros onto the reporting peer's avatar.
-            // (Damage waits on CreatureStats replication so HP can sync back.)
+            // Authoritative reaction: the struck actor aggros onto the reporting peer's avatar,
+            // and takes damage. The damage is a crude placeholder (a fixed amount) — proper
+            // server-side resolution would re-run the attack with the attacker's real stats and
+            // weapon; what matters here is that the hit lands authoritatively and its result
+            // (lost health, eventually death) replicates back via CreatureStats.
             mechanics.startCombat(victim, aggressor, nullptr);
-            Log(Debug::Verbose) << "Applied combat hit: " << victim.getCellRef().getRefId()
-                                << " aggroes onto remote player " << hit.mAttacker.mIndex;
+            MWMechanics::CreatureStats& victimStats = victim.getClass().getCreatureStats(victim);
+            MWMechanics::DynamicStat<float> health = victimStats.getHealth();
+            health.setCurrent(health.getCurrent() - 8.f, true);
+            victimStats.setHealth(health);
+            Log(Debug::Verbose) << "Applied combat hit: " << victim.getCellRef().getRefId() << " -> "
+                                << health.getCurrent() << " hp, aggroes onto remote player " << hit.mAttacker.mIndex;
         }
     }
 }
