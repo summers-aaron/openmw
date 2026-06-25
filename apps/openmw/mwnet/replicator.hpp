@@ -28,9 +28,18 @@ namespace MWNet
     class Replicator
     {
         std::uint32_t mTick = 0;
-        // Last transform + stats sent per entity, so a change in EITHER triggers a resend
-        // (a dying-but-stationary actor's health must sync, not wait for the full refresh).
-        std::map<ESM::RefNum, std::pair<TransformState, std::optional<DynamicStats>>> mLastSent;
+        // The replicated state last sent per entity, so a change in ANY part triggers a resend
+        // (a dying-but-stationary actor's health, or an actor drawing its weapon in place, must
+        // sync immediately rather than wait for the periodic full refresh).
+        struct SentState
+        {
+            TransformState mTransform;
+            std::optional<DynamicStats> mStats;
+            std::optional<std::uint8_t> mDrawState;
+
+            friend bool operator==(const SentState&, const SentState&) = default;
+        };
+        std::map<ESM::RefNum, SentState> mLastSent;
         // Avatars instantiated for other peers' players, keyed by their network id.
         std::map<ESM::RefNum, MWWorld::Ptr> mAvatars;
         // This peer's own player network id (role-based: host vs client), so we never

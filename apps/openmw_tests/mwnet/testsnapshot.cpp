@@ -61,9 +61,12 @@ namespace MWNet
             EntityState withStats = makeEntity(5, 1, makeTransform(3.f));
             withStats.mStats = DynamicStats{ 42.5f, 10.f, 0.f }; // health 42.5, magicka 10, fatigue 0
             delta.mEntities.push_back(withStats);
+            withStats.mDrawState = std::uint8_t{ 1 }; // weapon drawn
+            delta.mEntities.back() = withStats;
             EntityState statsOnly;
             statsOnly.mId = ESM::RefNum{ 9, 2 };
             statsOnly.mStats = DynamicStats{ 0.f, 0.f, 0.f }; // dead, no transform
+            statsOnly.mDrawState = std::uint8_t{ 2 }; // spell stance, drawstate-only entity
             delta.mEntities.push_back(statsOnly);
 
             const std::optional<SnapshotDelta> parsed = deserializeSnapshot(serializeSnapshot(delta));
@@ -72,7 +75,9 @@ namespace MWNet
             ASSERT_EQ(parsed->mEntities.size(), 2u);
             ASSERT_TRUE(parsed->mEntities[0].mStats.has_value());
             EXPECT_EQ(parsed->mEntities[0].mStats->mHealth, 42.5f);
+            EXPECT_EQ(parsed->mEntities[0].mDrawState, std::uint8_t{ 1 });
             EXPECT_FALSE(parsed->mEntities[1].mTransform.has_value());
+            EXPECT_EQ(parsed->mEntities[1].mDrawState, std::uint8_t{ 2 });
         }
 
         TEST(MWNetSnapshotTest, rejectsEmptyBuffer)

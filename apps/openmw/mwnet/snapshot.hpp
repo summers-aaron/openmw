@@ -57,6 +57,10 @@ namespace MWNet
         ESM::RefNum mId;
         std::optional<TransformState> mTransform;
         std::optional<DynamicStats> mStats;
+        // The actor's weapon/spell draw stance (MWMechanics::DrawState as a byte): 0 nothing,
+        // 1 weapon, 2 spell. Replicated so a remote actor visibly draws its weapon and adopts a
+        // combat stance — the first slice of animation-state replication.
+        std::optional<std::uint8_t> mDrawState;
 
         friend bool operator==(const EntityState&, const EntityState&) = default;
     };

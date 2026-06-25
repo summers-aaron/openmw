@@ -11,6 +11,7 @@
 #include "../mwbase/world.hpp"
 
 #include "../mwmechanics/creaturestats.hpp"
+#include "../mwmechanics/drawstate.hpp"
 #include "../mwmechanics/movement.hpp"
 #include "../mwmechanics/stat.hpp"
 
@@ -59,6 +60,23 @@ namespace MWNet
                 stats.getFatigue().getCurrent() };
         }
 
+        std::optional<std::uint8_t> sampleDrawState(const MWWorld::Ptr& actor)
+        {
+            if (!actor.getClass().isActor())
+                return std::nullopt;
+            return static_cast<std::uint8_t>(actor.getClass().getCreatureStats(actor).getDrawState());
+        }
+
+        void applyDrawState(const MWWorld::Ptr& actor, std::uint8_t value)
+        {
+            if (!actor.getClass().isActor() || value > static_cast<std::uint8_t>(MWMechanics::DrawState::Spell))
+                return; // ignore out-of-range values from a hostile peer
+            MWMechanics::CreatureStats& stats = actor.getClass().getCreatureStats(actor);
+            const auto drawState = static_cast<MWMechanics::DrawState>(value);
+            if (stats.getDrawState() != drawState)
+                stats.setDrawState(drawState); // the actor's controller plays the draw/sheathe + stance
+        }
+
         void applyStats(const MWWorld::Ptr& actor, const DynamicStats& values)
         {
             if (!actor.getClass().isActor())
@@ -100,19 +118,20 @@ namespace MWNet
         const bool fullSnapshot = (delta.mTick % sFullSnapshotInterval) == 0;
 
         const auto include = [&](const ESM::RefNum& id, const TransformState& transform,
-                                 std::optional<DynamicStats> stats) {
-            std::pair<TransformState, std::optional<DynamicStats>> current{ transform, stats };
+                                 std::optional<DynamicStats> stats, std::optional<std::uint8_t> drawState) {
+            SentState current{ transform, stats, drawState };
             const auto [it, inserted] = mLastSent.try_emplace(id, current);
             if (!inserted)
             {
                 if (!fullSnapshot && it->second == current)
-                    return; // neither transform nor stats changed — omit (except on a full-refresh tick)
+                    return; // nothing replicated changed — omit (except on a full-refresh tick)
                 it->second = current;
             }
             EntityState entity;
             entity.mId = id;
             entity.mTransform = transform;
             entity.mStats = stats;
+            entity.mDrawState = drawState;
             delta.mEntities.push_back(entity);
         };
 
@@ -132,6 +151,7 @@ namespace MWNet
             self.mId = mLocalPlayerNetId;
             self.mTransform = TransformState{ pos.asVec3(), osg::Vec3f(pos.rot[0], pos.rot[1], pos.rot[2]) };
             self.mStats = sampleStats(player);
+            self.mDrawState = sampleDrawState(player);
             delta.mEntities.push_back(self);
         }
 
@@ -159,7 +179,7 @@ namespace MWNet
             const ESM::Position& position = actor.getRefData().getPosition();
             include(id,
                 TransformState{ position.asVec3(), osg::Vec3f(position.rot[0], position.rot[1], position.rot[2]) },
-                sampleStats(actor));
+                sampleStats(actor), sampleDrawState(actor));
         }
 
         // Host relay: re-broadcast each connected client's player (the avatar we hold) under its
@@ -174,7 +194,7 @@ namespace MWNet
                 const ESM::Position& pos = avatar.getRefData().getPosition();
                 include(netId,
                     TransformState{ pos.asVec3(), osg::Vec3f(pos.rot[0], pos.rot[1], pos.rot[2]) },
-                    sampleStats(avatar));
+                    sampleStats(avatar), sampleDrawState(avatar));
             }
         }
 
@@ -228,6 +248,8 @@ namespace MWNet
                 world.rotateObject(avatar, entity.mTransform->mRotation, MWBase::RotationFlag_none);
                 if (entity.mStats)
                     applyStats(avatar, *entity.mStats);
+                if (entity.mDrawState)
+                    applyDrawState(avatar, *entity.mDrawState);
                 ++applied;
                 continue;
             }
@@ -247,6 +269,8 @@ namespace MWNet
             world.rotateObject(ptr, entity.mTransform->mRotation, MWBase::RotationFlag_none);
             if (entity.mStats)
                 applyStats(ptr, *entity.mStats);
+            if (entity.mDrawState)
+                applyDrawState(ptr, *entity.mDrawState);
             ++applied;
         }
         return applied;
