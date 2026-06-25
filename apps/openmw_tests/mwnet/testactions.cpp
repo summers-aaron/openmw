@@ -30,6 +30,20 @@ namespace MWNet
             EXPECT_FALSE(parsed->mHits[1].mHealthDamage);
         }
 
+        TEST(MWNetActionsTest, playerDamagesRoundTrip)
+        {
+            ActionBatch batch;
+            batch.mHits.push_back({ ESM::RefNum{ 7, -1000 }, ESM::RefNum{ 9, 0 }, 5.f, true });
+            batch.mPlayerDamages.push_back({ ESM::RefNum{ 3, -1000 }, 8.25f, true });
+            batch.mPlayerDamages.push_back({ ESM::RefNum{ 99, -1000 }, 2.f, false });
+            const std::optional<ActionBatch> parsed = deserializeActions(serializeActions(batch));
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(*parsed, batch);
+            ASSERT_EQ(parsed->mPlayerDamages.size(), 2u);
+            EXPECT_EQ(parsed->mPlayerDamages[0].mDamage, 8.25f);
+            EXPECT_FALSE(parsed->mPlayerDamages[1].mHealthDamage);
+        }
+
         TEST(MWNetActionsTest, rejectsEmptyBuffer)
         {
             EXPECT_FALSE(deserializeActions(std::span<const std::byte>{}).has_value());
@@ -45,9 +59,9 @@ namespace MWNet
         TEST(MWNetActionsTest, rejectsImplausibleCount)
         {
             std::vector<std::byte> bytes = serializeActions(ActionBatch{});
-            ASSERT_EQ(bytes.size(), 5u); // [version][count:4 == 0]
+            ASSERT_EQ(bytes.size(), 9u); // [version][hitCount:4 == 0][playerDamageCount:4 == 0]
             for (std::size_t i = 0; i < 4; ++i)
-                bytes[1 + i] = std::byte{ 0xff };
+                bytes[1 + i] = std::byte{ 0xff }; // implausible hit count
             EXPECT_FALSE(deserializeActions(bytes).has_value());
         }
 

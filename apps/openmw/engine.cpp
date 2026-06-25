@@ -275,8 +275,14 @@ void OMW::Engine::pumpTransport()
             else if (message.mPayload.front() == sKindActions)
             {
                 if (const std::optional<MWNet::ActionBatch> actions = MWNet::deserializeActions(body))
+                {
+                    // Host resolves clients' reported hits; a client applies the host's report
+                    // that its own player was hit by the shared world.
                     if (authority)
                         mReplicator->applyActions(*actions);
+                    else
+                        mReplicator->applyIncomingPlayerDamage(*actions);
+                }
             }
         }
     }
@@ -890,6 +896,7 @@ void OMW::Engine::prepareEngine()
     {
         mReplicator->setLocalPlayerNetId(ESM::RefNum{ 0, MWNet::sNetPlayerContentFile });
         mReplicator->setRelayAvatars(true);
+        mReplicator->setAuthority(true);
     }
 
     const bool stereoEnabled = Settings::stereo().mStereoEnabled || osg::DisplaySettings::instance().get()->getStereo();

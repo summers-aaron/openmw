@@ -286,4 +286,43 @@ namespace MWNet
                                 << ", aggroes onto remote player " << hit.mAttacker.mIndex;
         }
     }
+
+    void Replicator::reportRemotePlayerHit(const MWWorld::Ptr& avatar, float damage, bool healthDamage)
+    {
+        if (!mIsAuthority || avatar.isEmpty())
+            return;
+        // Find which remote player this avatar stands in for, and queue the damage for them.
+        for (const auto& [netId, ptr] : mAvatars)
+        {
+            if (ptr == avatar)
+            {
+                mOutgoingPlayerDamages.push_back({ netId, damage, healthDamage });
+                Log(Debug::Verbose) << "Reporting " << damage << (healthDamage ? " hp" : " fatigue")
+                                    << " damage to remote player " << netId.mIndex;
+                return;
+            }
+        }
+    }
+
+    void Replicator::applyIncomingPlayerDamage(const ActionBatch& batch)
+    {
+        if (!mLocalPlayerNetId.isSet() || batch.mPlayerDamages.empty())
+            return;
+        const MWWorld::Ptr player = MWBase::Environment::get().getWorld()->getPlayerPtr();
+        if (player.isEmpty() || !player.getClass().isActor())
+            return;
+        MWMechanics::CreatureStats& stats = player.getClass().getCreatureStats(player);
+        for (const PlayerDamage& pd : batch.mPlayerDamages)
+        {
+            if (pd.mTarget != mLocalPlayerNetId)
+                continue; // addressed to another player
+            const int index = pd.mHealthDamage ? 0 : 2; // 0 = health, 2 = fatigue
+            MWMechanics::DynamicStat<float> stat = stats.getDynamic(index);
+            stat.setCurrent(stat.getCurrent() - pd.mDamage, true);
+            stats.setDynamic(index, stat);
+            // Our own mechanics run normally for our player, so health <= 0 triggers death here.
+            Log(Debug::Verbose) << "Took " << pd.mDamage << (pd.mHealthDamage ? " hp" : " fatigue")
+                                << " from the shared world -> " << stat.getCurrent();
+        }
+    }
 }
