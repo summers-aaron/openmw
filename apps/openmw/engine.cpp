@@ -84,6 +84,8 @@
 #include "mwmechanics/mechanicsmanagerimp.hpp"
 
 #include "mwnet/loopbacktransport.hpp"
+#include "mwnet/replicator.hpp"
+#include "mwnet/snapshot.hpp"
 
 #include "mwnull/nullinputmanager.hpp"
 #include "mwnull/nullsoundmanager.hpp"
@@ -207,13 +209,29 @@ void OMW::Engine::executeLocalScripts()
 
 void OMW::Engine::pumpTransport()
 {
-    // The heartbeat is the only traffic at M1: an empty reliable message sent each tick.
-    // Pump the transport and drain whatever the peer delivered. Loopback hands the
-    // heartbeat straight back in-process and we discard it, so SP is byte-identical; the
-    // point is purely that the simulation already flows through the seam.
-    mTransport->send(MWNet::Message{ MWNet::Channel::Reliable, {} });
+    // M9: the seam now carries the real post-tick snapshot/delta instead of a heartbeat.
+    // Sample the changed transforms of active actors, send them as an unreliable
+    // (latest-wins) message, then drain and decode whatever the peer delivered. Over
+    // loopback the delta is handed straight back in-process; applyDelta is a no-op
+    // because every entity is locally authoritative, so SP stays byte-identical while
+    // the full sample -> serialize -> transport -> deserialize path is exercised.
+    const MWNet::SnapshotDelta delta = mReplicator->sampleDelta();
+    mTransport->send(MWNet::Message{ MWNet::Channel::Unreliable, MWNet::serializeSnapshot(delta) });
     mTransport->update();
-    mTransport->receive();
+    std::size_t receivedEntities = 0;
+    for (const MWNet::Message& message : mTransport->receive())
+    {
+        // Never trust a payload: a real peer (M11) can send malformed bytes; drop them.
+        if (const std::optional<MWNet::SnapshotDelta> received = MWNet::deserializeSnapshot(message.mPayload))
+        {
+            receivedEntities += received->mEntities.size();
+            mReplicator->applyDelta(*received);
+        }
+    }
+    // Verbose-only replication throughput (off by default), throttled to ~once per 300 ticks.
+    if (delta.mTick % 300 == 0)
+        Log(Debug::Verbose) << "Replication tick " << delta.mTick << ": sent " << delta.mEntities.size()
+                            << " changed-entity delta(s), round-tripped " << receivedEntities;
 }
 
 bool OMW::Engine::frame(unsigned frameNumber, float frametime)
@@ -462,6 +480,7 @@ OMW::Engine::~Engine()
     mLuaWorker = nullptr;
     mLuaManager = nullptr;
     mL10nManager = nullptr;
+    mReplicator = nullptr;
     mTransport = nullptr;
 
     mScriptContext = nullptr;
@@ -779,6 +798,7 @@ void OMW::Engine::prepareEngine()
     // an in-process loopback transport. Other run modes (networked client, dedicated server)
     // will swap in a real transport here; loopback does no serialization, so SP is unchanged.
     mTransport = std::make_unique<MWNet::LoopbackTransport>();
+    mReplicator = std::make_unique<MWNet::Replicator>();
 
     const bool stereoEnabled = Settings::stereo().mStereoEnabled || osg::DisplaySettings::instance().get()->getStereo();
     mStereoManager = std::make_unique<Stereo::Manager>(

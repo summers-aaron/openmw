@@ -100,6 +100,7 @@ namespace MWMechanics
 namespace MWNet
 {
     class ISessionTransport;
+    class Replicator;
 }
 
 namespace MWDialogue
@@ -142,6 +143,7 @@ namespace OMW
         std::unique_ptr<MWLua::Worker> mLuaWorker;
         std::unique_ptr<L10n::Manager> mL10nManager;
         std::unique_ptr<MWNet::ISessionTransport> mTransport;
+        std::unique_ptr<MWNet::Replicator> mReplicator;
         MWBase::Environment mEnvironment;
         ToUTF8::FromType mEncoding;
         std::unique_ptr<ToUTF8::Utf8Encoder> mEncoder;
