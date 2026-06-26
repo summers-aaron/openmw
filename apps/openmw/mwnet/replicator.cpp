@@ -1,5 +1,6 @@
 #include "replicator.hpp"
 
+#include <algorithm>
 #include <limits>
 #include <vector>
 
@@ -14,6 +15,7 @@
 #include "../mwmechanics/creaturestats.hpp"
 #include "../mwmechanics/drawstate.hpp"
 #include "../mwmechanics/movement.hpp"
+#include "../mwmechanics/npcstats.hpp"
 #include "../mwmechanics/stat.hpp"
 
 #include "../mwworld/cellref.hpp"
@@ -336,6 +338,22 @@ namespace MWNet
         }
     }
 
+    void Replicator::reportPlayerBounty(const MWWorld::Ptr& avatar, int bounty)
+    {
+        if (!mIsAuthority || avatar.isEmpty() || bounty == 0)
+            return;
+        // Find which remote player this avatar stands in for, and queue the bounty for them.
+        for (const auto& [netId, ptr] : mAvatars)
+        {
+            if (ptr == avatar)
+            {
+                mOutgoingBounties.push_back({ netId, bounty });
+                Log(Debug::Verbose) << "Reporting " << bounty << " bounty to remote player " << netId.mIndex;
+                return;
+            }
+        }
+    }
+
     void Replicator::applyIncomingPlayerDamage(const ActionBatch& batch)
     {
         if (!mLocalPlayerNetId.isSet() || batch.mPlayerDamages.empty())
@@ -355,6 +373,23 @@ namespace MWNet
             // Our own mechanics run normally for our player, so health <= 0 triggers death here.
             Log(Debug::Verbose) << "Took " << pd.mDamage << (pd.mHealthDamage ? " hp" : " fatigue")
                                 << " from the shared world -> " << stat.getCurrent();
+        }
+    }
+
+    void Replicator::applyIncomingBounty(const ActionBatch& batch)
+    {
+        if (!mLocalPlayerNetId.isSet() || batch.mBounties.empty())
+            return;
+        const MWWorld::Ptr player = MWBase::Environment::get().getWorld()->getPlayerPtr();
+        if (player.isEmpty() || !player.getClass().isNpc())
+            return;
+        MWMechanics::NpcStats& stats = player.getClass().getNpcStats(player);
+        for (const PlayerBounty& pb : batch.mBounties)
+        {
+            if (pb.mTarget != mLocalPlayerNetId)
+                continue; // addressed to another player
+            stats.setBounty(std::max(0, stats.getBounty() + pb.mBounty));
+            Log(Debug::Verbose) << "Earned " << pb.mBounty << " bounty from the shared world -> " << stats.getBounty();
         }
     }
 }

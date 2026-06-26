@@ -12,6 +12,8 @@ namespace MWNet
         constexpr std::uint32_t sMinHitBytes = 21;
         // Smallest encoded PlayerDamage: target RefNum (4+4) + damage (4) + flag (1).
         constexpr std::uint32_t sMinPlayerDamageBytes = 13;
+        // Smallest encoded PlayerBounty: target RefNum (4+4) + bounty (int32, 4).
+        constexpr std::uint32_t sMinPlayerBountyBytes = 12;
     }
 
     std::vector<std::byte> serializeActions(const ActionBatch& batch)
@@ -37,6 +39,13 @@ namespace MWNet
             writer.write(pd.mTarget.mContentFile);
             writer.write(pd.mDamage);
             writer.write(static_cast<std::uint8_t>(pd.mHealthDamage ? 1 : 0));
+        }
+        writer.write(static_cast<std::uint32_t>(batch.mBounties.size()));
+        for (const PlayerBounty& pb : batch.mBounties)
+        {
+            writer.write(pb.mTarget.mIndex);
+            writer.write(pb.mTarget.mContentFile);
+            writer.write(pb.mBounty);
         }
         return out;
     }
@@ -83,6 +92,20 @@ namespace MWNet
                 return std::nullopt;
             pd.mHealthDamage = healthDamage != 0;
             batch.mPlayerDamages.push_back(pd);
+        }
+
+        std::uint32_t bountyCount = 0;
+        if (!reader.read(bountyCount))
+            return std::nullopt;
+        if (bountyCount > reader.remaining() / sMinPlayerBountyBytes)
+            return std::nullopt;
+        batch.mBounties.reserve(bountyCount);
+        for (std::uint32_t i = 0; i < bountyCount; ++i)
+        {
+            PlayerBounty pb;
+            if (!reader.read(pb.mTarget.mIndex) || !reader.read(pb.mTarget.mContentFile) || !reader.read(pb.mBounty))
+                return std::nullopt;
+            batch.mBounties.push_back(pb);
         }
         return batch;
     }

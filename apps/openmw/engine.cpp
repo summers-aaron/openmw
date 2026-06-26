@@ -276,12 +276,15 @@ void OMW::Engine::pumpTransport()
             {
                 if (const std::optional<MWNet::ActionBatch> actions = MWNet::deserializeActions(body))
                 {
-                    // Host resolves clients' reported hits; a client applies the host's report
-                    // that its own player was hit by the shared world.
+                    // Host resolves clients' reported hits; a client applies the host's reports
+                    // about its own player — damage taken and bounty earned from the shared world.
                     if (authority)
                         mReplicator->applyActions(*actions);
                     else
+                    {
                         mReplicator->applyIncomingPlayerDamage(*actions);
+                        mReplicator->applyIncomingBounty(*actions);
+                    }
                 }
             }
         }

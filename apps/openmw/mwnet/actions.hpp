@@ -2,6 +2,7 @@
 #define OPENMW_MWNET_ACTIONS_H
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <vector>
@@ -40,15 +41,29 @@ namespace MWNet
         friend bool operator==(const PlayerDamage&, const PlayerDamage&) = default;
     };
 
+    /// Bounty the host's crime system assigned to a remote player for a crime its avatar
+    /// committed, flowing host -> the owning client, which adds it to its real player's bounty.
+    /// mTarget is that player's network id; mBounty is the delta to add (the host owns the
+    /// crime detection, the client owns the running bounty value used for arrest/fine dialogue).
+    struct PlayerBounty
+    {
+        ESM::RefNum mTarget;
+        std::int32_t mBounty = 0;
+
+        friend bool operator==(const PlayerBounty&, const PlayerBounty&) = default;
+    };
+
     /// One frame's worth of reported actions crossing the transport (Reliable channel).
-    /// mHits flow client -> host (resolve my hit); mPlayerDamages flow host -> client (you
-    /// were hit). A given batch is populated by one side and consumed by the other.
+    /// mHits flow client -> host (resolve my hit); mPlayerDamages and mBounties flow host ->
+    /// client (you were hit / you earned a bounty). A given batch is populated by one side and
+    /// consumed by the other.
     struct ActionBatch
     {
         std::vector<CombatHit> mHits;
         std::vector<PlayerDamage> mPlayerDamages;
+        std::vector<PlayerBounty> mBounties;
 
-        bool empty() const { return mHits.empty() && mPlayerDamages.empty(); }
+        bool empty() const { return mHits.empty() && mPlayerDamages.empty() && mBounties.empty(); }
 
         friend bool operator==(const ActionBatch&, const ActionBatch&) = default;
     };

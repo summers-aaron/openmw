@@ -29,6 +29,8 @@
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
 
+#include "../mwnet/replicator.hpp"
+
 #include "../mwsound/constants.hpp"
 
 #include "actor.hpp"
@@ -1513,6 +1515,12 @@ namespace MWMechanics
                         player.getClass().getNpcStats(player).expell(factionId, true);
                     }
                 }
+            }
+            else if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+            {
+                // An additional player (a remote peer's avatar): its bounty lives on its own
+                // client, so report the delta there instead of booking it on the rat avatar.
+                replicator->reportPlayerBounty(player, bounty);
             }
 
             if (type == OT_Assault && !victim.isEmpty()

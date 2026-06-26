@@ -49,6 +49,8 @@ namespace MWNet
         std::vector<CombatHit> mOutgoingHits;
         // Host only: damage dealt to remote players' avatars, awaiting send to their owners.
         std::vector<PlayerDamage> mOutgoingPlayerDamages;
+        // Host only: bounty earned by remote players' crimes, awaiting send to their owners.
+        std::vector<PlayerBounty> mOutgoingBounties;
         // Host only: re-broadcast clients' players (avatars) so clients see each other.
         bool mRelayAvatars = false;
         // True on the host (the authority that resolves combat for the shared world).
@@ -80,14 +82,21 @@ namespace MWNet
         /// the struck Ptr isn't one of our avatars.
         void reportRemotePlayerHit(const MWWorld::Ptr& avatar, float damage, bool healthDamage);
 
+        /// Report (host only) that a remote player's avatar earned a crime bounty, so the owning
+        /// client can add it to its real player's bounty. A no-op off the authority or if the
+        /// avatar isn't one of ours.
+        void reportPlayerBounty(const MWWorld::Ptr& avatar, int bounty);
+
         /// Drain this tick's reported actions for sending.
         ActionBatch takeOutgoingActions()
         {
             ActionBatch batch;
             batch.mHits = std::move(mOutgoingHits);
             batch.mPlayerDamages = std::move(mOutgoingPlayerDamages);
+            batch.mBounties = std::move(mOutgoingBounties);
             mOutgoingHits.clear();
             mOutgoingPlayerDamages.clear();
+            mOutgoingBounties.clear();
             return batch;
         }
 
@@ -98,6 +107,10 @@ namespace MWNet
         /// Apply received player-damage reports (client only): subtract from this peer's real
         /// player whatever the host says host-owned actors dealt to its avatar.
         void applyIncomingPlayerDamage(const ActionBatch& batch);
+
+        /// Apply received bounty reports (client only): add to this peer's real player's bounty
+        /// whatever the host's crime system assigned to its avatar.
+        void applyIncomingBounty(const ActionBatch& batch);
 
         /// Read the world's active actors (and this peer's player) and build the delta.
         SnapshotDelta sampleDelta();
