@@ -52,12 +52,7 @@ namespace MWWorld
     Player::Player(const ESM::NPC* player)
         : mPlayer(makePlayerCellRef(), player)
         , mCellStore(nullptr)
-        , mLastKnownExteriorPosition(0, 0, 0)
-        , mMarkedPosition(ESM::Position())
-        , mMarkedCell(nullptr)
         , mTeleported(false)
-        , mCurrentCrimeId(-1)
-        , mPaidCrimeId(-1)
         , mJumping(false)
     {
         ESM::Position playerPos = mPlayer.mData.getPosition();
@@ -69,10 +64,10 @@ namespace MWWorld
     {
         MWMechanics::NpcStats& stats = getPlayer().getClass().getNpcStats(getPlayer());
 
-        for (size_t i = 0; i < mSaveSkills.size(); ++i)
-            mSaveSkills[i] = stats.getSkill(ESM::Skill::indexToRefId(static_cast<int>(i))).getModified();
-        for (size_t i = 0; i < mSaveAttributes.size(); ++i)
-            mSaveAttributes[i] = stats.getAttribute(ESM::Attribute::indexToRefId(static_cast<int>(i))).getModified();
+        for (size_t i = 0; i < mData.mSaveSkills.size(); ++i)
+            mData.mSaveSkills[i] = stats.getSkill(ESM::Skill::indexToRefId(static_cast<int>(i))).getModified();
+        for (size_t i = 0; i < mData.mSaveAttributes.size(); ++i)
+            mData.mSaveAttributes[i] = stats.getAttribute(ESM::Attribute::indexToRefId(static_cast<int>(i))).getModified();
     }
 
     void Player::restoreStats()
@@ -83,18 +78,18 @@ namespace MWWorld
         MWMechanics::NpcStats& npcStats = getPlayer().getClass().getNpcStats(getPlayer());
         MWMechanics::DynamicStat<float> health = creatureStats.getDynamic(0);
         creatureStats.setHealth(health.getBase() / gmst.find("fWereWolfHealth")->mValue.getFloat());
-        for (size_t i = 0; i < mSaveSkills.size(); ++i)
+        for (size_t i = 0; i < mData.mSaveSkills.size(); ++i)
         {
             auto& skill = npcStats.getSkill(ESM::Skill::indexToRefId(static_cast<int>(i)));
             skill.restore(skill.getDamage());
-            skill.setModifier(mSaveSkills[i] - skill.getBase());
+            skill.setModifier(mData.mSaveSkills[i] - skill.getBase());
         }
-        for (size_t i = 0; i < mSaveAttributes.size(); ++i)
+        for (size_t i = 0; i < mData.mSaveAttributes.size(); ++i)
         {
             auto id = ESM::Attribute::indexToRefId(static_cast<int>(i));
             auto attribute = npcStats.getAttribute(id);
             attribute.restore(attribute.getDamage());
-            attribute.setModifier(mSaveAttributes[i] - attribute.getBase());
+            attribute.setModifier(mData.mSaveAttributes[i] - attribute.getBase());
             npcStats.setAttribute(id, attribute);
         }
     }
@@ -151,12 +146,12 @@ namespace MWWorld
 
     void Player::setBirthSign(const ESM::RefId& sign)
     {
-        mSign = sign;
+        mData.mSign = sign;
     }
 
     const ESM::RefId& Player::getBirthSign() const
     {
-        return mSign;
+        return mData.mSign;
     }
 
     void Player::setDrawState(MWMechanics::DrawState state)
@@ -240,15 +235,15 @@ namespace MWWorld
 
     void Player::markPosition(CellStore* markedCell, const ESM::Position& markedPosition)
     {
-        mMarkedCell = markedCell;
-        mMarkedPosition = markedPosition;
+        mData.mMarkedCell = markedCell;
+        mData.mMarkedPosition = markedPosition;
     }
 
     void Player::getMarkedPosition(CellStore*& markedCell, ESM::Position& markedPosition) const
     {
-        markedCell = mMarkedCell;
-        if (mMarkedCell)
-            markedPosition = mMarkedPosition;
+        markedCell = mData.mMarkedCell;
+        if (mData.mMarkedCell)
+            markedPosition = mData.mMarkedPosition;
     }
 
     void Player::clear()
@@ -259,24 +254,9 @@ namespace MWWorld
         cellRef.mRefNum = mPlayer.mRef.getRefNum();
         mPlayer = LiveCellRef<ESM::NPC>(cellRef, mPlayer.mBase);
         mCellStore = nullptr;
-        mSign = ESM::RefId();
-        mMarkedCell = nullptr;
         mTeleported = false;
         mJumping = false;
-        mCurrentCrimeId = -1;
-        mPaidCrimeId = -1;
-        mPreviousItems.clear();
-        mLastKnownExteriorPosition = osg::Vec3f(0, 0, 0);
-
-        mSaveSkills.fill(0.f);
-        mSaveAttributes.fill(0.f);
-
-        mMarkedPosition.pos[0] = 0;
-        mMarkedPosition.pos[1] = 0;
-        mMarkedPosition.pos[2] = 0;
-        mMarkedPosition.rot[0] = 0;
-        mMarkedPosition.rot[1] = 0;
-        mMarkedPosition.rot[2] = 0;
+        mData.clear(); // resets the per-player sim record (birthsign, crime ids, mark, etc.)
     }
 
     void Player::write(ESM::ESMWriter& writer, Loading::Listener& progress) const
@@ -286,30 +266,30 @@ namespace MWWorld
         mPlayer.save(player.mObject);
         player.mCellId = mCellStore->getCell()->getId();
 
-        player.mCurrentCrimeId = mCurrentCrimeId;
-        player.mPaidCrimeId = mPaidCrimeId;
+        player.mCurrentCrimeId = mData.mCurrentCrimeId;
+        player.mPaidCrimeId = mData.mPaidCrimeId;
 
-        player.mBirthsign = mSign;
+        player.mBirthsign = mData.mSign;
 
-        player.mLastKnownExteriorPosition[0] = mLastKnownExteriorPosition.x();
-        player.mLastKnownExteriorPosition[1] = mLastKnownExteriorPosition.y();
-        player.mLastKnownExteriorPosition[2] = mLastKnownExteriorPosition.z();
+        player.mLastKnownExteriorPosition[0] = mData.mLastKnownExteriorPosition.x();
+        player.mLastKnownExteriorPosition[1] = mData.mLastKnownExteriorPosition.y();
+        player.mLastKnownExteriorPosition[2] = mData.mLastKnownExteriorPosition.z();
 
-        if (mMarkedCell)
+        if (mData.mMarkedCell)
         {
             player.mHasMark = true;
-            player.mMarkedPosition = mMarkedPosition;
-            player.mMarkedCell = mMarkedCell->getCell()->getId();
+            player.mMarkedPosition = mData.mMarkedPosition;
+            player.mMarkedCell = mData.mMarkedCell->getCell()->getId();
         }
         else
             player.mHasMark = false;
 
-        for (size_t i = 0; i < mSaveAttributes.size(); ++i)
-            player.mSaveAttributes[i] = mSaveAttributes[i];
-        for (size_t i = 0; i < mSaveSkills.size(); ++i)
-            player.mSaveSkills[i] = mSaveSkills[i];
+        for (size_t i = 0; i < mData.mSaveAttributes.size(); ++i)
+            player.mSaveAttributes[i] = mData.mSaveAttributes[i];
+        for (size_t i = 0; i < mData.mSaveSkills.size(); ++i)
+            player.mSaveSkills[i] = mData.mSaveSkills[i];
 
-        player.mPreviousItems = mPreviousItems;
+        player.mPreviousItems = mData.mPreviousItems;
 
         writer.startRecord(ESM::REC_PLAY);
         player.save(writer);
@@ -352,10 +332,10 @@ namespace MWWorld
                 reader.mActorIdConverter->mMappings.emplace(
                     player.mObject.mCreatureStats.mActorId, mPlayer.mRef.getRefNum());
 
-            for (size_t i = 0; i < mSaveAttributes.size(); ++i)
-                mSaveAttributes[i] = player.mSaveAttributes[i];
-            for (size_t i = 0; i < mSaveSkills.size(); ++i)
-                mSaveSkills[i] = player.mSaveSkills[i];
+            for (size_t i = 0; i < mData.mSaveAttributes.size(); ++i)
+                mData.mSaveAttributes[i] = player.mSaveAttributes[i];
+            for (size_t i = 0; i < mData.mSaveSkills.size(); ++i)
+                mData.mSaveSkills[i] = player.mSaveSkills[i];
 
             if (player.mObject.mNpcStats.mIsWerewolf)
             {
@@ -382,14 +362,14 @@ namespace MWWorld
                     throw std::runtime_error("invalid player state record (birthsign does not exist)");
             }
 
-            mCurrentCrimeId = player.mCurrentCrimeId;
-            mPaidCrimeId = player.mPaidCrimeId;
+            mData.mCurrentCrimeId = player.mCurrentCrimeId;
+            mData.mPaidCrimeId = player.mPaidCrimeId;
 
-            mSign = player.mBirthsign;
+            mData.mSign = player.mBirthsign;
 
-            mLastKnownExteriorPosition.x() = player.mLastKnownExteriorPosition[0];
-            mLastKnownExteriorPosition.y() = player.mLastKnownExteriorPosition[1];
-            mLastKnownExteriorPosition.z() = player.mLastKnownExteriorPosition[2];
+            mData.mLastKnownExteriorPosition.x() = player.mLastKnownExteriorPosition[0];
+            mData.mLastKnownExteriorPosition.y() = player.mLastKnownExteriorPosition[1];
+            mData.mLastKnownExteriorPosition.z() = player.mLastKnownExteriorPosition[2];
 
             if (player.mHasMark)
             {
@@ -399,17 +379,17 @@ namespace MWWorld
 
             if (player.mHasMark)
             {
-                mMarkedPosition = player.mMarkedPosition;
-                mMarkedCell = &MWBase::Environment::get().getWorldModel()->getCell(player.mMarkedCell);
+                mData.mMarkedPosition = player.mMarkedPosition;
+                mData.mMarkedCell = &MWBase::Environment::get().getWorldModel()->getCell(player.mMarkedCell);
             }
             else
             {
-                mMarkedCell = nullptr;
+                mData.mMarkedCell = nullptr;
             }
 
             mTeleported = false;
 
-            mPreviousItems = player.mPreviousItems;
+            mData.mPreviousItems = player.mPreviousItems;
 
             return true;
         }
@@ -419,32 +399,32 @@ namespace MWWorld
 
     int Player::getNewCrimeId()
     {
-        return ++mCurrentCrimeId;
+        return ++mData.mCurrentCrimeId;
     }
 
     void Player::recordCrimeId()
     {
-        mPaidCrimeId = mCurrentCrimeId;
+        mData.mPaidCrimeId = mData.mCurrentCrimeId;
     }
 
     int Player::getCrimeId() const
     {
-        return mPaidCrimeId;
+        return mData.mPaidCrimeId;
     }
 
     void Player::setPreviousItem(const ESM::RefId& boundItemId, const ESM::RefId& previousItemId)
     {
-        mPreviousItems[boundItemId] = previousItemId;
+        mData.mPreviousItems[boundItemId] = previousItemId;
     }
 
     ESM::RefId Player::getPreviousItem(const ESM::RefId& boundItemId)
     {
-        return mPreviousItems[boundItemId];
+        return mData.mPreviousItems[boundItemId];
     }
 
     void Player::erasePreviousItem(const ESM::RefId& boundItemId)
     {
-        mPreviousItems.erase(boundItemId);
+        mData.mPreviousItems.erase(boundItemId);
     }
 
     void Player::setSelectedSpell(const ESM::RefId& spellId)

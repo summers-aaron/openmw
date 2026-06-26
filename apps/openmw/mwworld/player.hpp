@@ -5,6 +5,7 @@
 #include <map>
 
 #include "../mwworld/livecellref.hpp"
+#include "../mwworld/playerdata.hpp"
 
 #include "../mwmechanics/drawstate.hpp"
 
@@ -34,26 +35,14 @@ namespace MWWorld
     {
         LiveCellRef<ESM::NPC> mPlayer;
         MWWorld::CellStore* mCellStore;
-        ESM::RefId mSign;
 
-        osg::Vec3f mLastKnownExteriorPosition;
+        // Per-player SIMULATION state (birthsign, crime ids, mark/recall, last-known-exterior,
+        // bound-spell memory, werewolf save). Split out so every player can have one; the actor's
+        // own data (stats/inventory/equipment) lives on mPlayer, not here.
+        PlayerData mData;
 
-        ESM::Position mMarkedPosition;
-        // If no position was marked, this is nullptr
-        CellStore* mMarkedCell;
-
+        // Client-only state for the one local player on this node (not part of the sim record).
         bool mTeleported;
-
-        int mCurrentCrimeId; // the id assigned witnesses
-        int mPaidCrimeId; // the last id paid off (0 bounty)
-
-        typedef std::map<ESM::RefId, ESM::RefId> PreviousItems; // previous equipped items, needed for bound spells
-        PreviousItems mPreviousItems;
-
-        // Saved stats prior to becoming a werewolf
-        std::array<float, ESM::Skill::Length> mSaveSkills;
-        std::array<float, ESM::Attribute::Length> mSaveAttributes;
-
         bool mJumping;
 
     public:
@@ -70,8 +59,8 @@ namespace MWWorld
         /// Interiors can not always be mapped to a world position. However
         /// world position is still required for divine / almsivi magic effects
         /// and the player arrow on the global map.
-        void setLastKnownExteriorPosition(const osg::Vec3f& position) { mLastKnownExteriorPosition = position; }
-        osg::Vec3f getLastKnownExteriorPosition() const { return mLastKnownExteriorPosition; }
+        void setLastKnownExteriorPosition(const osg::Vec3f& position) { mData.mLastKnownExteriorPosition = position; }
+        osg::Vec3f getLastKnownExteriorPosition() const { return mData.mLastKnownExteriorPosition; }
 
         void set(const ESM::NPC* player);
 
