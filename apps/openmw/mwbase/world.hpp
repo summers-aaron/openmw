@@ -153,8 +153,8 @@ namespace MWBase
         /// Is this actor one of the players (local or a remote peer's avatar)?
         virtual bool isPlayer(const MWWorld::Ptr& ptr) const = 0;
         /// Register/forget a remote peer's player (its avatar) in the world's player set.
-        virtual void registerRemotePlayer(const MWWorld::Ptr& avatar) = 0;
-        virtual void forgetRemotePlayer(const MWWorld::Ptr& avatar) = 0;
+        virtual void registerPlayer(const MWWorld::Ptr& avatar) = 0;
+        virtual void forgetPlayer(const MWWorld::Ptr& avatar) = 0;
 
         virtual MWWorld::ESMStore& getStore() = 0;
         virtual const MWWorld::ESMStore& getStore() const = 0;

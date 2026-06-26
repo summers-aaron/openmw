@@ -54,15 +54,17 @@ namespace MWWorld
         Ptr getLocalPlayerPtr() const;
         ConstPtr getLocalPlayerConstPtr() const;
 
-        /// Register/forget another peer's player (its local avatar). Host-side; idempotent.
-        void registerRemotePlayer(const Ptr& avatar);
-        void forgetRemotePlayer(const Ptr& avatar);
+        /// Register/forget an additional player actor in the world set. The source is
+        /// deliberately unspecified — it may be a remote peer's avatar over the network, or a
+        /// second player added locally (e.g. for testing). Idempotent.
+        void registerPlayer(const Ptr& player);
+        void forgetPlayer(const Ptr& player);
 
-        /// Every player currently in the world: the local player (if set) followed by the
-        /// registered remote players. May be empty. Stale/emptied entries are skipped.
+        /// Every player currently in the world: the local player (if set) followed by any
+        /// additional registered players. May be empty. Stale/emptied entries are skipped.
         std::vector<Ptr> getPlayers() const;
 
-        /// Is this actor one of the players (local or a remote peer's avatar)?
+        /// Is this actor one of the players (the local player or an additional registered one)?
         bool isPlayer(const Ptr& ptr) const;
     };
 }

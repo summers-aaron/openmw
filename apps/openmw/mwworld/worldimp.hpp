@@ -241,8 +241,8 @@ namespace MWWorld
 
         std::vector<MWWorld::Ptr> getPlayers() override;
         bool isPlayer(const MWWorld::Ptr& ptr) const override;
-        void registerRemotePlayer(const MWWorld::Ptr& avatar) override;
-        void forgetRemotePlayer(const MWWorld::Ptr& avatar) override;
+        void registerPlayer(const MWWorld::Ptr& avatar) override;
+        void forgetPlayer(const MWWorld::Ptr& avatar) override;
 
         MWWorld::ESMStore& getStore() override { return mStore; }
 

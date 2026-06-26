@@ -37,7 +37,7 @@ namespace MWWorld
         return mLocalPlayer->getConstPlayer();
     }
 
-    void PlayerRegistry::registerRemotePlayer(const Ptr& avatar)
+    void PlayerRegistry::registerPlayer(const Ptr& avatar)
     {
         if (avatar.isEmpty())
             return;
@@ -47,7 +47,7 @@ namespace MWWorld
         mRemotePlayers.push_back(avatar);
     }
 
-    void PlayerRegistry::forgetRemotePlayer(const Ptr& avatar)
+    void PlayerRegistry::forgetPlayer(const Ptr& avatar)
     {
         std::erase(mRemotePlayers, avatar);
     }

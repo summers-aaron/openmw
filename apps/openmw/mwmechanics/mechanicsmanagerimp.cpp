@@ -1149,8 +1149,11 @@ namespace MWMechanics
     {
         // NOTE: victim may be empty
 
-        // Only player can commit crime
-        if (player != getPlayer())
+        // Only a player can commit crime — but the world can hold more than one (the local
+        // player plus any additional registered players). This is a membership test, not an
+        // identity test: in single-player the set is just the local player, so behaviour is
+        // unchanged; with several players the world reacts to each one's crimes the same way.
+        if (!isPlayer(player))
             return false;
 
         if (type == OT_Assault)
@@ -1475,26 +1478,35 @@ namespace MWMechanics
 
         if (reported)
         {
-            player.getClass().getNpcStats(player).setBounty(
-                std::max(0, player.getClass().getNpcStats(player).getBounty() + bounty));
-
-            // If committing a crime against a faction member, expell from the faction
-            if (!victim.isEmpty() && victim.getClass().isNpc())
+            // Bounty and faction standing are the offender's OWN bookkeeping. Apply them only to
+            // the local player here — an additional player owns its own bounty/faction state
+            // (and may not even be an NPC with NpcStats). The world's reaction (witnesses/guards
+            // above) already treated this offender as a player regardless.
+            if (player == getPlayer())
             {
-                const ESM::RefId& factionID = victim.getClass().getPrimaryFaction(victim);
+                player.getClass().getNpcStats(player).setBounty(
+                    std::max(0, player.getClass().getNpcStats(player).getBounty() + bounty));
 
-                const std::map<ESM::RefId, int>& playerRanks = player.getClass().getNpcStats(player).getFactionRanks();
-                if (playerRanks.find(factionID) != playerRanks.end())
+                // If committing a crime against a faction member, expell from the faction
+                if (!victim.isEmpty() && victim.getClass().isNpc())
                 {
-                    player.getClass().getNpcStats(player).expell(factionID, true);
+                    const ESM::RefId& factionID = victim.getClass().getPrimaryFaction(victim);
+
+                    const std::map<ESM::RefId, int>& playerRanks
+                        = player.getClass().getNpcStats(player).getFactionRanks();
+                    if (playerRanks.find(factionID) != playerRanks.end())
+                    {
+                        player.getClass().getNpcStats(player).expell(factionID, true);
+                    }
                 }
-            }
-            else if (!factionId.empty())
-            {
-                const std::map<ESM::RefId, int>& playerRanks = player.getClass().getNpcStats(player).getFactionRanks();
-                if (playerRanks.find(factionId) != playerRanks.end())
+                else if (!factionId.empty())
                 {
-                    player.getClass().getNpcStats(player).expell(factionId, true);
+                    const std::map<ESM::RefId, int>& playerRanks
+                        = player.getClass().getNpcStats(player).getFactionRanks();
+                    if (playerRanks.find(factionId) != playerRanks.end())
+                    {
+                        player.getClass().getNpcStats(player).expell(factionId, true);
+                    }
                 }
             }
 
@@ -1529,7 +1541,8 @@ namespace MWMechanics
         AiSequence& seq = statsTarget.getAiSequence();
 
         if (!attacker.isEmpty()
-            && (attacker.getClass().getCreatureStats(attacker).getAiSequence().isInCombat(target) || attacker == player)
+            && (attacker.getClass().getCreatureStats(attacker).getAiSequence().isInCombat(target)
+                || isPlayer(attacker))
             && !seq.isInCombat(attacker))
         {
             // Attacker is in combat with us, but we are not in combat with the attacker yet. Time to fight back.
@@ -1541,7 +1554,7 @@ namespace MWMechanics
                 bool peaceful = false;
                 const ESM::RefId& script = target.getClass().getScript(target);
                 if (!script.empty() && target.getRefData().getLocals().hasVar(script, "onpchitme")
-                    && attacker == player)
+                    && isPlayer(attacker))
                 {
                     const int fight
                         = target.getClass().getCreatureStats(target).getAiSetting(AiSetting::Fight).getModified();
@@ -1556,7 +1569,7 @@ namespace MWMechanics
                     // Force friendly actors into combat to prevent infighting between followers
                     for (const auto& follower : cachedAllies.getActorsSidingWith(target))
                     {
-                        if (follower != attacker && follower != player)
+                        if (follower != attacker && !isPlayer(follower))
                             startCombat(follower, attacker, &attackerAllies);
                     }
                 }

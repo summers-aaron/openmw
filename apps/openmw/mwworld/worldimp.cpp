@@ -3464,14 +3464,14 @@ namespace MWWorld
         return mPlayers.isPlayer(ptr);
     }
 
-    void World::registerRemotePlayer(const MWWorld::Ptr& avatar)
+    void World::registerPlayer(const MWWorld::Ptr& avatar)
     {
-        mPlayers.registerRemotePlayer(avatar);
+        mPlayers.registerPlayer(avatar);
     }
 
-    void World::forgetRemotePlayer(const MWWorld::Ptr& avatar)
+    void World::forgetPlayer(const MWWorld::Ptr& avatar)
     {
-        mPlayers.forgetRemotePlayer(avatar);
+        mPlayers.forgetPlayer(avatar);
     }
 
     void World::updateDialogueGlobals()
