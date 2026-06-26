@@ -3454,6 +3454,26 @@ namespace MWWorld
         return mPlayers.getLocalPlayerConstPtr();
     }
 
+    std::vector<MWWorld::Ptr> World::getPlayers()
+    {
+        return mPlayers.getPlayers();
+    }
+
+    bool World::isPlayer(const MWWorld::Ptr& ptr) const
+    {
+        return mPlayers.isPlayer(ptr);
+    }
+
+    void World::registerRemotePlayer(const MWWorld::Ptr& avatar)
+    {
+        mPlayers.registerRemotePlayer(avatar);
+    }
+
+    void World::forgetRemotePlayer(const MWWorld::Ptr& avatar)
+    {
+        mPlayers.forgetRemotePlayer(avatar);
+    }
+
     void World::updateDialogueGlobals()
     {
         MWWorld::Ptr player = getPlayerPtr();

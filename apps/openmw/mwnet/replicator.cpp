@@ -231,6 +231,7 @@ namespace MWNet
                         MWWorld::Ptr avatar
                             = world.placeObject(ref.getPtr(), localPlayer.getCell(), toPosition(*entity.mTransform));
                         avatar.getRefData().setRemoteOwned(true); // driven by the network, not local AI
+                        world.registerRemotePlayer(avatar); // a player in the world set, so world logic sees it
                         found = mAvatars.emplace(entity.mId, avatar).first;
                         Log(Debug::Info) << "Instantiated avatar for remote player " << entity.mId.mIndex;
                     }

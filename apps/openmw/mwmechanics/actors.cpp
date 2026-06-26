@@ -1,6 +1,7 @@
 #include "actors.hpp"
 
 #include <array>
+#include <limits>
 #include <optional>
 
 #include <components/esm3/esmreader.hpp>
@@ -523,11 +524,25 @@ namespace MWMechanics
         const float helloDistance
             = static_cast<float>(actorStats.getAiSetting(AiSetting::Hello).getModified() * iGreetDistanceMultiplier);
 
-        const MWWorld::Ptr player = getPlayer();
-        const osg::Vec3f playerPos(player.getRefData().getPosition().asVec3());
+        // Greet the NEAREST player rather than "the player". Single-player-agnostic: a list of
+        // one behaves exactly as before; with several players the actor greets whoever is closest;
+        // and if the world has no players right now, there is simply no one to greet.
         const osg::Vec3f actorPos(actor.getRefData().getPosition().asVec3());
+        MWWorld::Ptr player;
+        float distSquared = std::numeric_limits<float>::max();
+        for (const MWWorld::Ptr& candidate : getPlayers())
+        {
+            const float d = (candidate.getRefData().getPosition().asVec3() - actorPos).length2();
+            if (d < distSquared)
+            {
+                distSquared = d;
+                player = candidate;
+            }
+        }
+        if (player.isEmpty())
+            return;
+        const osg::Vec3f playerPos(player.getRefData().getPosition().asVec3());
         const osg::Vec3f dir = playerPos - actorPos;
-        const float distSquared = dir.length2();
 
         int greetingTimer = actorState.getGreetingTimer();
         if (greetingState == GreetingState::None)

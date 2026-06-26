@@ -146,6 +146,16 @@ namespace MWBase
         virtual MWWorld::Ptr getPlayerPtr() = 0;
         virtual MWWorld::ConstPtr getPlayerConstPtr() const = 0;
 
+        /// Every player in the world (the local player plus any remote peers' players present
+        /// as avatars). May be empty. World logic that should treat all players alike iterates
+        /// this instead of using getPlayerPtr().
+        virtual std::vector<MWWorld::Ptr> getPlayers() = 0;
+        /// Is this actor one of the players (local or a remote peer's avatar)?
+        virtual bool isPlayer(const MWWorld::Ptr& ptr) const = 0;
+        /// Register/forget a remote peer's player (its avatar) in the world's player set.
+        virtual void registerRemotePlayer(const MWWorld::Ptr& avatar) = 0;
+        virtual void forgetRemotePlayer(const MWWorld::Ptr& avatar) = 0;
+
         virtual MWWorld::ESMStore& getStore() = 0;
         virtual const MWWorld::ESMStore& getStore() const = 0;
 
