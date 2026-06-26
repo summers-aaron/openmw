@@ -10,6 +10,7 @@
 #include "../mwbase/mechanicsmanager.hpp"
 #include "../mwbase/world.hpp"
 
+#include "../mwmechanics/aisequence.hpp"
 #include "../mwmechanics/creaturestats.hpp"
 #include "../mwmechanics/drawstate.hpp"
 #include "../mwmechanics/movement.hpp"
@@ -295,13 +296,19 @@ namespace MWNet
             if (aggressor.isEmpty() || !aggressor.isInCell())
                 continue;
 
-            // Authoritative reaction: the struck actor aggros onto the reporting peer's avatar
-            // and takes the real damage the client computed (health for weapons, fatigue for a
-            // non-knockout hand-to-hand hit). The host owns this actor and runs full mechanics,
-            // so death (health <= 0) and its consequences play out here and replicate back via
-            // CreatureStats. (Trusting the client's number; host-side re-validation is later.)
-            mechanics.startCombat(victim, aggressor, nullptr);
+            // Resolve the reported hit the SAME way the host resolves a local hit, so the world
+            // reacts identically regardless of which player threw it. The avatar is a registered
+            // player (the replicator calls registerPlayer on it), so actorAttacked runs the full,
+            // now plural-player-aware crime response — guards/witnesses pursue the avatar, the
+            // victim fights back — and the crime is booked against the attacking player's own
+            // record. Fall back to a bare startCombat only if nothing engaged (e.g. a creature
+            // victim, which is not a crime). Then apply the real damage the client computed; the
+            // host runs full mechanics, so death replicates back via CreatureStats.
             MWMechanics::CreatureStats& victimStats = victim.getClass().getCreatureStats(victim);
+            mechanics.actorAttacked(victim, aggressor);
+            if (!victimStats.getAiSequence().isInCombat(aggressor))
+                mechanics.startCombat(victim, aggressor, nullptr);
+
             const int index = hit.mHealthDamage ? 0 : 2; // 0 = health, 2 = fatigue
             MWMechanics::DynamicStat<float> stat = victimStats.getDynamic(index);
             stat.setCurrent(stat.getCurrent() - hit.mDamage, true);
