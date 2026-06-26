@@ -1298,12 +1298,19 @@ namespace MWMechanics
         if (!victim.isEmpty() && (from - victim.getRefData().getPosition().asVec3()).length2() > radius * radius)
             neighbors.push_back(victim);
 
-        // Crime ids come from the OFFENDING player's own record, not "the player". For the local
-        // player this is its Player's record (identical to before); an additional player gets ids
-        // from its own counter, so several players' crimes don't share one id namespace.
+        // Crime ids tag witnesses so they can be calmed once the crime is paid off. That check is a
+        // SINGLE global comparison (witness id <= the local player's paid id), so the id MUST come
+        // from one shared, monotonic namespace — issue it from the local player's record, which is
+        // that shared counter. (Per-player counters collided: a remote player's id 0 read as
+        // "already paid" against the local player's paid id, calming guards instantly.) A freshly
+        // issued id is always greater than the local paid id, so a witness keeps pursuing until the
+        // offender actually pays. In single-player the offender IS the local player, so this is
+        // byte-identical. NOTE: cross-player payoff (the local player paying clears a remote
+        // offender's witnesses too) and a remote offender's own payoff propagating back are part of
+        // the still-unfinished networked arrest loop.
         int id = 0;
-        if (MWWorld::PlayerData* offenderData = MWBase::Environment::get().getWorld()->getPlayerData(player))
-            id = offenderData->getNewCrimeId();
+        if (MWWorld::PlayerData* issuerData = MWBase::Environment::get().getWorld()->getPlayerData(getPlayer()))
+            id = issuerData->getNewCrimeId();
 
         // What amount of provocation did this crime generate?
         // Controls whether witnesses will engage combat with the criminal.
@@ -1516,11 +1523,19 @@ namespace MWMechanics
                     }
                 }
             }
-            else if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+            else
             {
-                // An additional player (a remote peer's avatar): its bounty lives on its own
-                // client, so report the delta there instead of booking it on the rat avatar.
-                replicator->reportPlayerBounty(player, bounty);
+                // An additional player (a remote peer's avatar): its real bounty lives on its own
+                // client, not on the rat avatar (which has no NpcStats). Track the running bounty
+                // on the player's own sim record so guards keep pursuing it here — AiPursue reads
+                // this for a non-NPC player (a normal NPC player reads its NpcStats bounty). Then
+                // replicate the delta to the owning client, where the bounty value the arrest/fine
+                // dialogue reads actually lives.
+                if (MWWorld::PlayerData* offenderData
+                    = MWBase::Environment::get().getWorld()->getPlayerData(player))
+                    offenderData->modBounty(bounty);
+                if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+                    replicator->reportPlayerBounty(player, bounty);
             }
 
             if (type == OT_Assault && !victim.isEmpty()

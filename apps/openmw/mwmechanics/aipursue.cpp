@@ -8,6 +8,7 @@
 #include "../mwbase/world.hpp"
 
 #include "../mwworld/class.hpp"
+#include "../mwworld/playerdata.hpp"
 
 #include "actorutil.hpp"
 #include "character.hpp"
@@ -47,7 +48,16 @@ namespace MWMechanics
         if (target.getClass().getCreatureStats(target).isDead())
             return true;
 
-        if (target.getClass().getNpcStats(target).getBounty() <= 0)
+        // The pursued player may not be an NPC on this node: a remote peer's player is shown as a
+        // creature avatar with no NpcStats, and its bounty is tracked on its sim record instead.
+        // Read the bounty from whichever ledger applies (a normal NPC player keeps it on NpcStats).
+        int targetBounty = 0;
+        if (target.getClass().isNpc())
+            targetBounty = target.getClass().getNpcStats(target).getBounty();
+        else if (MWWorld::PlayerData* targetData
+            = MWBase::Environment::get().getWorld()->getPlayerData(target))
+            targetBounty = targetData->getBounty();
+        if (targetBounty <= 0)
             return true;
 
         actor.getClass().getCreatureStats(actor).setDrawState(DrawState::Nothing);

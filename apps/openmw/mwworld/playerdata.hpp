@@ -1,6 +1,7 @@
 #ifndef GAME_MWWORLD_PLAYERDATA_H
 #define GAME_MWWORLD_PLAYERDATA_H
 
+#include <algorithm>
 #include <array>
 #include <map>
 
@@ -35,6 +36,11 @@ namespace MWWorld
         CellStore* mMarkedCell = nullptr;
         int mCurrentCrimeId = -1; // the id assigned to witnesses
         int mPaidCrimeId = -1; // the last id paid off (0 bounty)
+        // Bounty tracked HERE only for a player whose real bounty does not live on an NpcStats on
+        // this node — i.e. a remote peer's avatar (a creature stand-in). The local player's bounty
+        // stays authoritative on its NPC's NpcStats; this field is unused for it. Guards read this
+        // to decide whether to keep pursuing such a player (see AiPursue).
+        int mBounty = 0;
         // Previous equipped items, needed for bound spells.
         std::map<ESM::RefId, ESM::RefId> mPreviousItems;
         // Stats saved prior to becoming a werewolf (left uninitialised until set, as before).
@@ -44,6 +50,9 @@ namespace MWWorld
         int getNewCrimeId() { return ++mCurrentCrimeId; }
         void recordCrimeId() { mPaidCrimeId = mCurrentCrimeId; }
         int getCrimeId() const { return mPaidCrimeId; }
+
+        int getBounty() const { return mBounty; }
+        void modBounty(int delta) { mBounty = std::max(0, mBounty + delta); }
 
         void markPosition(CellStore* markedCell, const ESM::Position& markedPosition)
         {
@@ -65,6 +74,7 @@ namespace MWWorld
             mMarkedCell = nullptr;
             mCurrentCrimeId = -1;
             mPaidCrimeId = -1;
+            mBounty = 0;
             mPreviousItems.clear();
             mSaveSkills.fill(0.f);
             mSaveAttributes.fill(0.f);
