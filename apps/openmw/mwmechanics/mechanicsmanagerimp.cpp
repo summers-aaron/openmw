@@ -1296,7 +1296,12 @@ namespace MWMechanics
         if (!victim.isEmpty() && (from - victim.getRefData().getPosition().asVec3()).length2() > radius * radius)
             neighbors.push_back(victim);
 
-        int id = MWBase::Environment::get().getWorld()->getPlayer().getNewCrimeId();
+        // Crime ids come from the OFFENDING player's own record, not "the player". For the local
+        // player this is its Player's record (identical to before); an additional player gets ids
+        // from its own counter, so several players' crimes don't share one id namespace.
+        int id = 0;
+        if (MWWorld::PlayerData* offenderData = MWBase::Environment::get().getWorld()->getPlayerData(player))
+            id = offenderData->getNewCrimeId();
 
         // What amount of provocation did this crime generate?
         // Controls whether witnesses will engage combat with the criminal.

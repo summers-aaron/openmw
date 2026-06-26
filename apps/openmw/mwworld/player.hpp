@@ -69,6 +69,11 @@ namespace MWWorld
         MWWorld::Ptr getPlayer();
         MWWorld::ConstPtr getConstPlayer() const;
 
+        /// The local player's per-player sim record (so the registry can hand out a record for
+        /// any player uniformly — this one for the local player, an owned one for the rest).
+        PlayerData& getData() { return mData; }
+        const PlayerData& getData() const { return mData; }
+
         void setBirthSign(const ESM::RefId& sign);
         const ESM::RefId& getBirthSign() const;
 

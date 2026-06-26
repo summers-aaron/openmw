@@ -241,6 +241,7 @@ namespace MWWorld
 
         std::vector<MWWorld::Ptr> getPlayers() override;
         bool isPlayer(const MWWorld::Ptr& ptr) const override;
+        MWWorld::PlayerData* getPlayerData(const MWWorld::Ptr& player) override;
         void registerPlayer(const MWWorld::Ptr& avatar) override;
         void forgetPlayer(const MWWorld::Ptr& avatar) override;
 

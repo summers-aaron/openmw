@@ -3464,6 +3464,11 @@ namespace MWWorld
         return mPlayers.isPlayer(ptr);
     }
 
+    MWWorld::PlayerData* World::getPlayerData(const MWWorld::Ptr& player)
+    {
+        return mPlayers.getPlayerData(player);
+    }
+
     void World::registerPlayer(const MWWorld::Ptr& avatar)
     {
         mPlayers.registerPlayer(avatar);

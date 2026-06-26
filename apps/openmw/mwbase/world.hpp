@@ -85,6 +85,7 @@ namespace MWWorld
 {
     class CellStore;
     class Player;
+    struct PlayerData;
     class LocalScripts;
     class TimeStamp;
     class ESMStore;
@@ -152,6 +153,9 @@ namespace MWBase
         virtual std::vector<MWWorld::Ptr> getPlayers() = 0;
         /// Is this actor one of the players (local or a remote peer's avatar)?
         virtual bool isPlayer(const MWWorld::Ptr& ptr) const = 0;
+        /// The per-player sim record (crime ids, birthsign, mark, …) for this player, or nullptr
+        /// if it isn't a player. Lets player-level systems address the right player's record.
+        virtual MWWorld::PlayerData* getPlayerData(const MWWorld::Ptr& player) = 0;
         /// Register/forget a remote peer's player (its avatar) in the world's player set.
         virtual void registerPlayer(const MWWorld::Ptr& avatar) = 0;
         virtual void forgetPlayer(const MWWorld::Ptr& avatar) = 0;

@@ -37,19 +37,19 @@ namespace MWWorld
         return mLocalPlayer->getConstPlayer();
     }
 
-    void PlayerRegistry::registerPlayer(const Ptr& avatar)
+    void PlayerRegistry::registerPlayer(const Ptr& player)
     {
-        if (avatar.isEmpty())
+        if (player.isEmpty())
             return;
-        for (const Ptr& existing : mRemotePlayers)
-            if (existing == avatar)
+        for (const RegisteredPlayer& existing : mRemotePlayers)
+            if (existing.mActor == player)
                 return; // already registered
-        mRemotePlayers.push_back(avatar);
+        mRemotePlayers.push_back(RegisteredPlayer{ player, PlayerData{} }); // its own fresh record
     }
 
-    void PlayerRegistry::forgetPlayer(const Ptr& avatar)
+    void PlayerRegistry::forgetPlayer(const Ptr& player)
     {
-        std::erase(mRemotePlayers, avatar);
+        std::erase_if(mRemotePlayers, [&](const RegisteredPlayer& rp) { return rp.mActor == player; });
     }
 
     std::vector<Ptr> PlayerRegistry::getPlayers() const
@@ -58,9 +58,9 @@ namespace MWWorld
         players.reserve(mRemotePlayers.size() + 1);
         if (mLocalPlayer != nullptr)
             players.push_back(mLocalPlayer->getPlayer());
-        for (const Ptr& remote : mRemotePlayers)
-            if (!remote.isEmpty())
-                players.push_back(remote);
+        for (const RegisteredPlayer& remote : mRemotePlayers)
+            if (!remote.mActor.isEmpty())
+                players.push_back(remote.mActor);
         return players;
     }
 
@@ -70,9 +70,21 @@ namespace MWWorld
             return false;
         if (mLocalPlayer != nullptr && ptr == mLocalPlayer->getPlayer())
             return true;
-        for (const Ptr& remote : mRemotePlayers)
-            if (ptr == remote)
+        for (const RegisteredPlayer& remote : mRemotePlayers)
+            if (ptr == remote.mActor)
                 return true;
         return false;
+    }
+
+    PlayerData* PlayerRegistry::getPlayerData(const Ptr& player)
+    {
+        if (player.isEmpty())
+            return nullptr;
+        if (mLocalPlayer != nullptr && player == mLocalPlayer->getPlayer())
+            return &mLocalPlayer->getData();
+        for (RegisteredPlayer& remote : mRemotePlayers)
+            if (player == remote.mActor)
+                return &remote.mData;
+        return nullptr;
     }
 }

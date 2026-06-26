@@ -4,6 +4,7 @@
 #include <memory>
 #include <vector>
 
+#include "playerdata.hpp"
 #include "ptr.hpp"
 
 namespace ESM
@@ -29,9 +30,14 @@ namespace MWWorld
     class PlayerRegistry
     {
         std::unique_ptr<Player> mLocalPlayer;
-        // Other peers' players, present locally as avatars (host only). Distinct from the
-        // local player, which the node itself controls.
-        std::vector<Ptr> mRemotePlayers;
+        // Additional players beyond the local one. Each carries its OWN per-player sim record
+        // (crime ids, birthsign, mark, …) — the local player's record lives in its Player object.
+        struct RegisteredPlayer
+        {
+            Ptr mActor;
+            PlayerData mData;
+        };
+        std::vector<RegisteredPlayer> mRemotePlayers;
 
     public:
         PlayerRegistry();
@@ -66,6 +72,11 @@ namespace MWWorld
 
         /// Is this actor one of the players (the local player or an additional registered one)?
         bool isPlayer(const Ptr& ptr) const;
+
+        /// The per-player sim record for this player (its crime ids, birthsign, mark, …), or
+        /// nullptr if the actor is not a player. The local player's record lives in its Player;
+        /// each additional player has its own owned here.
+        PlayerData* getPlayerData(const Ptr& player);
     };
 }
 
