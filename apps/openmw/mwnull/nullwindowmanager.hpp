@@ -7,6 +7,7 @@
 #include "../mwworld/ptr.hpp"
 
 #include <components/esm/refid.hpp>
+#include <components/esm3/esmreader.hpp>
 #include <components/loadinglistener/loadinglistener.hpp>
 #include <components/translation/translation.hpp>
 
@@ -206,7 +207,9 @@ namespace MWNull
         void clear() override {}
 
         void write(ESM::ESMWriter& writer, Loading::Listener& progress) override {}
-        void readRecord(ESM::ESMReader& reader, uint32_t type) override {}
+        // Headless: no GUI/global-map state to restore, but still CONSUME the record's bytes on
+        // load or the ESM reader aborts ("Previous record contains unread bytes", e.g. GMAP/KEYS).
+        void readRecord(ESM::ESMReader& reader, uint32_t type) override { reader.skipRecord(); }
         size_t countSavedGameRecords() const override { return 0; }
 
         bool isSavingAllowed() const override { return false; }

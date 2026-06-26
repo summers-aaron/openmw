@@ -7,6 +7,8 @@
 #include <string_view>
 #include <utility>
 
+#include <components/esm3/esmreader.hpp>
+
 #include "../mwbase/inputmanager.hpp"
 
 namespace MWNull
@@ -67,7 +69,10 @@ namespace MWNull
 
         size_t countSavedGameRecords() const override { return 0; }
         void write(ESM::ESMWriter& writer, Loading::Listener& progress) override {}
-        void readRecord(ESM::ESMReader& reader, uint32_t type) override {}
+        // A headless server keeps no input/control-switch state, but it must still CONSUME the
+        // record's bytes on load — otherwise the ESM reader sees a partially-read record and
+        // aborts the load ("Previous record contains unread bytes, Record: INPU"). Skip it.
+        void readRecord(ESM::ESMReader& reader, uint32_t type) override { reader.skipRecord(); }
 
         void resetIdleTime() override {}
         bool isIdle() const override { return false; }

@@ -897,9 +897,15 @@ void OMW::Engine::prepareEngine()
     }
     else if (mListenPort != 0)
     {
-        mReplicator->setLocalPlayerNetId(ESM::RefNum{ 0, MWNet::sNetPlayerContentFile });
         mReplicator->setRelayAvatars(true);
         mReplicator->setAuthority(true);
+        // A listen host that is ALSO a player (rendering) replicates its own player so clients
+        // see it as an avatar. A DEDICATED host has only an invisible anchor player (the engine
+        // still needs one to drive cell loading); we leave its net id unset so that player is NOT
+        // replicated — clients then see a "playerless" server: the shared world plus each other,
+        // with no stray avatar for the server's hidden character.
+        if (!isDedicated())
+            mReplicator->setLocalPlayerNetId(ESM::RefNum{ 0, MWNet::sNetPlayerContentFile });
     }
 
     const bool stereoEnabled = Settings::stereo().mStereoEnabled || osg::DisplaySettings::instance().get()->getStereo();
