@@ -170,23 +170,20 @@ namespace MWLua
         api["players"] = GObjectList{ objectLists->getPlayers() };
 
         api["addPlayer"]
-            = [lua = context.mLua, objectLists](sol::optional<GCell> cell, sol::optional<osg::Vec3f> position) -> GObject {
+            = [lua = context.mLua](sol::optional<GCell> cell, sol::optional<osg::Vec3f> position) -> GObject {
             checkGameInitialized(lua);
             MWBase::World* world = MWBase::Environment::get().getWorld();
-            MWWorld::Ptr ptr;
+            // World::addPlayer registers the new player with the LuaManager (scripts + world.players).
             if (cell.has_value() && position.has_value())
             {
                 ESM::Position pos{};
                 std::memcpy(pos.pos, &position.value(), sizeof(osg::Vec3f));
                 pos.rot[0] = pos.rot[1] = pos.rot[2] = 0;
-                ptr = world->addPlayer(*cell->mStore, pos);
+                return GObject(world->addPlayer(*cell->mStore, pos));
             }
-            else
-                ptr = world->addPlayer();
-            objectLists->addPlayer(ptr);
-            return GObject(ptr);
+            return GObject(world->addPlayer());
         };
-        api["removePlayer"] = [objectLists](const GObject& player) {
+        api["removePlayer"] = [](const GObject& player) {
             MWBase::World* world = MWBase::Environment::get().getWorld();
             const MWWorld::Ptr ptr = player.ptr();
             for (std::size_t i = 0; i < world->getPlayerCount(); ++i)
@@ -194,7 +191,6 @@ namespace MWLua
                 if (world->getPlayerPtr(i) == ptr)
                 {
                     world->removePlayer(i); // throws for the primary player (index 0)
-                    objectLists->removePlayer(ptr);
                     return;
                 }
             }

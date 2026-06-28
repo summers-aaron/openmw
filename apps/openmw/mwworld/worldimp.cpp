@@ -3508,6 +3508,7 @@ namespace MWWorld
 
         // Load and keep the player's cell active so the cell that this player occupies is simulated.
         mWorldScene->addExtraPlayer(ptr);
+        MWBase::Environment::get().getLuaManager()->addPlayer(ptr);
         return ptr;
     }
 
@@ -3515,7 +3516,9 @@ namespace MWWorld
     {
         if (index == MWWorld::Players::sPrimaryIndex)
             throw std::out_of_range("World::removePlayer: the primary player cannot be removed");
-        mWorldModel.deregisterLiveCellRef(*mPlayers.get(index).getPlayer().getBase());
+        const MWWorld::Ptr ptr = mPlayers.get(index).getPlayer();
+        MWBase::Environment::get().getLuaManager()->removePlayer(ptr);
+        mWorldModel.deregisterLiveCellRef(*ptr.getBase());
         mPlayers.remove(index);
     }
 

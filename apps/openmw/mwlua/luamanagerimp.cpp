@@ -281,12 +281,11 @@ namespace MWLua
 
     void LuaManager::objectTeleported(const MWWorld::Ptr& ptr)
     {
-        if (ptr == mPlayer)
+        if (MWBase::Environment::get().getWorld()->isPlayer(ptr))
         {
-            // For player run the onTeleported handler immediately,
+            // For a player run the onTeleported handler immediately,
             // so it can adjust camera position after teleporting.
-            PlayerScripts* playerScripts = dynamic_cast<PlayerScripts*>(mPlayer.getRefData().getLuaScripts());
-            if (playerScripts)
+            if (PlayerScripts* playerScripts = getPlayerScripts(ptr))
                 playerScripts->onTeleported();
         }
         else
@@ -342,8 +341,11 @@ namespace MWLua
                 : MWBase::Environment::get().getFrameDuration();
             mInputActions.update(frameDuration);
             mMenuScripts.onFrame(frameDuration);
-            if (playerScripts)
-                playerScripts->onFrame(frameDuration);
+            // onFrame runs for every player's scripts, not just the local one.
+            MWBase::World* world = MWBase::Environment::get().getWorld();
+            for (std::size_t i = 0; i < world->getPlayerCount(); ++i)
+                if (PlayerScripts* ps = getPlayerScripts(world->getPlayerPtr(i)))
+                    ps->onFrame(frameDuration);
         }
 
         for (const auto& [message, mode] : mUIMessages)
@@ -414,19 +416,15 @@ namespace MWLua
             lua_gc(mLua.unsafeState(), LUA_GCCOLLECT, 0);
     }
 
-    void LuaManager::setupPlayer(const MWWorld::Ptr& ptr)
+    PlayerScripts* LuaManager::getPlayerScripts(const MWWorld::Ptr& ptr) const
     {
-        if (!mInitialized)
-            return;
-        if (!mPlayer.isEmpty())
-            throw std::logic_error("Player is initialized twice");
-        mObjectLists.objectAddedToScene(ptr);
-        mObjectLists.setPlayer(ptr);
-        // Re-expose any additional (non-primary) players restored from a save in world.players.
-        MWBase::World* world = MWBase::Environment::get().getWorld();
-        for (std::size_t i = 1; i < world->getPlayerCount(); ++i)
-            mObjectLists.addPlayer(world->getPlayerPtr(i));
-        mPlayer = ptr;
+        if (ptr.isEmpty())
+            return nullptr;
+        return dynamic_cast<PlayerScripts*>(ptr.getRefData().getLuaScripts());
+    }
+
+    LocalScripts* LuaManager::setupPlayerScripts(const MWWorld::Ptr& ptr)
+    {
         LocalScripts* localScripts = ptr.getRefData().getLuaScripts();
         if (!localScripts)
         {
@@ -435,6 +433,47 @@ namespace MWLua
         }
         mActiveLocalScripts.insert(localScripts->getWeakPointer());
         mEngineEvents.addToQueue(EngineEvents::OnActive{ getId(ptr) });
+        return localScripts;
+    }
+
+    void LuaManager::setupPlayer(const MWWorld::Ptr& ptr)
+    {
+        if (!mInitialized)
+            return;
+        if (!mPlayer.isEmpty())
+            throw std::logic_error("Player is initialized twice");
+        mObjectLists.objectAddedToScene(ptr);
+        mObjectLists.setPlayer(ptr);
+        mPlayer = ptr; // the local player drives this client's input/UI/camera
+        setupPlayerScripts(ptr);
+        // Set up Lua scripting for any additional players restored from a save.
+        MWBase::World* world = MWBase::Environment::get().getWorld();
+        for (std::size_t i = 1; i < world->getPlayerCount(); ++i)
+        {
+            const MWWorld::Ptr extra = world->getPlayerPtr(i);
+            mObjectLists.objectAddedToScene(extra);
+            mObjectLists.addPlayer(extra);
+            setupPlayerScripts(extra);
+        }
+    }
+
+    void LuaManager::addPlayer(const MWWorld::Ptr& ptr)
+    {
+        if (!mInitialized)
+            return;
+        mObjectLists.objectAddedToScene(ptr);
+        mObjectLists.addPlayer(ptr);
+        setupPlayerScripts(ptr);
+    }
+
+    void LuaManager::removePlayer(const MWWorld::Ptr& ptr)
+    {
+        if (!mInitialized)
+            return;
+        mObjectLists.removePlayer(ptr);
+        if (LocalScripts* localScripts = ptr.getRefData().getLuaScripts())
+            mActiveLocalScripts.erase(localScripts->getWeakPointer());
+        ptr.getRefData().setLuaScripts(nullptr);
     }
 
     void LuaManager::newGameStarted()

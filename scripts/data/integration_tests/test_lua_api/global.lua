@@ -393,6 +393,16 @@ testing.registerGlobalTest('per-player stats are independent', function()
     world.removePlayer(p2)
 end)
 
+testing.registerGlobalTest('extra player runs its own player scripts', function()
+    local p2 = world.addPlayer()
+    coroutine.yield()
+    coroutine.yield()
+    -- Runs a local test inside the second player's own player script and waits for its result,
+    -- proving the extra player has a live, event-receiving player-script context.
+    testing.runLocalTest(p2, 'self is a player')
+    world.removePlayer(p2)
+end)
+
 testing.registerGlobalTest('multiplayer simulates extra player cell', function()
     local primary = world.players[1]
     primary:teleport('', util.vector3(4096, 4096, 1745), util.transform.identity)

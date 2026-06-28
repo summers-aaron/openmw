@@ -16,6 +16,12 @@ types.Player.setControlSwitch(self, types.Player.CONTROL_SWITCH.Magic, false)
 types.Player.setControlSwitch(self, types.Player.CONTROL_SWITCH.VanityMode, false)
 types.Player.setControlSwitch(self, types.Player.CONTROL_SWITCH.ViewMode, false)
 
+-- Verifies that this player script is actually running on its own player (used to confirm that
+-- additional, non-local players run their own player scripts).
+testing.registerLocalTest('self is a player', function()
+    testing.expectEqual(self.type, types.Player, 'self should be the Player type')
+end)
+
 local function rotate(object, targetPitch, targetYaw)
     local endTime = core.getSimulationTime() + 1
     while core.getSimulationTime() < endTime do

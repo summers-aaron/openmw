@@ -28,6 +28,8 @@
 
 namespace MWLua
 {
+    class PlayerScripts;
+
     // \brief LuaManager is the central interface through which the engine invokes lua scripts.
     //
     // This class implements the interface defined in MWBase::LuaManager.
@@ -118,6 +120,8 @@ namespace MWLua
 
         void clear() override; // should be called before loading game or starting a new game to reset internal state.
         void setupPlayer(const MWWorld::Ptr& ptr) override; // Should be called once after each "clear".
+        void addPlayer(const MWWorld::Ptr& ptr) override;
+        void removePlayer(const MWWorld::Ptr& ptr) override;
 
         // Used only in Lua bindings
         void addCustomLocalScript(const MWWorld::Ptr&, int scriptId, std::string_view initData);
@@ -188,6 +192,9 @@ namespace MWLua
         void initConfiguration(bool reload);
         LocalScripts* createLocalScripts(const MWWorld::Ptr& ptr,
             std::optional<LuaUtil::ScriptIdsWithInitializationData> autoStartConf = std::nullopt);
+        // Create (if needed), auto-start and activate the player scripts for the given player.
+        LocalScripts* setupPlayerScripts(const MWWorld::Ptr& ptr);
+        PlayerScripts* getPlayerScripts(const MWWorld::Ptr& ptr) const;
         void reloadAllScriptsImpl();
         void synchronizedUpdateUnsafe();
 
