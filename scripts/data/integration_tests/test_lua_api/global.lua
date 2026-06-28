@@ -352,6 +352,9 @@ testing.registerGlobalTest('multiplayer persistence - add player', function()
     creature:teleport(farCell, pos)
     coroutine.yield()
     testing.expectEqual(#world.players, 2, 'should have two players before saving')
+
+    -- Mark the second player's persistent storage so we can check it survives the reload.
+    testing.runLocalTest(world.players[2], 'set persistent storage marker')
 end)
 
 testing.registerGlobalTest('multiplayer persistence - check players', function()
@@ -367,6 +370,9 @@ testing.registerGlobalTest('multiplayer persistence - check players', function()
         end
     end
     testing.expect(active, "the second player's cell should be re-activated after loading")
+
+    -- The second player's persistent storage should have survived the save/reload.
+    testing.runLocalTest(world.players[2], 'persistent storage marker survived')
 end)
 
 testing.registerGlobalTest('per-player stats are independent', function()

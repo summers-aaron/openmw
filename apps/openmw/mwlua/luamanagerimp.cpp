@@ -475,7 +475,15 @@ namespace MWLua
             mObjectLists.objectAddedToScene(extra);
             mObjectLists.addPlayer(extra);
             setupPlayerScripts(extra);
+            const auto storageIt = mLoadedExtraPlayerStorage.find(i);
+            if (storageIt != mLoadedExtraPlayerStorage.end())
+            {
+                LuaUtil::LuaStorage* storage = getPlayerStorage(extra);
+                mLua.protectedCall(
+                    [&](LuaUtil::LuaView& view) { storage->deserializeAndMerge(view.sol(), storageIt->second); });
+            }
         }
+        mLoadedExtraPlayerStorage.clear();
     }
 
     void LuaManager::addPlayer(const MWWorld::Ptr& ptr)
@@ -821,6 +829,18 @@ namespace MWLua
         globalScripts.save(writer);
         mLuaEvents.save(writer);
 
+        // Additional players' player-section storage (the local player's lives in player_storage.bin).
+        MWBase::World* world = MWBase::Environment::get().getWorld();
+        for (std::size_t i = 1; i < world->getPlayerCount(); ++i)
+        {
+            std::string blob;
+            mLua.protectedCall([&](LuaUtil::LuaView& view) {
+                blob = getPlayerStorage(world->getPlayerPtr(i))->serializePersistent(view.sol());
+            });
+            writer.writeHNT<uint32_t>("PLIx", static_cast<uint32_t>(i));
+            ESM::saveLuaBinaryData(writer, blob);
+        }
+
         writer.endRecord(ESM::REC_LUAM);
     }
 
@@ -852,6 +872,16 @@ namespace MWLua
         mGlobalScripts.setSavedDataDeserializer(mGlobalLoader.get());
         mGlobalScripts.load(globalScripts);
         mGlobalScriptsStarted = true;
+
+        // Additional players' player-section storage (absent in saves without extra players). It is
+        // stashed here and applied once the players have been set up (see setupPlayer).
+        mLoadedExtraPlayerStorage.clear();
+        while (reader.isNextSub("PLIx"))
+        {
+            uint32_t index = 0;
+            reader.getHT(index);
+            mLoadedExtraPlayerStorage[index] = ESM::loadLuaBinaryData(reader);
+        }
     }
 
     void LuaManager::saveLocalScripts(const MWWorld::Ptr& ptr, ESM::LuaScripts& data)

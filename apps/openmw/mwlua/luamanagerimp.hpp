@@ -265,6 +265,9 @@ namespace MWLua
         LuaUtil::LuaStorage mPlayerStorage; // the local player's player-section storage
         // Player-section storage for additional (non-local) players, keyed by player object id.
         std::map<ObjectId, std::unique_ptr<LuaUtil::LuaStorage>> mExtraPlayerStorages;
+        // Serialized extra-player storage read from a save, keyed by player index, applied once the
+        // corresponding players have been set up.
+        std::map<std::size_t, std::string> mLoadedExtraPlayerStorage;
 
         LuaUtil::InputAction::Registry mInputActions;
         LuaUtil::InputTrigger::Registry mInputTriggers;

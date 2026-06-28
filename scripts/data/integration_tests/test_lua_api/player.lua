@@ -32,6 +32,17 @@ testing.registerLocalTest('player storage marker is empty', function()
         'player storage should be independent per player')
 end)
 
+-- These two, run before saving and after reloading, confirm a player's persistent storage survives.
+testing.registerLocalTest('set persistent storage marker', function()
+    local section = storage.playerSection('mp_persist')
+    section:setLifeTime(storage.LIFE_TIME.Persistent)
+    section:set('v', 42)
+end)
+testing.registerLocalTest('persistent storage marker survived', function()
+    testing.expectEqual(storage.playerSection('mp_persist'):get('v'), 42,
+        "an extra player's persistent storage should survive a save/reload")
+end)
+
 local function rotate(object, targetPitch, targetYaw)
     local endTime = core.getSimulationTime() + 1
     while core.getSimulationTime() < endTime do
