@@ -166,6 +166,27 @@ namespace MWLua
         api["activeActors"] = GObjectList{ objectLists->getActorsInScene() };
         api["players"] = GObjectList{ objectLists->getPlayers() };
 
+        api["addPlayer"] = [lua = context.mLua, objectLists]() -> GObject {
+            checkGameInitialized(lua);
+            MWWorld::Ptr ptr = MWBase::Environment::get().getWorld()->addPlayer();
+            objectLists->addPlayer(ptr);
+            return GObject(ptr);
+        };
+        api["removePlayer"] = [objectLists](const GObject& player) {
+            MWBase::World* world = MWBase::Environment::get().getWorld();
+            const MWWorld::Ptr ptr = player.ptr();
+            for (std::size_t i = 0; i < world->getPlayerCount(); ++i)
+            {
+                if (world->getPlayerPtr(i) == ptr)
+                {
+                    world->removePlayer(i); // throws for the primary player (index 0)
+                    objectLists->removePlayer(ptr);
+                    return;
+                }
+            }
+            throw std::runtime_error("removePlayer: the object is not a player");
+        };
+
         api["createObject"] = [lua = context.mLua](std::string_view recordId, sol::optional<int> count) -> GObject {
             checkGameInitialized(lua);
             MWWorld::ManualRef mref(*MWBase::Environment::get().getESMStore(), ESM::RefId::deserializeText(recordId));

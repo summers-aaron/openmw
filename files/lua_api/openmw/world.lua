@@ -11,8 +11,22 @@
 -- @field [parent=#world] openmw.core#ObjectList activeActors
 
 ---
--- List of players. Currently (since multiplayer is not yet implemented) always has one element.
+-- List of players. Usually has a single element (the primary player); additional players can be
+-- created with @{#world.addPlayer}.
 -- @field [parent=#world] openmw.core#ObjectList players
+
+---
+-- Create an additional player at the primary player's position and add it to @{#world.players}.
+-- The new player exists as a model actor only; it is not yet wired into rendering, physics,
+-- input or AI. Can be used only in global scripts.
+-- @function [parent=#world] addPlayer
+-- @return openmw.core#GameObject
+
+---
+-- Remove a player previously created with @{#world.addPlayer}. The primary player can not be
+-- removed. Can be used only in global scripts.
+-- @function [parent=#world] removePlayer
+-- @param openmw.core#GameObject player
 
 ---
 -- Functions related to MWScript (see @{#MWScriptFunctions}).
