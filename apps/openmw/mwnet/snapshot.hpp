@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
 #include <osg/Vec3f>
@@ -49,6 +50,25 @@ namespace MWNet
         friend bool operator==(const DynamicStats&, const DynamicStats&) = default;
     };
 
+    /// A peer player's character appearance: the records that define how its
+    /// avatar looks, carried as stable serialized-text RefIds. Those records
+    /// (race, head/hair body parts, class) come from the shared content files,
+    /// so the strings resolve to the same records on every peer — only the
+    /// identities need to cross the wire, never the meshes. Sent rarely (it
+    /// barely changes), so a fresh peer can synthesize a matching NPC body
+    /// instead of the placeholder creature.
+    struct AppearanceState
+    {
+        std::string mRace;
+        std::string mHead;
+        std::string mHair;
+        std::string mClass;
+        std::string mName;
+        bool mIsMale = true;
+
+        friend bool operator==(const AppearanceState&, const AppearanceState&) = default;
+    };
+
     /// One entity's contribution to a delta. mId is the persistent global
     /// reference identity (the same RefNum used for save games and the cell
     /// graph). A field is present iff it changed since the last sent snapshot.
@@ -61,6 +81,10 @@ namespace MWNet
         // 1 weapon, 2 spell. Replicated so a remote actor visibly draws its weapon and adopts a
         // combat stance — the first slice of animation-state replication.
         std::optional<std::uint8_t> mDrawState;
+        // The avatar's body identity (race/sex/head/hair/class/name). Present only on
+        // the occasional ticks that re-advertise it (it rarely changes), and only for
+        // a peer's own player entity — a receiver needs it once to build the avatar.
+        std::optional<AppearanceState> mAppearance;
 
         friend bool operator==(const EntityState&, const EntityState&) = default;
     };

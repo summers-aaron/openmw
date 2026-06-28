@@ -42,6 +42,9 @@ namespace MWNet
         std::map<ESM::RefNum, SentState> mLastSent;
         // Avatars instantiated for other peers' players, keyed by their network id.
         std::map<ESM::RefNum, MWWorld::Ptr> mAvatars;
+        // Each peer's last-advertised body identity, so its avatar can be built to match
+        // it (received occasionally; an avatar is only instantiated once it's known).
+        std::map<ESM::RefNum, AppearanceState> mAppearances;
         // This peer's own player network id (role-based: host vs client), so we never
         // instantiate an avatar for our own player echoed back.
         ESM::RefNum mLocalPlayerNetId;
