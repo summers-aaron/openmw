@@ -314,6 +314,145 @@ testing.registerGlobalTest('record model property', function()
     testing.expectEqual(types.NPC.record(player).model, 'meshes/basicplayer.dae')
 end)
 
+testing.registerGlobalTest('multiplayer add and remove players', function()
+    testing.expectEqual(#world.players, 1, 'should start with a single player')
+
+    local extra = world.addPlayer()
+    testing.expectEqual(extra == nil, false, 'addPlayer should return an object')
+    testing.expectEqual(#world.players, 2, 'world.players should list two players after addPlayer')
+
+    world.removePlayer(extra)
+    testing.expectEqual(#world.players, 1, 'world.players should be back to one after removePlayer')
+
+    local ok = pcall(function() world.removePlayer(world.players[1]) end)
+    testing.expectEqual(ok, false, 'removing the primary player should fail')
+end)
+
+-- The far cell holding the second player is derived deterministically from the primary's cell, so
+-- both the add and the post-reload check compute the same coordinates (the primary reloads at the
+-- same position). Global Lua state is reset on load, so nothing can be stashed across the reload.
+local function multiplayerFarCellGrid()
+    local c = world.players[1].cell
+    return c.gridX + 50, c.gridY + 50
+end
+
+testing.registerGlobalTest('multiplayer persistence - add player', function()
+    testing.expectEqual(#world.players, 1, 'should start with a single player')
+
+    world.players[1]:teleport('', util.vector3(4096, 4096, 1745), util.transform.identity)
+    coroutine.yield()
+
+    -- Put the second player (and a creature) in a cell far from the primary, so reloading must
+    -- re-activate that cell for the creature to be simulated again.
+    local fx, fy = multiplayerFarCellGrid()
+    local farCell = world.getExteriorCell(fx, fy)
+    local pos = util.vector3(fx * 8192 + 4096, fy * 8192 + 4096, 1000)
+    world.addPlayer(farCell, pos)
+    local creature = world.createObject('landracer')
+    creature:teleport(farCell, pos)
+    coroutine.yield()
+    testing.expectEqual(#world.players, 2, 'should have two players before saving')
+
+    -- Mark the second player's persistent storage so we can check it survives the reload.
+    testing.runLocalTest(world.players[2], 'set persistent storage marker')
+end)
+
+testing.registerGlobalTest('multiplayer persistence - check players', function()
+    testing.expectEqual(#world.players, 2, 'both players should still be present after reload')
+
+    -- The creature placed in the second player's far cell should be simulated again, proving the
+    -- cell was re-activated on load.
+    local fx, fy = multiplayerFarCellGrid()
+    local active = false
+    for _, a in ipairs(world.activeActors) do
+        if a.cell and a.cell.isExterior and a.cell.gridX == fx and a.cell.gridY == fy then
+            active = true
+        end
+    end
+    testing.expect(active, "the second player's cell should be re-activated after loading")
+
+    -- The second player's persistent storage should have survived the save/reload.
+    testing.runLocalTest(world.players[2], 'persistent storage marker survived')
+end)
+
+testing.registerGlobalTest('per-player stats are independent', function()
+    local p1 = world.players[1]
+    local p2 = world.addPlayer()
+    coroutine.yield()
+    testing.expectEqual(#world.players, 2, 'two players expected')
+    testing.expectEqual(tostring(p2.type), 'Player', 'an extra player is classified as the Player type')
+
+    -- Birthsign is stored per player (only the player it is set on changes).
+    local signs = types.Player.birthSigns.records
+    if #signs >= 1 then
+        types.Player.setBirthSign(p1, signs[1])
+        testing.expectEqual(types.Player.getBirthSign(p1), signs[1].id, 'player 1 keeps its birthsign')
+        testing.expectEqual(types.Player.getBirthSign(p2), '', 'player 2 birthsign is independent (still unset)')
+    end
+
+    -- Bounty / crime level is stored per player.
+    types.Player.setCrimeLevel(p1, 100)
+    types.Player.setCrimeLevel(p2, 5)
+    testing.expectEqual(types.Player.getCrimeLevel(p1), 100, 'player 1 bounty')
+    testing.expectEqual(types.Player.getCrimeLevel(p2), 5, 'player 2 bounty is independent')
+
+    world.removePlayer(p2)
+end)
+
+testing.registerGlobalTest('extra player runs its own player scripts', function()
+    local p2 = world.addPlayer()
+    coroutine.yield()
+    coroutine.yield()
+    -- Runs a local test inside the second player's own player script and waits for its result,
+    -- proving the extra player has a live, event-receiving player-script context.
+    testing.runLocalTest(p2, 'self is a player')
+    world.removePlayer(p2)
+end)
+
+testing.registerGlobalTest('per-player storage is independent', function()
+    local p2 = world.addPlayer()
+    coroutine.yield()
+    coroutine.yield()
+    -- The second player writes to its player storage; the first player must not see it.
+    testing.runLocalTest(p2, 'set player storage marker')
+    testing.runLocalTest(world.players[1], 'player storage marker is empty')
+    world.removePlayer(p2)
+end)
+
+testing.registerGlobalTest('multiplayer simulates extra player cell', function()
+    local primary = world.players[1]
+    primary:teleport('', util.vector3(4096, 4096, 1745), util.transform.identity)
+    coroutine.yield()
+    testing.expect(primary.cell.isExterior, 'primary must be in an exterior cell')
+
+    -- A cell far outside the primary player's active grid.
+    local fx, fy = primary.cell.gridX + 50, primary.cell.gridY + 50
+    local farCell = world.getExteriorCell(fx, fy)
+    local pos = util.vector3(fx * 8192 + 4096, fy * 8192 + 4096, 1000)
+
+    local creature = world.createObject('landracer')
+    creature:teleport(farCell, pos)
+    coroutine.yield()
+
+    local function isActive(obj)
+        for _, a in ipairs(world.activeActors) do
+            if a == obj then return true end
+        end
+        return false
+    end
+
+    testing.expect(not isActive(creature), 'a creature in a distant cell is not simulated without a player there')
+
+    local extra = world.addPlayer(farCell, pos)
+    testing.expectEqual(#world.players, 2, 'the extra player should have been added')
+    coroutine.yield()
+
+    testing.expect(isActive(creature), 'the creature should be simulated once a player occupies its cell')
+
+    world.removePlayer(extra)
+    creature:remove()
+end)
+
 local function registerPlayerTest(name)
     testing.registerGlobalTest(name, function()
         local player = initPlayer()

@@ -291,12 +291,11 @@ namespace MWLua
 
     void LuaManager::objectTeleported(const MWWorld::Ptr& ptr)
     {
-        if (ptr == mPlayer)
+        if (MWBase::Environment::get().getWorld()->isPlayer(ptr))
         {
-            // For player run the onTeleported handler immediately,
+            // For a player run the onTeleported handler immediately,
             // so it can adjust camera position after teleporting.
-            PlayerScripts* playerScripts = dynamic_cast<PlayerScripts*>(mPlayer.getRefData().getLuaScripts());
-            if (playerScripts)
+            if (PlayerScripts* playerScripts = getPlayerScripts(ptr))
                 playerScripts->onTeleported();
         }
         else
@@ -378,8 +377,11 @@ namespace MWLua
                 : MWBase::Environment::get().getFrameDuration();
             mInputActions.update(frameDuration);
             mMenuScripts.onFrame(frameDuration);
-            if (playerScripts)
-                playerScripts->onFrame(frameDuration);
+            // onFrame runs for every player's scripts, not just the local one.
+            MWBase::World* world = MWBase::Environment::get().getWorld();
+            for (std::size_t i = 0; i < world->getPlayerCount(); ++i)
+                if (PlayerScripts* ps = getPlayerScripts(world->getPlayerPtr(i)))
+                    ps->onFrame(frameDuration);
         }
 
         for (const auto& [message, mode] : mUIMessages)
@@ -443,11 +445,52 @@ namespace MWLua
         mGlobalStorage.clearTemporaryAndRemoveCallbacks();
         mGlobalStorage.setActive(false);
         mPlayerStorage.clearTemporaryAndRemoveCallbacks();
+        mExtraPlayerStorages.clear();
         mInputActions.clear();
         mInputTriggers.clear();
         mQueuedAutoStartedScripts.clear();
         for (int i = 0; i < 5; ++i)
             lua_gc(mLua.unsafeState(), LUA_GCCOLLECT, 0);
+    }
+
+    PlayerScripts* LuaManager::getPlayerScripts(const MWWorld::Ptr& ptr) const
+    {
+        if (ptr.isEmpty())
+            return nullptr;
+        return dynamic_cast<PlayerScripts*>(ptr.getRefData().getLuaScripts());
+    }
+
+    LuaUtil::LuaStorage* LuaManager::getPlayerStorage(const MWWorld::Ptr& ptr)
+    {
+        if (!mPlayer.isEmpty() && getId(ptr) == getId(mPlayer))
+            return &mPlayerStorage;
+        std::unique_ptr<LuaUtil::LuaStorage>& storage = mExtraPlayerStorages[getId(ptr)];
+        if (!storage)
+        {
+            storage = std::make_unique<LuaUtil::LuaStorage>();
+            storage->setActive(true);
+        }
+        return storage.get();
+    }
+
+    void LuaManager::clearPlayerStoragesTemporary()
+    {
+        mPlayerStorage.clearTemporaryAndRemoveCallbacks();
+        for (auto& [id, storage] : mExtraPlayerStorages)
+            storage->clearTemporaryAndRemoveCallbacks();
+    }
+
+    LocalScripts* LuaManager::setupPlayerScripts(const MWWorld::Ptr& ptr)
+    {
+        LocalScripts* localScripts = ptr.getRefData().getLuaScripts();
+        if (!localScripts)
+        {
+            localScripts = createLocalScripts(ptr);
+            mQueuedAutoStartedScripts.push_back(localScripts->getWeakPointer());
+        }
+        mActiveLocalScripts.insert(localScripts->getWeakPointer());
+        mEngineEvents.addToQueue(EngineEvents::OnActive{ getId(ptr) });
+        return localScripts;
     }
 
     void LuaManager::setupPlayer(const MWWorld::Ptr& ptr)
@@ -458,15 +501,45 @@ namespace MWLua
             throw std::logic_error("Player is initialized twice");
         mObjectLists.objectAddedToScene(ptr);
         mObjectLists.setPlayer(ptr);
-        mPlayer = ptr;
-        LocalScripts* localScripts = ptr.getRefData().getLuaScripts();
-        if (!localScripts)
+        mPlayer = ptr; // the local player drives this client's input/UI/camera
+        setupPlayerScripts(ptr);
+        // Set up Lua scripting for any additional players restored from a save.
+        MWBase::World* world = MWBase::Environment::get().getWorld();
+        for (std::size_t i = 1; i < world->getPlayerCount(); ++i)
         {
-            localScripts = createLocalScripts(ptr);
-            mQueuedAutoStartedScripts.push_back(localScripts->getWeakPointer());
+            const MWWorld::Ptr extra = world->getPlayerPtr(i);
+            mObjectLists.objectAddedToScene(extra);
+            mObjectLists.addPlayer(extra);
+            setupPlayerScripts(extra);
+            const auto storageIt = mLoadedExtraPlayerStorage.find(i);
+            if (storageIt != mLoadedExtraPlayerStorage.end())
+            {
+                LuaUtil::LuaStorage* storage = getPlayerStorage(extra);
+                mLua.protectedCall(
+                    [&](LuaUtil::LuaView& view) { storage->deserializeAndMerge(view.sol(), storageIt->second); });
+            }
         }
-        mActiveLocalScripts.insert(localScripts->getWeakPointer());
-        mEngineEvents.addToQueue(EngineEvents::OnActive{ getId(ptr) });
+        mLoadedExtraPlayerStorage.clear();
+    }
+
+    void LuaManager::addPlayer(const MWWorld::Ptr& ptr)
+    {
+        if (!mInitialized)
+            return;
+        mObjectLists.objectAddedToScene(ptr);
+        mObjectLists.addPlayer(ptr);
+        setupPlayerScripts(ptr);
+    }
+
+    void LuaManager::removePlayer(const MWWorld::Ptr& ptr)
+    {
+        if (!mInitialized)
+            return;
+        mObjectLists.removePlayer(ptr);
+        if (LocalScripts* localScripts = ptr.getRefData().getLuaScripts())
+            mActiveLocalScripts.erase(localScripts->getWeakPointer());
+        ptr.getRefData().setLuaScripts(nullptr);
+        mExtraPlayerStorages.erase(getId(ptr));
     }
 
     void LuaManager::newGameStarted()
@@ -756,6 +829,13 @@ namespace MWLua
             scripts->setAutoStartConf(mConfiguration.getPlayerConf());
             for (const auto& [name, package] : mPlayerPackages)
                 scripts->addPackage(name, package);
+            // Bind openmw.storage to this player's own player-section storage so players do not
+            // share player-section data.
+            LuaUtil::LuaStorage* playerStorage = getPlayerStorage(ptr);
+            mLua.protectedCall([&](LuaUtil::LuaView& view) {
+                scripts->addPackage("openmw.storage",
+                    LuaUtil::LuaStorage::initPlayerPackage(view, &mGlobalStorage, playerStorage));
+            });
         }
         else
         {
@@ -784,6 +864,18 @@ namespace MWLua
         mGlobalScripts.save(globalScripts);
         globalScripts.save(writer);
         mLuaEvents.save(writer);
+
+        // Additional players' player-section storage (the local player's lives in player_storage.bin).
+        MWBase::World* world = MWBase::Environment::get().getWorld();
+        for (std::size_t i = 1; i < world->getPlayerCount(); ++i)
+        {
+            std::string blob;
+            mLua.protectedCall([&](LuaUtil::LuaView& view) {
+                blob = getPlayerStorage(world->getPlayerPtr(i))->serializePersistent(view.sol());
+            });
+            writer.writeHNT<uint32_t>("PLIx", static_cast<uint32_t>(i));
+            ESM::saveLuaBinaryData(writer, blob);
+        }
 
         writer.endRecord(ESM::REC_LUAM);
     }
@@ -816,6 +908,16 @@ namespace MWLua
         mGlobalScripts.setSavedDataDeserializer(mGlobalLoader.get());
         mGlobalScripts.load(globalScripts);
         mGlobalScriptsStarted = true;
+
+        // Additional players' player-section storage (absent in saves without extra players). It is
+        // stashed here and applied once the players have been set up (see setupPlayer).
+        mLoadedExtraPlayerStorage.clear();
+        while (reader.isNextSub("PLIx"))
+        {
+            uint32_t index = 0;
+            reader.getHT(index);
+            mLoadedExtraPlayerStorage[index] = ESM::loadLuaBinaryData(reader);
+        }
     }
 
     void LuaManager::saveLocalScripts(const MWWorld::Ptr& ptr, ESM::LuaScripts& data)
@@ -883,7 +985,7 @@ namespace MWLua
 
         mMenuScripts.removeAllScripts();
 
-        mPlayerStorage.clearTemporaryAndRemoveCallbacks();
+        clearPlayerStoragesTemporary();
 
         mMenuScripts.addAutoStartedScripts();
 

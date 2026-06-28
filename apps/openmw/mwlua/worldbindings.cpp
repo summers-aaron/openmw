@@ -16,8 +16,11 @@
 #include <components/esm3/loadspel.hpp>
 #include <components/esm3/loadstat.hpp>
 #include <components/esm3/loadweap.hpp>
+#include <components/esm/position.hpp>
 #include <components/lua/luastate.hpp>
 #include <components/misc/finitevalues.hpp>
+
+#include <cstring>
 
 #include "../mwbase/environment.hpp"
 #include "../mwbase/mechanicsmanager.hpp"
@@ -165,6 +168,34 @@ namespace MWLua
         ObjectLists* objectLists = context.mObjectLists;
         api["activeActors"] = GObjectList{ objectLists->getActorsInScene() };
         api["players"] = GObjectList{ objectLists->getPlayers() };
+
+        api["addPlayer"]
+            = [lua = context.mLua](sol::optional<GCell> cell, sol::optional<osg::Vec3f> position) -> GObject {
+            checkGameInitialized(lua);
+            MWBase::World* world = MWBase::Environment::get().getWorld();
+            // World::addPlayer registers the new player with the LuaManager (scripts + world.players).
+            if (cell.has_value() && position.has_value())
+            {
+                ESM::Position pos{};
+                std::memcpy(pos.pos, &position.value(), sizeof(osg::Vec3f));
+                pos.rot[0] = pos.rot[1] = pos.rot[2] = 0;
+                return GObject(world->addPlayer(*cell->mStore, pos));
+            }
+            return GObject(world->addPlayer());
+        };
+        api["removePlayer"] = [](const GObject& player) {
+            MWBase::World* world = MWBase::Environment::get().getWorld();
+            const MWWorld::Ptr ptr = player.ptr();
+            for (std::size_t i = 0; i < world->getPlayerCount(); ++i)
+            {
+                if (world->getPlayerPtr(i) == ptr)
+                {
+                    world->removePlayer(i); // throws for the primary player (index 0)
+                    return;
+                }
+            }
+            throw std::runtime_error("removePlayer: the object is not a player");
+        };
 
         api["createObject"] = [lua = context.mLua](std::string_view recordId, sol::optional<int> count) -> GObject {
             checkGameInitialized(lua);

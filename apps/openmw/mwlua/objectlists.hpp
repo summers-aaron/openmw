@@ -1,6 +1,7 @@
 #ifndef MWLUA_OBJECTLISTS_H
 #define MWLUA_OBJECTLISTS_H
 
+#include <algorithm>
 #include <set>
 
 #include "object.hpp"
@@ -26,6 +27,19 @@ namespace MWLua
         void objectRemovedFromScene(const MWWorld::Ptr& ptr);
 
         void setPlayer(const MWWorld::Ptr& player) { *mPlayers = { getId(player) }; }
+
+        void addPlayer(const MWWorld::Ptr& player)
+        {
+            const ObjectId id = getId(player);
+            if (std::find(mPlayers->begin(), mPlayers->end(), id) == mPlayers->end())
+                mPlayers->push_back(id);
+        }
+
+        void removePlayer(const MWWorld::Ptr& player)
+        {
+            const ObjectId id = getId(player);
+            mPlayers->erase(std::remove(mPlayers->begin(), mPlayers->end(), id), mPlayers->end());
+        }
 
     private:
         struct ObjectGroup

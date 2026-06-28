@@ -252,6 +252,30 @@ namespace LuaUtil
         }
     }
 
+    void LuaStorage::deserializeAndMerge(lua_State* state, std::string_view data)
+    {
+        if (data.empty())
+            return;
+        sol::table table = deserialize(state, data);
+        for (const auto& [sectionName, sectionTable] : table)
+        {
+            const std::shared_ptr<Section>& section = getSection(cast<std::string_view>(sectionName));
+            for (const auto& [key, value] : cast<sol::table>(sectionTable))
+                section->set(cast<std::string_view>(key), value);
+        }
+    }
+
+    std::string LuaStorage::serializePersistent(lua_State* state) const
+    {
+        sol::table data(state, sol::create);
+        for (const auto& [sectionName, section] : mData)
+        {
+            if (section->mLifeTime == Section::Persistent && !section->mValues.empty())
+                data[sectionName] = section->asTable(state);
+        }
+        return serialize(data);
+    }
+
     void LuaStorage::load(lua_State* state, const std::filesystem::path& path)
     {
         assert(mData.empty()); // Shouldn't be used before loading
@@ -264,13 +288,7 @@ namespace LuaUtil
 
             std::ifstream fin(path, std::fstream::binary);
             std::string serializedData((std::istreambuf_iterator<char>(fin)), std::istreambuf_iterator<char>());
-            sol::table data = deserialize(state, serializedData);
-            for (const auto& [sectionName, sectionTable] : data)
-            {
-                const std::shared_ptr<Section>& section = getSection(cast<std::string_view>(sectionName));
-                for (const auto& [key, value] : cast<sol::table>(sectionTable))
-                    section->set(cast<std::string_view>(key), value);
-            }
+            deserializeAndMerge(state, serializedData);
         }
         catch (std::exception& e)
         {
@@ -280,13 +298,7 @@ namespace LuaUtil
 
     void LuaStorage::save(lua_State* state, const std::filesystem::path& path) const
     {
-        sol::table data(state, sol::create);
-        for (const auto& [sectionName, section] : mData)
-        {
-            if (section->mLifeTime == Section::Persistent && !section->mValues.empty())
-                data[sectionName] = section->asTable(state);
-        }
-        std::string serializedData = serialize(data);
+        std::string serializedData = serializePersistent(state);
         Log(Debug::Info) << "Saving Lua storage \"" << path << "\" (" << serializedData.size() << " bytes)";
         std::ofstream fout(path, std::fstream::binary);
         fout.write(serializedData.data(), serializedData.size());

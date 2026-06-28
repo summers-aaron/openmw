@@ -4,6 +4,7 @@
 #include <components/settings/values.hpp>
 
 #include "../mwbase/environment.hpp"
+#include "../mwbase/world.hpp"
 #include "../mwworld/class.hpp"
 #include "../mwworld/worldmodel.hpp"
 
@@ -27,7 +28,7 @@ namespace MWLua
             MWWorld::Ptr ptr = getPtr(event.mObject);
             if (ptr.isEmpty())
                 return;
-            if (ptr.getCellRef().getRefId() == "player")
+            if (MWBase::Environment::get().getWorld()->isPlayer(ptr))
                 mGlobalScripts.playerAdded(GObject(ptr));
             else
             {

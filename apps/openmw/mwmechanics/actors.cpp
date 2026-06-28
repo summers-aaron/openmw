@@ -1518,6 +1518,13 @@ namespace MWMechanics
             const MWWorld::Ptr player = getPlayer();
             const osg::Vec3f playerPos = player.getRefData().getPosition().asVec3();
 
+            // Actors are processed within range of any player, not just the primary one.
+            std::vector<osg::Vec3f> playerPositions;
+            playerPositions.reserve(world->getPlayerCount());
+            playerPositions.push_back(playerPos);
+            for (std::size_t i = 1; i < world->getPlayerCount(); ++i)
+                playerPositions.push_back(world->getPlayerPtr(i).getRefData().getPosition().asVec3());
+
             /// \todo move update logic to Actor class where appropriate
 
             SidingCache cachedAllies{ *this, true }; // will be filled as engageCombat iterates
@@ -1551,8 +1558,11 @@ namespace MWMechanics
                 MWBase::LuaManager::ActorControls* luaControls
                     = MWBase::Environment::get().getLuaManager()->getActorControls(actor.getPtr());
 
-                const float distSqr = (playerPos - actor.getPtr().getRefData().getPosition().asVec3()).length2();
-                // AI processing is only done within given distance to the player.
+                const osg::Vec3f actorPos = actor.getPtr().getRefData().getPosition().asVec3();
+                float distSqr = (playerPositions[0] - actorPos).length2();
+                for (std::size_t i = 1; i < playerPositions.size(); ++i)
+                    distSqr = std::min(distSqr, (playerPositions[i] - actorPos).length2());
+                // AI processing is only done within given distance to the nearest player.
                 const bool inProcessingRange = distSqr <= actorsProcessingRange * actorsProcessingRange;
 
                 // If dead or no longer in combat, no longer store any actors who attempted to hit us. Also remove for

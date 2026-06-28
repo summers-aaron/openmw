@@ -146,6 +146,29 @@ namespace MWBase
         virtual MWWorld::Ptr getPlayerPtr() = 0;
         virtual MWWorld::ConstPtr getPlayerConstPtr() const = 0;
 
+        /// Is the given object one of the players? Identity test that does not rely on the
+        /// hardcoded "player" RefId, so it remains correct once multiple players exist.
+        virtual bool isPlayer(const MWWorld::ConstPtr& ptr) const = 0;
+
+        /// Number of players currently in the world (>= 1; the zero-arg accessors above
+        /// always refer to the primary player, index 0).
+        virtual std::size_t getPlayerCount() const = 0;
+        virtual MWWorld::Player& getPlayer(std::size_t index) = 0;
+        virtual MWWorld::Ptr getPlayerPtr(std::size_t index) = 0;
+        /// The Player wrapper for the given object. Throws if it is not one of the players;
+        /// guard with isPlayer() first.
+        virtual MWWorld::Player& getPlayer(const MWWorld::ConstPtr& ptr) = 0;
+
+        /// Spawn an additional (non-primary) player at the primary player's cell/position and
+        /// register it with the world. Returns the new player's Ptr. Note: the new player is not
+        /// yet wired into rendering/physics/input; it exists as a model actor only.
+        virtual MWWorld::Ptr addPlayer() = 0;
+        /// As above, but place the new player in the given cell at the given position. The cell is
+        /// loaded and kept active so the player's surroundings are simulated.
+        virtual MWWorld::Ptr addPlayer(MWWorld::CellStore& cell, const ESM::Position& position) = 0;
+        /// Remove a non-primary player by index (index 0, the primary player, cannot be removed).
+        virtual void removePlayer(std::size_t index) = 0;
+
         virtual MWWorld::ESMStore& getStore() = 0;
         virtual const MWWorld::ESMStore& getStore() const = 0;
 

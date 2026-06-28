@@ -363,10 +363,11 @@ namespace MWWorld
 
         mStore.clearDynamic();
 
-        if (mPlayers.hasLocalPlayer())
+        if (!mPlayers.empty())
         {
-            mPlayers.getLocalPlayer().clear();
-            mPlayers.getLocalPlayer().set(mStore.get<ESM::NPC>().find(PlayerRegistry::localPlayerId()));
+            mPlayers.keepOnlyPrimary();
+            mPlayers.primary().clear();
+            mPlayers.primary().set(mStore.get<ESM::NPC>().find(ESM::RefId::stringRefId("Player")));
         }
 
         mDoorStates.clear();
@@ -385,7 +386,7 @@ namespace MWWorld
     {
         return mWorldModel.countSavedGameRecords() + mStore.countSavedGameRecords()
             + mGlobalVariables.countSavedGameRecords() + mProjectileManager->countSavedGameRecords()
-            + 1 // player record
+            + getPlayerCount() // player records (REC_PLAY for the primary, REC_PLAYER_EXTRA for the rest)
             + 1 // weather record
             + 1 // levitation/teleport enabled state
             + 1 // camera
@@ -412,7 +413,10 @@ namespace MWWorld
         mStore.write(writer, progress); // dynamic Store must be written (and read) before Cells, so that
                                         // references to custom made records will be recognized
         mWorldModel.write(writer, progress); // the player's cell needs to be loaded before the player
-        mPlayers.getLocalPlayer().write(writer, progress);
+        // The primary player (index 0) is written first as REC_PLAY; any additional players follow
+        // as REC_PLAYER_EXTRA records. With a single player this is byte-identical to before.
+        for (std::size_t i = 0; i < mPlayers.size(); ++i)
+            mPlayers.get(i).write(writer, progress, i);
         mGlobalVariables.write(writer, progress);
         mWeatherManager->write(writer, progress);
         mProjectileManager->write(writer, progress);
@@ -452,8 +456,18 @@ namespace MWWorld
                 }
 
                 mStore.checkPlayer();
-                mPlayers.getLocalPlayer().readRecord(reader, type);
+                mPlayers.primary().readRecord(reader, type);
                 break;
+            case ESM::REC_PLAYER_EXTRA:
+            {
+                // Additional players always follow the primary REC_PLAY in the stream, so the id
+                // index and player setup are already in place by the time we get here.
+                uint32_t index = 0;
+                reader.getHNT(index, "PLIX");
+                const ESM::NPC* playerNpc = mStore.get<ESM::NPC>().find(ESM::RefId::stringRefId("Player"));
+                mPlayers.loadExtra(index, playerNpc).readRecord(reader, type);
+                break;
+            }
             case ESM::REC_CSTA:
                 // We need to rebuild the ESMStore index in order to be able to lookup dynamic records while loading the
                 // WorldModel and, afterwards, the player.
@@ -514,7 +528,7 @@ namespace MWWorld
 
     MWWorld::Player& World::getPlayer()
     {
-        return mPlayers.getLocalPlayer();
+        return mPlayers.primary();
     }
 
     const std::vector<int>& World::getESMVersions() const
@@ -601,9 +615,9 @@ namespace MWWorld
     {
         Ptr ret;
         // the player is always in an active cell.
-        if (name == PlayerRegistry::localPlayerId())
+        if (name == "Player")
         {
-            return mPlayers.getLocalPlayerPtr();
+            return mPlayers.primary().getPlayer();
         }
 
         for (CellStore* cellstore : mWorldScene->getActiveCells())
@@ -633,7 +647,7 @@ namespace MWWorld
             }
         }
 
-        Ptr ptr = mPlayers.getLocalPlayerPtr().getClass().getContainerStore(mPlayers.getLocalPlayerPtr()).search(name);
+        Ptr ptr = mPlayers.primary().getPlayer().getClass().getContainerStore(mPlayers.primary().getPlayer()).search(name);
 
         return ptr;
     }
@@ -907,7 +921,7 @@ namespace MWWorld
         else
             maxDistance = getMaxActivationDistance();
 
-        const MWWorld::Ptr player = mPlayers.getLocalPlayerPtr();
+        const MWWorld::Ptr player = mPlayers.primary().getPlayer();
         const float telekinesisMagnitude = player.getClass()
                                                .getCreatureStats(player)
                                                .getMagicEffects()
@@ -993,7 +1007,7 @@ namespace MWWorld
         CellStore* currCell = ptr.isInCell()
             ? ptr.getCell()
             : nullptr; // currCell == nullptr should only happen for player, during initial startup
-        bool isPlayer = ptr == mPlayers.getLocalPlayerPtr();
+        bool isPlayer = ptr == mPlayers.primary().getPlayer();
         bool haveToMove = isPlayer || (currCell && mWorldScene->isCellActive(*currCell));
         MWWorld::Ptr newPtr = ptr;
 
@@ -1570,7 +1584,7 @@ namespace MWWorld
 
         updateNavigator();
 
-        mPlayers.getLocalPlayer().update();
+        mPlayers.primary().update();
 
         mPhysics->debugDraw();
 
@@ -2048,7 +2062,7 @@ namespace MWWorld
         Ptr dropped
             = copy ? copyObjectToCell(object, cell, pos, amount, true) : moveObjectToCell(object, cell, pos, true);
 
-        if (actor == mPlayers.getLocalPlayerPtr()) // Only call if dropped by player
+        if (actor == mPlayers.primary().getPlayer()) // Only call if dropped by player
             PCDropped(dropped);
         return dropped;
     }
@@ -2221,9 +2235,9 @@ namespace MWWorld
 
     void World::setupPlayer()
     {
-        const ESM::NPC* player = mStore.get<ESM::NPC>().find(PlayerRegistry::localPlayerId());
-        if (!mPlayers.hasLocalPlayer())
-            mPlayers.createLocalPlayer(player);
+        const ESM::NPC* player = mStore.get<ESM::NPC>().find(ESM::RefId::stringRefId("Player"));
+        if (mPlayers.empty())
+            mPlayers.setupPrimary(player);
         else
         {
             // Remove the old CharacterController
@@ -2233,10 +2247,10 @@ namespace MWWorld
             mRendering->removePlayer(getPlayerPtr());
             MWBase::Environment::get().getLuaManager()->objectRemovedFromScene(getPlayerPtr());
 
-            mPlayers.getLocalPlayer().set(player);
+            mPlayers.primary().set(player);
         }
 
-        Ptr ptr = mPlayers.getLocalPlayerPtr();
+        Ptr ptr = mPlayers.primary().getPlayer();
         mRendering->setupPlayer(ptr);
         MWBase::Environment::get().getLuaManager()->setupPlayer(ptr);
     }
@@ -2274,7 +2288,7 @@ namespace MWWorld
 
         CellStore* currentCell = mWorldScene->getCurrentCell();
 
-        Ptr player = mPlayers.getLocalPlayerPtr();
+        Ptr player = mPlayers.primary().getPlayer();
 
         const MWPhysics::Actor* actor = mPhysics->getActor(player);
         if (!actor)
@@ -2290,7 +2304,7 @@ namespace MWWorld
             || isFlying(player))
             result |= Rest_PlayerIsInAir;
 
-        if (mPlayers.getLocalPlayer().enemiesNearby())
+        if (mPlayers.primary().enemiesNearby())
             result |= Rest_EnemiesAreNearby;
 
         if (!currentCell->getCell()->noSleep() && !player.getClass().getNpcStats(player).isWerewolf())
@@ -3063,7 +3077,7 @@ namespace MWWorld
         // If we are in exterior, check the weather manager.
         // In interiors there are no precipitations and sun, so check the ambient
         // Looks like pseudo-exteriors considered as interiors in this case
-        MWWorld::CellStore* cell = mPlayers.getLocalPlayerPtr().getCell();
+        MWWorld::CellStore* cell = mPlayers.primary().getPlayer().getCell();
         if (cell->isExterior())
         {
             float hour = getTimeStamp().getHour();
@@ -3150,7 +3164,7 @@ namespace MWWorld
     {
         if (ptr.getCell()->isExterior())
         {
-            return getClosestMarkerFromExteriorPosition(mPlayers.getLocalPlayer().getLastKnownExteriorPosition(), id);
+            return getClosestMarkerFromExteriorPosition(mPlayers.primary().getLastKnownExteriorPosition(), id);
         }
 
         // Search for a 'nearest' marker, counting each cell between the starting
@@ -3310,9 +3324,9 @@ namespace MWWorld
     void World::updateWeather(float duration, bool paused)
     {
         bool isExterior = isCellExterior() || isCellQuasiExterior();
-        if (mPlayers.getLocalPlayer().wasTeleported())
+        if (mPlayers.primary().wasTeleported())
         {
-            mPlayers.getLocalPlayer().setTeleported(false);
+            mPlayers.primary().setTeleported(false);
 
             const ESM::RefId& playerRegion = getPlayerPtr().getCell()->getCell()->getRegion();
             mWeatherManager->playerTeleported(playerRegion, isExterior);
@@ -3446,12 +3460,73 @@ namespace MWWorld
 
     MWWorld::Ptr World::getPlayerPtr()
     {
-        return mPlayers.getLocalPlayerPtr();
+        return mPlayers.primary().getPlayer();
     }
 
     MWWorld::ConstPtr World::getPlayerConstPtr() const
     {
-        return mPlayers.getLocalPlayerConstPtr();
+        return mPlayers.primary().getConstPlayer();
+    }
+
+    bool World::isPlayer(const MWWorld::ConstPtr& ptr) const
+    {
+        return mPlayers.isPlayer(ptr);
+    }
+
+    std::size_t World::getPlayerCount() const
+    {
+        return mPlayers.size();
+    }
+
+    MWWorld::Player& World::getPlayer(std::size_t index)
+    {
+        return mPlayers.get(index);
+    }
+
+    MWWorld::Ptr World::getPlayerPtr(std::size_t index)
+    {
+        return mPlayers.get(index).getPlayer();
+    }
+
+    MWWorld::Player& World::getPlayer(const MWWorld::ConstPtr& ptr)
+    {
+        MWWorld::Player* player = mPlayers.findPlayer(ptr);
+        if (player == nullptr)
+            throw std::runtime_error("getPlayer: object is not a player");
+        return *player;
+    }
+
+    MWWorld::Ptr World::addPlayer()
+    {
+        // Place the new player where the primary player is, so it has a valid cell to be saved in.
+        const MWWorld::Ptr primary = mPlayers.primary().getPlayer();
+        return addPlayer(*primary.getCell(), primary.getRefData().getPosition());
+    }
+
+    MWWorld::Ptr World::addPlayer(MWWorld::CellStore& cell, const ESM::Position& position)
+    {
+        const ESM::NPC* record = mStore.get<ESM::NPC>().find(ESM::RefId::stringRefId("Player"));
+        MWWorld::Player& player = mPlayers.addPlayer(record);
+        player.setCell(&cell);
+
+        MWWorld::Ptr ptr = player.getPlayer();
+        ptr.getRefData().setPosition(position);
+        mWorldModel.registerPtr(ptr);
+
+        // Load and keep the player's cell active so the cell that this player occupies is simulated.
+        mWorldScene->addExtraPlayer(ptr);
+        MWBase::Environment::get().getLuaManager()->addPlayer(ptr);
+        return ptr;
+    }
+
+    void World::removePlayer(std::size_t index)
+    {
+        if (index == MWWorld::Players::sPrimaryIndex)
+            throw std::out_of_range("World::removePlayer: the primary player cannot be removed");
+        const MWWorld::Ptr ptr = mPlayers.get(index).getPlayer();
+        MWBase::Environment::get().getLuaManager()->removePlayer(ptr);
+        mWorldModel.deregisterLiveCellRef(*ptr.getBase());
+        mPlayers.remove(index);
     }
 
     void World::updateDialogueGlobals()
@@ -3520,7 +3595,7 @@ namespace MWWorld
 
             int bounty = player.getClass().getNpcStats(player).getBounty();
             player.getClass().getNpcStats(player).setBounty(0);
-            mPlayers.getLocalPlayer().recordCrimeId();
+            mPlayers.primary().recordCrimeId();
             confiscateStolenItems(player);
 
             static int iDaysinPrisonMod = mStore.get<ESM::GameSetting>().find("iDaysinPrisonMod")->mValue.getInteger();
@@ -3535,7 +3610,7 @@ namespace MWWorld
                 player.getClass().getCreatureStats(player).setAttackingOrSpell(false);
             }
 
-            mPlayers.getLocalPlayer().setDrawState(MWMechanics::DrawState::Nothing);
+            mPlayers.primary().setDrawState(MWMechanics::DrawState::Nothing);
             mGoToJail = false;
 
             MWBase::Environment::get().getWindowManager()->removeGuiMode(MWGui::GM_Dialogue);

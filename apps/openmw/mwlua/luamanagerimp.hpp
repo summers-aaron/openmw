@@ -33,6 +33,8 @@ namespace MWNet
 
 namespace MWLua
 {
+    class PlayerScripts;
+
     // \brief LuaManager is the central interface through which the engine invokes lua scripts.
     //
     // This class implements the interface defined in MWBase::LuaManager.
@@ -138,6 +140,8 @@ namespace MWLua
 
         void clear() override; // should be called before loading game or starting a new game to reset internal state.
         void setupPlayer(const MWWorld::Ptr& ptr) override; // Should be called once after each "clear".
+        void addPlayer(const MWWorld::Ptr& ptr) override;
+        void removePlayer(const MWWorld::Ptr& ptr) override;
 
         // Used only in Lua bindings
         void addCustomLocalScript(const MWWorld::Ptr&, int scriptId, std::string_view initData);
@@ -208,6 +212,13 @@ namespace MWLua
         void initConfiguration(bool reload);
         LocalScripts* createLocalScripts(const MWWorld::Ptr& ptr,
             std::optional<LuaUtil::ScriptIdsWithInitializationData> autoStartConf = std::nullopt);
+        // Create (if needed), auto-start and activate the player scripts for the given player.
+        LocalScripts* setupPlayerScripts(const MWWorld::Ptr& ptr);
+        PlayerScripts* getPlayerScripts(const MWWorld::Ptr& ptr) const;
+        // Per-player player-section storage. The local player uses mPlayerStorage (persisted to
+        // disk); additional players get their own in-memory storage so they do not collide.
+        LuaUtil::LuaStorage* getPlayerStorage(const MWWorld::Ptr& ptr);
+        void clearPlayerStoragesTemporary();
         void reloadAllScriptsImpl();
         void synchronizedUpdateUnsafe();
 
@@ -271,7 +282,12 @@ namespace MWLua
         std::optional<ObjectId> mDelayedUiModeChangedArg;
 
         LuaUtil::LuaStorage mGlobalStorage;
-        LuaUtil::LuaStorage mPlayerStorage;
+        LuaUtil::LuaStorage mPlayerStorage; // the local player's player-section storage
+        // Player-section storage for additional (non-local) players, keyed by player object id.
+        std::map<ObjectId, std::unique_ptr<LuaUtil::LuaStorage>> mExtraPlayerStorages;
+        // Serialized extra-player storage read from a save, keyed by player index, applied once the
+        // corresponding players have been set up.
+        std::map<std::size_t, std::string> mLoadedExtraPlayerStorage;
 
         LuaUtil::InputAction::Registry mInputActions;
         LuaUtil::InputTrigger::Registry mInputTriggers;

@@ -18,7 +18,7 @@
 #include "globals.hpp"
 #include "groundcoverstore.hpp"
 #include "localscripts.hpp"
-#include "playerregistry.hpp"
+#include "players.hpp"
 #include "ptr.hpp"
 #include "scene.hpp"
 #include "timestamp.hpp"
@@ -100,7 +100,7 @@ namespace MWWorld
 
         std::string mCurrentWorldSpace;
 
-        MWWorld::PlayerRegistry mPlayers;
+        MWWorld::Players mPlayers;
         std::unique_ptr<MWPhysics::PhysicsSystem> mPhysics;
         std::unique_ptr<DetourNavigator::Navigator> mNavigator;
         std::unique_ptr<MWRender::RenderingManager> mRendering;
@@ -238,6 +238,16 @@ namespace MWWorld
         Player& getPlayer() override;
         MWWorld::Ptr getPlayerPtr() override;
         MWWorld::ConstPtr getPlayerConstPtr() const override;
+
+        bool isPlayer(const MWWorld::ConstPtr& ptr) const override;
+
+        std::size_t getPlayerCount() const override;
+        MWWorld::Player& getPlayer(std::size_t index) override;
+        MWWorld::Ptr getPlayerPtr(std::size_t index) override;
+        MWWorld::Player& getPlayer(const MWWorld::ConstPtr& ptr) override;
+        MWWorld::Ptr addPlayer() override;
+        MWWorld::Ptr addPlayer(MWWorld::CellStore& cell, const ESM::Position& position) override;
+        void removePlayer(std::size_t index) override;
 
         MWWorld::ESMStore& getStore() override { return mStore; }
 

@@ -279,7 +279,11 @@ void MWState::StateManager::saveGame(std::string_view description, const Slot* s
         for (const std::string& contentFile : MWBase::Environment::get().getWorld()->getContentFiles())
             writer.addMaster(contentFile, 0); // not using the size information anyway -> use value of 0
 
-        writer.setFormatVersion(ESM::CurrentSaveGameFormatVersion);
+        // Single-player saves keep the older format version for backwards compatibility; only
+        // bump it when the save actually carries more than one player (REC_PLAYER_EXTRA records).
+        writer.setFormatVersion(MWBase::Environment::get().getWorld()->getPlayerCount() > 1
+                ? ESM::CurrentSaveGameFormatVersion
+                : ESM::MaxSinglePlayerFormatVersion);
 
         // all unused
         writer.setVersion(0);
@@ -534,6 +538,7 @@ void MWState::StateManager::loadGame(const Character* character, const std::file
                 case ESM::REC_WEAP:
                 case ESM::REC_GLOB:
                 case ESM::REC_PLAY:
+                case ESM::REC_PLAYER_EXTRA:
                 case ESM::REC_CSTA:
                 case ESM::REC_WTHR:
                 case ESM::REC_DYNA:
@@ -641,6 +646,14 @@ void MWState::StateManager::loadGame(const Character* character, const std::file
             pos.rot[1] = 0;
             pos.rot[2] = 0;
             MWBase::Environment::get().getWorld()->changeToCell(cell.getCell()->getId(), pos, true, false);
+        }
+
+        // Re-activate the cells occupied by any additional players restored from the save, so
+        // their surroundings are simulated as they were before saving.
+        {
+            MWBase::World* world = MWBase::Environment::get().getWorld();
+            for (std::size_t i = 1; i < world->getPlayerCount(); ++i)
+                MWBase::Environment::get().getWorldScene()->addExtraPlayer(world->getPlayerPtr(i));
         }
 
         MWBase::Environment::get().getWorld()->updateProjectilesCasters();

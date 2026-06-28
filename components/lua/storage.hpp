@@ -29,6 +29,10 @@ namespace LuaUtil
         void load(lua_State* state, const std::filesystem::path& path);
         void save(lua_State* state, const std::filesystem::path& path) const;
 
+        // In-memory equivalents of load/save, e.g. to embed a player's storage in a save game.
+        std::string serializePersistent(lua_State* state) const;
+        void deserializeAndMerge(lua_State* state, std::string_view data);
+
         sol::object getSection(
             lua_State* state, std::string_view sectionName, bool readOnly, bool forMenuScripts = false);
         sol::object getMutableSection(lua_State* state, std::string_view sectionName, bool forMenuScripts = false)

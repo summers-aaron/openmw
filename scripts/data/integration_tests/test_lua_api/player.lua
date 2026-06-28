@@ -6,6 +6,7 @@ local input = require('openmw.input')
 local types = require('openmw.types')
 local nearby = require('openmw.nearby')
 local camera = require('openmw.camera')
+local storage = require('openmw.storage')
 local matchers = require('matchers')
 
 types.Player.setControlSwitch(self, types.Player.CONTROL_SWITCH.Controls, false)
@@ -15,6 +16,32 @@ types.Player.setControlSwitch(self, types.Player.CONTROL_SWITCH.Looking, false)
 types.Player.setControlSwitch(self, types.Player.CONTROL_SWITCH.Magic, false)
 types.Player.setControlSwitch(self, types.Player.CONTROL_SWITCH.VanityMode, false)
 types.Player.setControlSwitch(self, types.Player.CONTROL_SWITCH.ViewMode, false)
+
+-- Verifies that this player script is actually running on its own player (used to confirm that
+-- additional, non-local players run their own player scripts).
+testing.registerLocalTest('self is a player', function()
+    testing.expectEqual(self.type, types.Player, 'self should be the Player type')
+end)
+
+-- These two local tests, run on different players, confirm each player has its own player storage.
+testing.registerLocalTest('set player storage marker', function()
+    storage.playerSection('mp_independence'):set('who', 'marked')
+end)
+testing.registerLocalTest('player storage marker is empty', function()
+    testing.expectEqual(storage.playerSection('mp_independence'):get('who'), nil,
+        'player storage should be independent per player')
+end)
+
+-- These two, run before saving and after reloading, confirm a player's persistent storage survives.
+testing.registerLocalTest('set persistent storage marker', function()
+    local section = storage.playerSection('mp_persist')
+    section:setLifeTime(storage.LIFE_TIME.Persistent)
+    section:set('v', 42)
+end)
+testing.registerLocalTest('persistent storage marker survived', function()
+    testing.expectEqual(storage.playerSection('mp_persist'):get('v'), 42,
+        "an extra player's persistent storage should survive a save/reload")
+end)
 
 local function rotate(object, targetPitch, targetYaw)
     local endTime = core.getSimulationTime() + 1

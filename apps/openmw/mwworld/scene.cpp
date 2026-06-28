@@ -530,6 +530,24 @@ namespace MWWorld
         mPreloader->notifyLoaded(&cell);
     }
 
+    bool Scene::isCellOccupiedByNonPrimaryPlayer(const CellStore* cell) const
+    {
+        for (std::size_t i = 1; i < mWorld.getPlayerCount(); ++i)
+            if (mWorld.getPlayerPtr(i).getCell() == cell)
+                return true;
+        return false;
+    }
+
+    void Scene::addExtraPlayer(const MWWorld::Ptr& player)
+    {
+        CellStore* cell = player.getCell();
+        if (cell == nullptr || mActiveCells.find(cell) != mActiveCells.end())
+            return; // no cell, or the cell is already active (e.g. shared with the primary player)
+        auto navigatorUpdateGuard = mNavigator.makeUpdateGuard();
+        loadCell(*cell, nullptr, false, player.getRefData().getPosition().asVec3(), navigatorUpdateGuard.get());
+        navigatorUpdateGuard.reset();
+    }
+
     void Scene::clear()
     {
         auto navigatorUpdateGuard = mNavigator.makeUpdateGuard();
@@ -624,6 +642,10 @@ namespace MWWorld
         for (auto iter = mActiveCells.begin(); iter != mActiveCells.end();)
         {
             auto* cell = *iter++;
+            // Keep cells that another player occupies loaded even if they are outside the primary
+            // player's grid.
+            if (isCellOccupiedByNonPrimaryPlayer(cell))
+                continue;
             if (cell->getCell()->isExterior() && cell->getCell()->getWorldSpace() == playerCellIndex.mWorldspace)
             {
                 const auto dx = std::abs(playerCellX - cell->getCell()->getGridX());
