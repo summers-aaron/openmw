@@ -97,6 +97,7 @@ registerGlobalTest('load script generated static')
 registerGlobalTest('multiplayer add and remove players')
 registerGlobalTest('per-player stats are independent')
 registerGlobalTest('extra player runs its own player scripts')
+registerGlobalTest('per-player storage is independent')
 registerGlobalTest('multiplayer simulates extra player cell')
 
 registerGlobalTest('player yaw rotation', 'rotating player with controls.yawChange should change rotation')

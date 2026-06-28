@@ -409,6 +409,7 @@ namespace MWLua
         mGlobalStorage.clearTemporaryAndRemoveCallbacks();
         mGlobalStorage.setActive(false);
         mPlayerStorage.clearTemporaryAndRemoveCallbacks();
+        mExtraPlayerStorages.clear();
         mInputActions.clear();
         mInputTriggers.clear();
         mQueuedAutoStartedScripts.clear();
@@ -421,6 +422,26 @@ namespace MWLua
         if (ptr.isEmpty())
             return nullptr;
         return dynamic_cast<PlayerScripts*>(ptr.getRefData().getLuaScripts());
+    }
+
+    LuaUtil::LuaStorage* LuaManager::getPlayerStorage(const MWWorld::Ptr& ptr)
+    {
+        if (!mPlayer.isEmpty() && getId(ptr) == getId(mPlayer))
+            return &mPlayerStorage;
+        std::unique_ptr<LuaUtil::LuaStorage>& storage = mExtraPlayerStorages[getId(ptr)];
+        if (!storage)
+        {
+            storage = std::make_unique<LuaUtil::LuaStorage>();
+            storage->setActive(true);
+        }
+        return storage.get();
+    }
+
+    void LuaManager::clearPlayerStoragesTemporary()
+    {
+        mPlayerStorage.clearTemporaryAndRemoveCallbacks();
+        for (auto& [id, storage] : mExtraPlayerStorages)
+            storage->clearTemporaryAndRemoveCallbacks();
     }
 
     LocalScripts* LuaManager::setupPlayerScripts(const MWWorld::Ptr& ptr)
@@ -474,6 +495,7 @@ namespace MWLua
         if (LocalScripts* localScripts = ptr.getRefData().getLuaScripts())
             mActiveLocalScripts.erase(localScripts->getWeakPointer());
         ptr.getRefData().setLuaScripts(nullptr);
+        mExtraPlayerStorages.erase(getId(ptr));
     }
 
     void LuaManager::newGameStarted()
@@ -763,6 +785,13 @@ namespace MWLua
             scripts->setAutoStartConf(mConfiguration.getPlayerConf());
             for (const auto& [name, package] : mPlayerPackages)
                 scripts->addPackage(name, package);
+            // Bind openmw.storage to this player's own player-section storage so players do not
+            // share player-section data.
+            LuaUtil::LuaStorage* playerStorage = getPlayerStorage(ptr);
+            mLua.protectedCall([&](LuaUtil::LuaView& view) {
+                scripts->addPackage("openmw.storage",
+                    LuaUtil::LuaStorage::initPlayerPackage(view, &mGlobalStorage, playerStorage));
+            });
         }
         else
         {
@@ -890,7 +919,7 @@ namespace MWLua
 
         mMenuScripts.removeAllScripts();
 
-        mPlayerStorage.clearTemporaryAndRemoveCallbacks();
+        clearPlayerStoragesTemporary();
 
         mMenuScripts.addAutoStartedScripts();
 

@@ -195,6 +195,10 @@ namespace MWLua
         // Create (if needed), auto-start and activate the player scripts for the given player.
         LocalScripts* setupPlayerScripts(const MWWorld::Ptr& ptr);
         PlayerScripts* getPlayerScripts(const MWWorld::Ptr& ptr) const;
+        // Per-player player-section storage. The local player uses mPlayerStorage (persisted to
+        // disk); additional players get their own in-memory storage so they do not collide.
+        LuaUtil::LuaStorage* getPlayerStorage(const MWWorld::Ptr& ptr);
+        void clearPlayerStoragesTemporary();
         void reloadAllScriptsImpl();
         void synchronizedUpdateUnsafe();
 
@@ -258,7 +262,9 @@ namespace MWLua
         std::optional<ObjectId> mDelayedUiModeChangedArg;
 
         LuaUtil::LuaStorage mGlobalStorage;
-        LuaUtil::LuaStorage mPlayerStorage;
+        LuaUtil::LuaStorage mPlayerStorage; // the local player's player-section storage
+        // Player-section storage for additional (non-local) players, keyed by player object id.
+        std::map<ObjectId, std::unique_ptr<LuaUtil::LuaStorage>> mExtraPlayerStorages;
 
         LuaUtil::InputAction::Registry mInputActions;
         LuaUtil::InputTrigger::Registry mInputTriggers;

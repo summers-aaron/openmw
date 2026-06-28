@@ -6,6 +6,7 @@ local input = require('openmw.input')
 local types = require('openmw.types')
 local nearby = require('openmw.nearby')
 local camera = require('openmw.camera')
+local storage = require('openmw.storage')
 local matchers = require('matchers')
 
 types.Player.setControlSwitch(self, types.Player.CONTROL_SWITCH.Controls, false)
@@ -20,6 +21,15 @@ types.Player.setControlSwitch(self, types.Player.CONTROL_SWITCH.ViewMode, false)
 -- additional, non-local players run their own player scripts).
 testing.registerLocalTest('self is a player', function()
     testing.expectEqual(self.type, types.Player, 'self should be the Player type')
+end)
+
+-- These two local tests, run on different players, confirm each player has its own player storage.
+testing.registerLocalTest('set player storage marker', function()
+    storage.playerSection('mp_independence'):set('who', 'marked')
+end)
+testing.registerLocalTest('player storage marker is empty', function()
+    testing.expectEqual(storage.playerSection('mp_independence'):get('who'), nil,
+        'player storage should be independent per player')
 end)
 
 local function rotate(object, targetPitch, targetYaw)

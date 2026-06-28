@@ -403,6 +403,16 @@ testing.registerGlobalTest('extra player runs its own player scripts', function(
     world.removePlayer(p2)
 end)
 
+testing.registerGlobalTest('per-player storage is independent', function()
+    local p2 = world.addPlayer()
+    coroutine.yield()
+    coroutine.yield()
+    -- The second player writes to its player storage; the first player must not see it.
+    testing.runLocalTest(p2, 'set player storage marker')
+    testing.runLocalTest(world.players[1], 'player storage marker is empty')
+    world.removePlayer(p2)
+end)
+
 testing.registerGlobalTest('multiplayer simulates extra player cell', function()
     local primary = world.players[1]
     primary:teleport('', util.vector3(4096, 4096, 1745), util.transform.identity)
