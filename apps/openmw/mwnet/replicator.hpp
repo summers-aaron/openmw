@@ -36,6 +36,7 @@ namespace MWNet
             TransformState mTransform;
             std::optional<DynamicStats> mStats;
             std::optional<std::uint8_t> mDrawState;
+            std::optional<std::uint8_t> mMoveFlags;
 
             friend bool operator==(const SentState&, const SentState&) = default;
         };

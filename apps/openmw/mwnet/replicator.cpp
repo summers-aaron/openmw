@@ -4,6 +4,8 @@
 #include <limits>
 #include <vector>
 
+#include <osg/Quat>
+
 #include <components/debug/debuglog.hpp>
 #include <components/esm/refid.hpp>
 #include <components/esm3/loadnpc.hpp>
@@ -130,22 +132,62 @@ namespace MWNet
             }
         }
 
-        // Drive an applied actor's walk/idle animation from the motion it's about to make.
+        // Drive an applied actor's locomotion animation from the motion it's about to make.
         // The mechanics animation pass (CharacterController::update) still runs for remote-owned
         // actors and selects the animation from their movement vector, but their AI is skipped so
-        // that vector is otherwise zero (idle while they slide). Set a forward component when the
-        // actor moved this tick so it plays its locomotion cycle. Call BEFORE moveObject, so the
-        // actor's current position is still the previous one. Approximate (always "forward" in the
-        // actor's facing); strafing/backwards blending and de-jitter are refinements.
-        void driveLocomotionAnimation(const MWWorld::Ptr& actor, const osg::Vec3f& newPosition)
+        // that vector is otherwise zero (idle while they slide). Reconstruct that vector from the
+        // step the actor takes this tick, in the actor's own frame, so the controller plays the
+        // right directional cycle (forward/back/strafe) rather than always "forward". Call BEFORE
+        // moveObject, so the actor's current position is still the previous one. The run/sneak
+        // stance is set separately from the replicated movement flags (applyMoveFlags).
+        void driveLocomotionAnimation(
+            const MWWorld::Ptr& actor, const osg::Vec3f& newPosition, const osg::Vec3f& newRotation)
         {
             if (!actor.getClass().isActor())
                 return;
+            MWMechanics::Movement& movement = actor.getClass().getMovementSettings(actor);
             osg::Vec3f step = newPosition - actor.getRefData().getPosition().asVec3();
             step.z() = 0.f;
-            MWMechanics::Movement& movement = actor.getClass().getMovementSettings(actor);
-            movement.mPosition[0] = 0.f;
-            movement.mPosition[1] = step.length() > 0.5f ? 1.f : 0.f;
+            if (step.length() < 0.5f) // effectively stationary this tick — let it idle
+            {
+                movement.mPosition[0] = movement.mPosition[1] = 0.f;
+                return;
+            }
+            // Rotate the world-space step into the actor's local frame — the inverse of the
+            // engine's on-ground local->world movement rotation Quat(yaw, -Z) (movementsolver).
+            // Local +Y is forward, +X is right, matching Movement::mPosition[1]/[0]; the unit
+            // direction is enough for animation selection, the slide is matched by moveObject.
+            const osg::Vec3f local = osg::Quat(newRotation.z(), osg::Vec3f(0.f, 0.f, 1.f)) * step;
+            osg::Vec3f direction(local.x(), local.y(), 0.f);
+            direction.normalize();
+            movement.mPosition[0] = direction.x();
+            movement.mPosition[1] = direction.y();
+        }
+
+        // Read an actor's run/sneak stance as a compact bit set for replication (bit 0 run,
+        // bit 1 sneak), so a remote avatar visibly runs and sneaks like its owner.
+        std::optional<std::uint8_t> sampleMoveFlags(const MWWorld::Ptr& actor)
+        {
+            if (!actor.getClass().isActor())
+                return std::nullopt;
+            const MWMechanics::CreatureStats& stats = actor.getClass().getCreatureStats(actor);
+            std::uint8_t flags = 0;
+            if (stats.getStance(MWMechanics::CreatureStats::Stance_Run))
+                flags |= 1 << 0;
+            if (stats.getStance(MWMechanics::CreatureStats::Stance_Sneak))
+                flags |= 1 << 1;
+            return flags;
+        }
+
+        // Apply a replicated run/sneak stance to an actor, so the controller picks the run/sneak
+        // animation variants. Out-of-range bits are ignored; only run and sneak are honored.
+        void applyMoveFlags(const MWWorld::Ptr& actor, std::uint8_t flags)
+        {
+            if (!actor.getClass().isActor())
+                return;
+            MWMechanics::CreatureStats& stats = actor.getClass().getCreatureStats(actor);
+            stats.setMovementFlag(MWMechanics::CreatureStats::Flag_Run, (flags & (1 << 0)) != 0);
+            stats.setMovementFlag(MWMechanics::CreatureStats::Flag_Sneak, (flags & (1 << 1)) != 0);
         }
 
         std::optional<DynamicStats> sampleStats(const MWWorld::Ptr& actor)
@@ -216,12 +258,14 @@ namespace MWNet
 
         const auto include = [&](const ESM::RefNum& id, const TransformState& transform,
                                  std::optional<DynamicStats> stats, std::optional<std::uint8_t> drawState,
+                                 std::optional<std::uint8_t> moveFlags,
                                  std::optional<AppearanceState> appearance = std::nullopt,
                                  std::optional<std::vector<EquipmentSlot>> equipment = std::nullopt) {
             // Appearance and equipment are deliberately outside the dedup key: they are only
             // ever passed on full-refresh ticks (which always resend anyway), so they never
             // perturb the change detection that decides whether to emit transform/stats at all.
-            SentState current{ transform, stats, drawState };
+            // Move flags are in the key (high-frequency: a gait change must resend at once).
+            SentState current{ transform, stats, drawState, moveFlags };
             const auto [it, inserted] = mLastSent.try_emplace(id, current);
             if (!inserted)
             {
@@ -234,6 +278,7 @@ namespace MWNet
             entity.mTransform = transform;
             entity.mStats = stats;
             entity.mDrawState = drawState;
+            entity.mMoveFlags = moveFlags;
             entity.mAppearance = appearance;
             entity.mEquipment = std::move(equipment);
             delta.mEntities.push_back(entity);
@@ -256,6 +301,7 @@ namespace MWNet
             self.mTransform = TransformState{ pos.asVec3(), osg::Vec3f(pos.rot[0], pos.rot[1], pos.rot[2]) };
             self.mStats = sampleStats(player);
             self.mDrawState = sampleDrawState(player);
+            self.mMoveFlags = sampleMoveFlags(player);
             // Re-advertise our body identity and worn items occasionally so late-joining peers
             // can build/dress our avatar; they barely change, so once per full-refresh interval
             // is plenty (equip changes show within that interval).
@@ -291,7 +337,7 @@ namespace MWNet
             const ESM::Position& position = actor.getRefData().getPosition();
             include(id,
                 TransformState{ position.asVec3(), osg::Vec3f(position.rot[0], position.rot[1], position.rot[2]) },
-                sampleStats(actor), sampleDrawState(actor));
+                sampleStats(actor), sampleDrawState(actor), sampleMoveFlags(actor));
         }
 
         // Host relay: re-broadcast each connected client's player (the avatar we hold) under its
@@ -306,7 +352,7 @@ namespace MWNet
                 const ESM::Position& pos = avatar.getRefData().getPosition();
                 include(netId,
                     TransformState{ pos.asVec3(), osg::Vec3f(pos.rot[0], pos.rot[1], pos.rot[2]) },
-                    sampleStats(avatar), sampleDrawState(avatar),
+                    sampleStats(avatar), sampleDrawState(avatar), sampleMoveFlags(avatar),
                     fullSnapshot ? sampleAppearance(avatar) : std::nullopt,
                     fullSnapshot ? sampleEquipment(avatar) : std::nullopt);
             }
@@ -368,7 +414,9 @@ namespace MWNet
                 MWWorld::Ptr& avatar = found->second;
                 if (avatar.isEmpty() || !avatar.isInCell())
                     continue;
-                driveLocomotionAnimation(avatar, entity.mTransform->mPosition);
+                if (entity.mMoveFlags)
+                    applyMoveFlags(avatar, *entity.mMoveFlags);
+                driveLocomotionAnimation(avatar, entity.mTransform->mPosition, entity.mTransform->mRotation);
                 world.moveObject(avatar, entity.mTransform->mPosition);
                 world.rotateObject(avatar, entity.mTransform->mRotation, MWBase::RotationFlag_none);
                 if (entity.mStats)
@@ -391,7 +439,9 @@ namespace MWNet
             // The host owns this entity: drive it purely from the authority and stop the
             // local simulation from fighting the applied pose (cease-remote-sim).
             ptr.getRefData().setRemoteOwned(true);
-            driveLocomotionAnimation(ptr, entity.mTransform->mPosition);
+            if (entity.mMoveFlags)
+                applyMoveFlags(ptr, *entity.mMoveFlags);
+            driveLocomotionAnimation(ptr, entity.mTransform->mPosition, entity.mTransform->mRotation);
             world.moveObject(ptr, entity.mTransform->mPosition);
             world.rotateObject(ptr, entity.mTransform->mRotation, MWBase::RotationFlag_none);
             if (entity.mStats)
