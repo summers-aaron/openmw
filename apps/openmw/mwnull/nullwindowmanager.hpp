@@ -7,6 +7,7 @@
 #include "../mwworld/ptr.hpp"
 
 #include <components/esm/refid.hpp>
+#include <components/esm3/esmreader.hpp>
 #include <components/loadinglistener/loadinglistener.hpp>
 #include <components/translation/translation.hpp>
 
@@ -206,7 +207,10 @@ namespace MWNull
         void clear() override {}
 
         void write(ESM::ESMWriter& writer, Loading::Listener& progress) override {}
-        void readRecord(ESM::ESMReader& reader, uint32_t type) override {}
+        // The dedicated server has no GUI state to restore, but must still consume the records the
+        // real WindowManager owns (REC_GMAP/KEYS/ASPL/MARK) so a save written by a rendering client
+        // loads without leaving unread bytes in the stream.
+        void readRecord(ESM::ESMReader& reader, uint32_t /*type*/) override { reader.skipRecord(); }
         size_t countSavedGameRecords() const override { return 0; }
 
         bool isSavingAllowed() const override { return false; }

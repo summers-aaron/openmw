@@ -9,6 +9,8 @@
 
 #include "../mwbase/inputmanager.hpp"
 
+#include <components/esm3/esmreader.hpp>
+
 namespace MWNull
 {
     /// \brief No-op InputManager for headless dedicated-server builds.
@@ -67,7 +69,9 @@ namespace MWNull
 
         size_t countSavedGameRecords() const override { return 0; }
         void write(ESM::ESMWriter& writer, Loading::Listener& progress) override {}
-        void readRecord(ESM::ESMReader& reader, uint32_t type) override {}
+        // The dedicated server discards input state, but must still consume the REC_INPU record so a
+        // save written by a rendering client loads without leaving unread bytes in the stream.
+        void readRecord(ESM::ESMReader& reader, uint32_t /*type*/) override { reader.skipRecord(); }
 
         void resetIdleTime() override {}
         bool isIdle() const override { return false; }
