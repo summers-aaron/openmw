@@ -69,6 +69,17 @@ namespace MWNet
         friend bool operator==(const AppearanceState&, const AppearanceState&) = default;
     };
 
+    /// One worn item: the inventory slot it occupies (MWWorld::InventoryStore slot
+    /// index) and the item record's stable serialized-text RefId. Like appearance,
+    /// the item records are shared content, so only their identities cross the wire.
+    struct EquipmentSlot
+    {
+        std::uint8_t mSlot;
+        std::string mItem;
+
+        friend bool operator==(const EquipmentSlot&, const EquipmentSlot&) = default;
+    };
+
     /// One entity's contribution to a delta. mId is the persistent global
     /// reference identity (the same RefNum used for save games and the cell
     /// graph). A field is present iff it changed since the last sent snapshot.
@@ -85,6 +96,11 @@ namespace MWNet
         // the occasional ticks that re-advertise it (it rarely changes), and only for
         // a peer's own player entity — a receiver needs it once to build the avatar.
         std::optional<AppearanceState> mAppearance;
+        // The avatar's worn items. Like appearance, re-advertised on the occasional
+        // refresh tick. Present (even if empty — meaning "wearing nothing") is an
+        // authoritative full list the receiver reconciles its avatar's equipment to;
+        // absent means "no update, leave equipment as is".
+        std::optional<std::vector<EquipmentSlot>> mEquipment;
 
         friend bool operator==(const EntityState&, const EntityState&) = default;
     };

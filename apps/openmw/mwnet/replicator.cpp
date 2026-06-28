@@ -1,5 +1,6 @@
 #include "replicator.hpp"
 
+#include <array>
 #include <limits>
 #include <vector>
 
@@ -19,7 +20,9 @@
 #include "../mwworld/cellref.hpp"
 #include "../mwworld/cellstore.hpp"
 #include "../mwworld/class.hpp"
+#include "../mwworld/containerstore.hpp"
 #include "../mwworld/esmstore.hpp"
+#include "../mwworld/inventorystore.hpp"
 #include "../mwworld/manualref.hpp"
 #include "../mwworld/ptr.hpp"
 #include "../mwworld/refdata.hpp"
@@ -67,6 +70,64 @@ namespace MWNet
             npc.mNpdt.mSkills.fill(50);
             npc.mNpdt.mHealth = npc.mNpdt.mMana = npc.mNpdt.mFatigue = 1000;
             return npc;
+        }
+
+        // Read which items an NPC/avatar has worn, as (slot, stable-text item RefId) pairs.
+        // Empty list for an inventory-less actor (it just won't drive any equipment).
+        std::optional<std::vector<EquipmentSlot>> sampleEquipment(const MWWorld::Ptr& actor)
+        {
+            if (!actor.getClass().hasInventoryStore(actor))
+                return std::nullopt;
+            const MWWorld::InventoryStore& inv = actor.getClass().getInventoryStore(actor);
+            std::vector<EquipmentSlot> worn;
+            for (int slot = 0; slot < MWWorld::InventoryStore::Slots; ++slot)
+            {
+                const auto it = inv.getSlot(slot);
+                if (it == inv.end())
+                    continue;
+                worn.push_back(
+                    EquipmentSlot{ static_cast<std::uint8_t>(slot), it->getCellRef().getRefId().serializeText() });
+            }
+            return worn;
+        }
+
+        // Reconcile an avatar's worn items to the authoritative list from the wire: equip what
+        // differs, unequip what's no longer worn. Items are shared content, so each is added to
+        // the avatar's inventory by RefId on demand. equip()/unequipSlot() fire the inventory
+        // listener, so NpcAnimation rebuilds the visible mesh automatically.
+        void applyEquipment(const MWWorld::Ptr& avatar, const std::vector<EquipmentSlot>& equipment)
+        {
+            if (!avatar.getClass().hasInventoryStore(avatar))
+                return;
+            MWWorld::InventoryStore& inv = avatar.getClass().getInventoryStore(avatar);
+
+            std::array<ESM::RefId, MWWorld::InventoryStore::Slots> desired;
+            for (const EquipmentSlot& worn : equipment)
+                if (worn.mSlot < MWWorld::InventoryStore::Slots)
+                    desired[worn.mSlot] = ESM::RefId::deserializeText(worn.mItem);
+
+            for (int slot = 0; slot < MWWorld::InventoryStore::Slots; ++slot)
+            {
+                const auto current = inv.getSlot(slot);
+                const ESM::RefId currentId
+                    = current != inv.end() ? current->getCellRef().getRefId() : ESM::RefId();
+                if (currentId == desired[slot])
+                    continue; // already matches — nothing to change in this slot
+                if (current != inv.end())
+                    inv.unequipSlot(slot);
+                if (desired[slot].empty())
+                    continue;
+                try
+                {
+                    MWWorld::ManualRef itemRef(*MWBase::Environment::get().getESMStore(), desired[slot]);
+                    const auto added = inv.add(itemRef.getPtr(), 1, /*allowAutoEquip=*/false);
+                    inv.equip(slot, added);
+                }
+                catch (const std::exception&)
+                {
+                    continue; // unknown/invalid item id from the wire — skip this slot
+                }
+            }
         }
 
         // Drive an applied actor's walk/idle animation from the motion it's about to make.
@@ -155,10 +216,11 @@ namespace MWNet
 
         const auto include = [&](const ESM::RefNum& id, const TransformState& transform,
                                  std::optional<DynamicStats> stats, std::optional<std::uint8_t> drawState,
-                                 std::optional<AppearanceState> appearance = std::nullopt) {
-            // Appearance is deliberately outside the dedup key: it is only ever passed on
-            // full-refresh ticks (which always resend anyway), so it never perturbs the
-            // change detection that decides whether to emit transform/stats at all.
+                                 std::optional<AppearanceState> appearance = std::nullopt,
+                                 std::optional<std::vector<EquipmentSlot>> equipment = std::nullopt) {
+            // Appearance and equipment are deliberately outside the dedup key: they are only
+            // ever passed on full-refresh ticks (which always resend anyway), so they never
+            // perturb the change detection that decides whether to emit transform/stats at all.
             SentState current{ transform, stats, drawState };
             const auto [it, inserted] = mLastSent.try_emplace(id, current);
             if (!inserted)
@@ -173,6 +235,7 @@ namespace MWNet
             entity.mStats = stats;
             entity.mDrawState = drawState;
             entity.mAppearance = appearance;
+            entity.mEquipment = std::move(equipment);
             delta.mEntities.push_back(entity);
         };
 
@@ -193,10 +256,14 @@ namespace MWNet
             self.mTransform = TransformState{ pos.asVec3(), osg::Vec3f(pos.rot[0], pos.rot[1], pos.rot[2]) };
             self.mStats = sampleStats(player);
             self.mDrawState = sampleDrawState(player);
-            // Re-advertise our body identity occasionally so late-joining peers can build
-            // our avatar; it barely changes, so once per full-refresh interval is plenty.
+            // Re-advertise our body identity and worn items occasionally so late-joining peers
+            // can build/dress our avatar; they barely change, so once per full-refresh interval
+            // is plenty (equip changes show within that interval).
             if (fullSnapshot)
+            {
                 self.mAppearance = sampleAppearance(player);
+                self.mEquipment = sampleEquipment(player);
+            }
             delta.mEntities.push_back(self);
         }
 
@@ -240,7 +307,8 @@ namespace MWNet
                 include(netId,
                     TransformState{ pos.asVec3(), osg::Vec3f(pos.rot[0], pos.rot[1], pos.rot[2]) },
                     sampleStats(avatar), sampleDrawState(avatar),
-                    fullSnapshot ? sampleAppearance(avatar) : std::nullopt);
+                    fullSnapshot ? sampleAppearance(avatar) : std::nullopt,
+                    fullSnapshot ? sampleEquipment(avatar) : std::nullopt);
             }
         }
 
@@ -307,6 +375,8 @@ namespace MWNet
                     applyStats(avatar, *entity.mStats);
                 if (entity.mDrawState)
                     applyDrawState(avatar, *entity.mDrawState);
+                if (entity.mEquipment)
+                    applyEquipment(avatar, *entity.mEquipment);
                 ++applied;
                 continue;
             }

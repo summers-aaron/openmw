@@ -14,7 +14,12 @@ namespace MWNet
         constexpr std::uint8_t sFieldStats = 1 << 1;
         constexpr std::uint8_t sFieldDrawState = 1 << 2;
         constexpr std::uint8_t sFieldAppearance = 1 << 3;
-        constexpr std::uint8_t sKnownFields = sFieldTransform | sFieldStats | sFieldDrawState | sFieldAppearance;
+        constexpr std::uint8_t sFieldEquipment = 1 << 4;
+        constexpr std::uint8_t sKnownFields
+            = sFieldTransform | sFieldStats | sFieldDrawState | sFieldAppearance | sFieldEquipment;
+
+        // Smallest possible encoded equipment entry: slot (1) + a zero-length item string (4).
+        constexpr std::uint32_t sMinEquipmentBytes = 5;
 
         // Smallest possible encoded entity: RefNum (4 + 4) + field mask (1).
         constexpr std::uint32_t sMinEntityBytes = 9;
@@ -43,6 +48,8 @@ namespace MWNet
                 fieldMask |= sFieldDrawState;
             if (entity.mAppearance)
                 fieldMask |= sFieldAppearance;
+            if (entity.mEquipment)
+                fieldMask |= sFieldEquipment;
             writer.write(fieldMask);
 
             if (entity.mTransform)
@@ -68,6 +75,15 @@ namespace MWNet
                 writer.writeString(entity.mAppearance->mClass);
                 writer.writeString(entity.mAppearance->mName);
                 writer.write(static_cast<std::uint8_t>(entity.mAppearance->mIsMale ? 1 : 0));
+            }
+            if (entity.mEquipment)
+            {
+                writer.write(static_cast<std::uint32_t>(entity.mEquipment->size()));
+                for (const EquipmentSlot& worn : *entity.mEquipment)
+                {
+                    writer.write(worn.mSlot);
+                    writer.writeString(worn.mItem);
+                }
             }
         }
 
@@ -143,6 +159,25 @@ namespace MWNet
                     return std::nullopt;
                 appearance.mIsMale = isMale != 0;
                 entity.mAppearance = appearance;
+            }
+            if (fieldMask & sFieldEquipment)
+            {
+                std::uint32_t wornCount = 0;
+                if (!reader.read(wornCount))
+                    return std::nullopt;
+                // Bound the allocation/loop against the remaining buffer before reserving.
+                if (wornCount > reader.remaining() / sMinEquipmentBytes)
+                    return std::nullopt;
+                std::vector<EquipmentSlot> equipment;
+                equipment.reserve(wornCount);
+                for (std::uint32_t w = 0; w < wornCount; ++w)
+                {
+                    EquipmentSlot worn;
+                    if (!reader.read(worn.mSlot) || !reader.readString(worn.mItem))
+                        return std::nullopt;
+                    equipment.push_back(std::move(worn));
+                }
+                entity.mEquipment = std::move(equipment);
             }
 
             delta.mEntities.push_back(entity);
