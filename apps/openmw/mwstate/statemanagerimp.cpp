@@ -537,6 +537,7 @@ void MWState::StateManager::loadGame(const Character* character, const std::file
                 case ESM::REC_WEAP:
                 case ESM::REC_GLOB:
                 case ESM::REC_PLAY:
+                case ESM::REC_PLAYER_EXTRA:
                 case ESM::REC_CSTA:
                 case ESM::REC_WTHR:
                 case ESM::REC_DYNA:

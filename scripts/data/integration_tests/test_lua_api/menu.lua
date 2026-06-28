@@ -53,6 +53,23 @@ testing.registerMenuTest('load while teleporting', function()
     menu.deleteGame(' - 1', 'load_while_teleporting.omwsave')
 end)
 
+testing.registerMenuTest('multiplayer persistence', function()
+    menu.newGame()
+    coroutine.yield()
+
+    testing.runGlobalTest('multiplayer persistence - add player')
+
+    menu.saveGame('multiplayer persistence')
+    coroutine.yield()
+
+    menu.loadGame(' - 1', 'multiplayer_persistence.omwsave')
+    coroutine.yield()
+
+    testing.runGlobalTest('multiplayer persistence - check players')
+
+    menu.deleteGame(' - 1', 'multiplayer_persistence.omwsave')
+end)
+
 local function registerGlobalTest(name, description)
    testing.registerMenuTest(description or name, function()
        menu.newGame()

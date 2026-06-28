@@ -328,6 +328,16 @@ testing.registerGlobalTest('multiplayer add and remove players', function()
     testing.expectEqual(ok, false, 'removing the primary player should fail')
 end)
 
+testing.registerGlobalTest('multiplayer persistence - add player', function()
+    testing.expectEqual(#world.players, 1, 'should start with a single player')
+    world.addPlayer()
+    testing.expectEqual(#world.players, 2, 'should have two players before saving')
+end)
+
+testing.registerGlobalTest('multiplayer persistence - check players', function()
+    testing.expectEqual(#world.players, 2, 'both players should still be present after reload')
+end)
+
 local function registerPlayerTest(name)
     testing.registerGlobalTest(name, function()
         local player = initPlayer()

@@ -65,6 +65,12 @@ namespace MWWorld
         mPlayers.erase(mPlayers.begin() + index);
     }
 
+    void Players::keepOnlyPrimary()
+    {
+        while (mPlayers.size() > 1)
+            remove(mPlayers.size() - 1);
+    }
+
     Player& Players::append(const ESM::NPC* record, std::size_t index)
     {
         auto& player = mPlayers.emplace_back(std::make_unique<Player>(record, makePlayerRefId(index)));

@@ -422,6 +422,10 @@ namespace MWLua
             throw std::logic_error("Player is initialized twice");
         mObjectLists.objectAddedToScene(ptr);
         mObjectLists.setPlayer(ptr);
+        // Re-expose any additional (non-primary) players restored from a save in world.players.
+        MWBase::World* world = MWBase::Environment::get().getWorld();
+        for (std::size_t i = 1; i < world->getPlayerCount(); ++i)
+            mObjectLists.addPlayer(world->getPlayerPtr(i));
         mPlayer = ptr;
         LocalScripts* localScripts = ptr.getRefData().getLuaScripts();
         if (!localScripts)

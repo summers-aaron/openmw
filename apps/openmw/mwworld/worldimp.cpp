@@ -365,6 +365,7 @@ namespace MWWorld
 
         if (!mPlayers.empty())
         {
+            mPlayers.keepOnlyPrimary();
             mPlayers.primary().clear();
             mPlayers.primary().set(mStore.get<ESM::NPC>().find(ESM::RefId::stringRefId("Player")));
         }

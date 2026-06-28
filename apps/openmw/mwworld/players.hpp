@@ -74,6 +74,9 @@ namespace MWWorld
 
         /// Remove a non-primary player by index. The primary player (index 0) cannot be removed.
         void remove(std::size_t index);
+
+        /// Drop all non-primary players (e.g. when starting or loading a new game).
+        void keepOnlyPrimary();
     };
 }
 
