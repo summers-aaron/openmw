@@ -278,7 +278,11 @@ void MWState::StateManager::saveGame(std::string_view description, const Slot* s
         for (const std::string& contentFile : MWBase::Environment::get().getWorld()->getContentFiles())
             writer.addMaster(contentFile, 0); // not using the size information anyway -> use value of 0
 
-        writer.setFormatVersion(ESM::CurrentSaveGameFormatVersion);
+        // Single-player saves keep the older format version for backwards compatibility; only
+        // bump it when the save actually carries more than one player (REC_PLAYER_EXTRA records).
+        writer.setFormatVersion(MWBase::Environment::get().getWorld()->getPlayerCount() > 1
+                ? ESM::CurrentSaveGameFormatVersion
+                : ESM::MaxSinglePlayerFormatVersion);
 
         // all unused
         writer.setVersion(0);

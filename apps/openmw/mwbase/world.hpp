@@ -159,6 +159,13 @@ namespace MWBase
         virtual MWWorld::Player& getPlayer(std::size_t index) = 0;
         virtual MWWorld::Ptr getPlayerPtr(std::size_t index) = 0;
 
+        /// Spawn an additional (non-primary) player at the primary player's cell/position and
+        /// register it with the world. Returns the new player's Ptr. Note: the new player is not
+        /// yet wired into rendering/physics/input/AI; it exists as a model actor only.
+        virtual MWWorld::Ptr addPlayer() = 0;
+        /// Remove a non-primary player by index (index 0, the primary player, cannot be removed).
+        virtual void removePlayer(std::size_t index) = 0;
+
         virtual MWWorld::ESMStore& getStore() = 0;
         virtual const MWWorld::ESMStore& getStore() const = 0;
 

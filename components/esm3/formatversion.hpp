@@ -31,7 +31,10 @@ namespace ESM
     inline constexpr FormatVersion MaxActorIdSaveGameFormatVersion = 34;
     inline constexpr FormatVersion MaxSerializeEffectRefIdFormatVersion = 35;
     inline constexpr FormatVersion MaxLuaScriptPathFormatVersion = 36;
-    inline constexpr FormatVersion CurrentSaveGameFormatVersion = 37;
+    // Saves with a single player stay at this version so older engines can still read them;
+    // only saves that actually contain more than one player are stamped with the newer version.
+    inline constexpr FormatVersion MaxSinglePlayerFormatVersion = 37;
+    inline constexpr FormatVersion CurrentSaveGameFormatVersion = 38;
 
     inline constexpr FormatVersion MinSupportedSaveGameFormatVersion = 5;
     inline constexpr FormatVersion OpenMW0_49MinSaveGameFormatVersion = 5;

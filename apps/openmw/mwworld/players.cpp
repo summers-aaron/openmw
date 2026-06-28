@@ -50,6 +50,21 @@ namespace MWWorld
         return get(index);
     }
 
+    Player& Players::addPlayer(const ESM::NPC* record)
+    {
+        return append(record, mPlayers.size());
+    }
+
+    void Players::remove(std::size_t index)
+    {
+        if (index == sPrimaryIndex)
+            throw std::out_of_range("Players::remove: the primary player cannot be removed");
+        if (index >= mPlayers.size())
+            throw std::out_of_range("Players::remove: no player with the requested index");
+        mPlayerRefs.erase(mPlayers[index]->getConstPlayer().mRef);
+        mPlayers.erase(mPlayers.begin() + index);
+    }
+
     Player& Players::append(const ESM::NPC* record, std::size_t index)
     {
         auto& player = mPlayers.emplace_back(std::make_unique<Player>(record, makePlayerRefId(index)));

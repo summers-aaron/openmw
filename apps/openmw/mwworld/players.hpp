@@ -67,6 +67,13 @@ namespace MWWorld
         /// slots from the supplied base NPC record with distinct RefIds, and return it. Used when
         /// loading REC_PLAYER_EXTRA records from a save.
         Player& loadExtra(std::size_t index, const ESM::NPC* record);
+
+        /// Append a new (non-primary) player built from the base NPC record and return it. The
+        /// caller is responsible for placing it in a cell and registering it with the WorldModel.
+        Player& addPlayer(const ESM::NPC* record);
+
+        /// Remove a non-primary player by index. The primary player (index 0) cannot be removed.
+        void remove(std::size_t index);
     };
 }
 

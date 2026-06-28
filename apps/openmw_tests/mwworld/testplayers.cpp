@@ -82,6 +82,39 @@ namespace MWWorld
                 players.get(2).getConstPlayer().getCellRef().getRefId());
         }
 
+        TEST(MWWorldPlayersTest, addPlayerAppendsAndRemoveDropsNonPrimary)
+        {
+            MWClass::Npc::registerSelf();
+            ESM::NPC npc = makePlayerRecord();
+            ESMStore store;
+            store.insert(npc);
+
+            Players players;
+            players.setupPrimary(&npc);
+
+            Player& second = players.addPlayer(&npc);
+            EXPECT_EQ(players.size(), 2u);
+            EXPECT_TRUE(players.isPlayer(second.getConstPlayer()));
+
+            const MWWorld::LiveCellRefBase* secondRef = second.getConstPlayer().mRef;
+            players.remove(1);
+            EXPECT_EQ(players.size(), 1u);
+            // The removed player is no longer recognised by the registry.
+            EXPECT_FALSE(players.isPlayer(ConstPtr(secondRef)));
+        }
+
+        TEST(MWWorldPlayersTest, removeRejectsThePrimaryPlayer)
+        {
+            MWClass::Npc::registerSelf();
+            ESM::NPC npc = makePlayerRecord();
+            ESMStore store;
+            store.insert(npc);
+
+            Players players;
+            players.setupPrimary(&npc);
+            EXPECT_THROW(players.remove(0), std::out_of_range);
+        }
+
         TEST(MWWorldPlayersTest, getThrowsForOutOfRangeIndex)
         {
             MWClass::Npc::registerSelf();

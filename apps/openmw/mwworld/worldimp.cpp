@@ -3480,6 +3480,29 @@ namespace MWWorld
         return mPlayers.get(index).getPlayer();
     }
 
+    MWWorld::Ptr World::addPlayer()
+    {
+        const ESM::NPC* record = mStore.get<ESM::NPC>().find(ESM::RefId::stringRefId("Player"));
+        MWWorld::Player& player = mPlayers.addPlayer(record);
+
+        // Place the new player where the primary player is, so it has a valid cell to be saved in.
+        const MWWorld::Ptr primary = mPlayers.primary().getPlayer();
+        player.setCell(primary.getCell());
+
+        MWWorld::Ptr ptr = player.getPlayer();
+        ptr.getRefData().setPosition(primary.getRefData().getPosition());
+        mWorldModel.registerPtr(ptr);
+        return ptr;
+    }
+
+    void World::removePlayer(std::size_t index)
+    {
+        if (index == MWWorld::Players::sPrimaryIndex)
+            throw std::out_of_range("World::removePlayer: the primary player cannot be removed");
+        mWorldModel.deregisterLiveCellRef(*mPlayers.get(index).getPlayer().getBase());
+        mPlayers.remove(index);
+    }
+
     void World::updateDialogueGlobals()
     {
         MWWorld::Ptr player = getPlayerPtr();
