@@ -35,6 +35,10 @@ namespace MWWorld
         // (Player::clear()/readRecord() rebuild the ref in place, keeping its address stable).
         std::unordered_set<const LiveCellRefBase*> mPlayerRefs;
 
+        // Construct a Player from the base NPC record at the given index (with a matching RefId),
+        // append it, and register its ref for the isPlayer() test.
+        Player& append(const ESM::NPC* record, std::size_t index);
+
     public:
         static constexpr std::size_t sPrimaryIndex = 0;
 
@@ -58,6 +62,11 @@ namespace MWWorld
         /// Create (or, if one already exists, leave in place) the primary player from an NPC
         /// record and return it. Use Player::set() to re-point an existing primary player.
         Player& setupPrimary(const ESM::NPC* record);
+
+        /// Ensure a (non-primary) player slot exists at the given index, creating any missing
+        /// slots from the supplied base NPC record with distinct RefIds, and return it. Used when
+        /// loading REC_PLAYER_EXTRA records from a save.
+        Player& loadExtra(std::size_t index, const ESM::NPC* record);
     };
 }
 

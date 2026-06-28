@@ -1,12 +1,25 @@
 #include "players.hpp"
 
 #include <stdexcept>
+#include <string>
+
+#include <components/esm/refid.hpp>
 
 #include "player.hpp"
 #include "ptr.hpp"
 
 namespace MWWorld
 {
+    namespace
+    {
+        ESM::RefId makePlayerRefId(std::size_t index)
+        {
+            if (index == 0)
+                return Player::getPrimaryRefId();
+            return ESM::RefId::stringRefId("Player" + std::to_string(index));
+        }
+    }
+
     Players::Players() = default;
 
     Players::~Players() = default;
@@ -26,12 +39,23 @@ namespace MWWorld
     Player& Players::setupPrimary(const ESM::NPC* record)
     {
         if (mPlayers.empty())
-        {
-            auto& player = mPlayers.emplace_back(std::make_unique<Player>(record));
-            // The player's LiveCellRef address is stable for the lifetime of the Player object,
-            // so it is safe to record it once here for the isPlayer() membership test.
-            mPlayerRefs.insert(player->getConstPlayer().mRef);
-        }
+            append(record, sPrimaryIndex);
         return primary();
+    }
+
+    Player& Players::loadExtra(std::size_t index, const ESM::NPC* record)
+    {
+        while (mPlayers.size() <= index)
+            append(record, mPlayers.size());
+        return get(index);
+    }
+
+    Player& Players::append(const ESM::NPC* record, std::size_t index)
+    {
+        auto& player = mPlayers.emplace_back(std::make_unique<Player>(record, makePlayerRefId(index)));
+        // The player's LiveCellRef address is stable for the lifetime of the Player object,
+        // so it is safe to record it once here for the isPlayer() membership test.
+        mPlayerRefs.insert(player->getConstPlayer().mRef);
+        return *player;
     }
 }

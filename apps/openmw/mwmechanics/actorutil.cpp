@@ -18,6 +18,16 @@ namespace MWMechanics
         return MWBase::Environment::get().getWorld()->getPlayerPtr();
     }
 
+    MWWorld::Ptr getPlayer(std::size_t index)
+    {
+        return MWBase::Environment::get().getWorld()->getPlayerPtr(index);
+    }
+
+    std::size_t getPlayerCount()
+    {
+        return MWBase::Environment::get().getWorld()->getPlayerCount();
+    }
+
     bool isPlayer(const MWWorld::ConstPtr& ptr)
     {
         return MWBase::Environment::get().getWorld()->isPlayer(ptr);

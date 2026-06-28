@@ -385,7 +385,7 @@ namespace MWWorld
     {
         return mWorldModel.countSavedGameRecords() + mStore.countSavedGameRecords()
             + mGlobalVariables.countSavedGameRecords() + mProjectileManager->countSavedGameRecords()
-            + 1 // player record
+            + getPlayerCount() // player records (REC_PLAY for the primary, REC_PLAYER_EXTRA for the rest)
             + 1 // weather record
             + 1 // levitation/teleport enabled state
             + 1 // camera
@@ -412,7 +412,10 @@ namespace MWWorld
         mStore.write(writer, progress); // dynamic Store must be written (and read) before Cells, so that
                                         // references to custom made records will be recognized
         mWorldModel.write(writer, progress); // the player's cell needs to be loaded before the player
-        mPlayers.primary().write(writer, progress);
+        // The primary player (index 0) is written first as REC_PLAY; any additional players follow
+        // as REC_PLAYER_EXTRA records. With a single player this is byte-identical to before.
+        for (std::size_t i = 0; i < mPlayers.size(); ++i)
+            mPlayers.get(i).write(writer, progress, i);
         mGlobalVariables.write(writer, progress);
         mWeatherManager->write(writer, progress);
         mProjectileManager->write(writer, progress);
@@ -454,6 +457,16 @@ namespace MWWorld
                 mStore.checkPlayer();
                 mPlayers.primary().readRecord(reader, type);
                 break;
+            case ESM::REC_PLAYER_EXTRA:
+            {
+                // Additional players always follow the primary REC_PLAY in the stream, so the id
+                // index and player setup are already in place by the time we get here.
+                uint32_t index = 0;
+                reader.getHNT(index, "PLIX");
+                const ESM::NPC* playerNpc = mStore.get<ESM::NPC>().find(ESM::RefId::stringRefId("Player"));
+                mPlayers.loadExtra(index, playerNpc).readRecord(reader, type);
+                break;
+            }
             case ESM::REC_CSTA:
                 // We need to rebuild the ESMStore index in order to be able to lookup dynamic records while loading the
                 // WorldModel and, afterwards, the player.
@@ -3450,6 +3463,21 @@ namespace MWWorld
     bool World::isPlayer(const MWWorld::ConstPtr& ptr) const
     {
         return mPlayers.isPlayer(ptr);
+    }
+
+    std::size_t World::getPlayerCount() const
+    {
+        return mPlayers.size();
+    }
+
+    MWWorld::Player& World::getPlayer(std::size_t index)
+    {
+        return mPlayers.get(index);
+    }
+
+    MWWorld::Ptr World::getPlayerPtr(std::size_t index)
+    {
+        return mPlayers.get(index).getPlayer();
     }
 
     void World::updateDialogueGlobals()

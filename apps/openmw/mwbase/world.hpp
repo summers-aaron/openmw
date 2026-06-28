@@ -153,6 +153,12 @@ namespace MWBase
         /// hardcoded "player" RefId, so it remains correct once multiple players exist.
         virtual bool isPlayer(const MWWorld::ConstPtr& ptr) const = 0;
 
+        /// Number of players currently in the world (>= 1; the zero-arg accessors above
+        /// always refer to the primary player, index 0).
+        virtual std::size_t getPlayerCount() const = 0;
+        virtual MWWorld::Player& getPlayer(std::size_t index) = 0;
+        virtual MWWorld::Ptr getPlayerPtr(std::size_t index) = 0;
+
         virtual MWWorld::ESMStore& getStore() = 0;
         virtual const MWWorld::ESMStore& getStore() const = 0;
 

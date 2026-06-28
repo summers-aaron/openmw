@@ -240,6 +240,10 @@ namespace MWWorld
 
         bool isPlayer(const MWWorld::ConstPtr& ptr) const override;
 
+        std::size_t getPlayerCount() const override;
+        MWWorld::Player& getPlayer(std::size_t index) override;
+        MWWorld::Ptr getPlayerPtr(std::size_t index) override;
+
         MWWorld::ESMStore& getStore() override { return mStore; }
 
         const MWWorld::ESMStore& getStore() const override { return mStore; }

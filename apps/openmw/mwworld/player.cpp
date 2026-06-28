@@ -39,17 +39,23 @@ namespace MWWorld
 {
     namespace
     {
-        ESM::CellRef makePlayerCellRef()
+        ESM::CellRef makePlayerCellRef(const ESM::RefId& playerId)
         {
             ESM::CellRef result;
             result.blank();
-            result.mRefID = ESM::RefId::stringRefId("Player");
+            result.mRefID = playerId;
             return result;
         }
     }
 
-    Player::Player(const ESM::NPC* player)
-        : mPlayer(makePlayerCellRef(), player)
+    ESM::RefId Player::getPrimaryRefId()
+    {
+        return ESM::RefId::stringRefId("Player");
+    }
+
+    Player::Player(const ESM::NPC* player, ESM::RefId playerId)
+        : mPlayer(makePlayerCellRef(playerId), player)
+        , mPlayerId(playerId)
         , mCellStore(nullptr)
         , mLastKnownExteriorPosition(0, 0, 0)
         , mMarkedPosition(ESM::Position())
@@ -254,7 +260,7 @@ namespace MWWorld
     {
         ESM::CellRef cellRef;
         cellRef.blank();
-        cellRef.mRefID = ESM::RefId::stringRefId("Player");
+        cellRef.mRefID = mPlayerId;
         cellRef.mRefNum = mPlayer.mRef.getRefNum();
         mPlayer = LiveCellRef<ESM::NPC>(cellRef, mPlayer.mBase);
         mCellStore = nullptr;
@@ -278,7 +284,7 @@ namespace MWWorld
         mMarkedPosition.rot[2] = 0;
     }
 
-    void Player::write(ESM::ESMWriter& writer, Loading::Listener& progress) const
+    void Player::write(ESM::ESMWriter& writer, Loading::Listener& progress, std::size_t index) const
     {
         ESM::Player player;
 
@@ -310,14 +316,29 @@ namespace MWWorld
 
         player.mPreviousItems = mPreviousItems;
 
-        writer.startRecord(ESM::REC_PLAY);
-        player.save(writer);
-        writer.endRecord(ESM::REC_PLAY);
+        // The primary player (index 0) is stored as the historical REC_PLAY record, so saves with
+        // a single player remain byte-identical. Additional players are stored as REC_PLAYER_EXTRA
+        // records carrying their index; World reads that index back to route the record.
+        if (index == 0)
+        {
+            writer.startRecord(ESM::REC_PLAY);
+            player.save(writer);
+            writer.endRecord(ESM::REC_PLAY);
+        }
+        else
+        {
+            writer.startRecord(ESM::REC_PLAYER_EXTRA);
+            writer.writeHNT("PLIX", static_cast<uint32_t>(index));
+            player.save(writer);
+            writer.endRecord(ESM::REC_PLAYER_EXTRA);
+        }
     }
 
     bool Player::readRecord(ESM::ESMReader& reader, uint32_t type)
     {
-        if (type == ESM::REC_PLAY)
+        // REC_PLAYER_EXTRA carries a leading PLIX index that World consumes for routing before
+        // calling this; the remaining payload is identical to a REC_PLAY record.
+        if (type == ESM::REC_PLAY || type == ESM::REC_PLAYER_EXTRA)
         {
             ESM::Player player;
             player.load(reader);

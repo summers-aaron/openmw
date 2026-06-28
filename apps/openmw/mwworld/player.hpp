@@ -2,6 +2,7 @@
 #define GAME_MWWORLD_PLAYER_H
 
 #include <array>
+#include <cstddef>
 #include <map>
 
 #include "../mwworld/livecellref.hpp"
@@ -33,6 +34,9 @@ namespace MWWorld
     class Player
     {
         LiveCellRef<ESM::NPC> mPlayer;
+        // RefId of this player's reference. The primary player keeps the historical "Player" id;
+        // additional players use distinct ids so they do not collide in the world model.
+        ESM::RefId mPlayerId;
         MWWorld::CellStore* mCellStore;
         ESM::RefId mSign;
 
@@ -57,7 +61,10 @@ namespace MWWorld
         bool mJumping;
 
     public:
-        Player(const ESM::NPC* player);
+        /// The default RefId of the primary player.
+        static ESM::RefId getPrimaryRefId();
+
+        Player(const ESM::NPC* player, ESM::RefId playerId = getPrimaryRefId());
 
         void saveStats();
         void restoreStats();
@@ -106,7 +113,7 @@ namespace MWWorld
 
         void clear();
 
-        void write(ESM::ESMWriter& writer, Loading::Listener& progress) const;
+        void write(ESM::ESMWriter& writer, Loading::Listener& progress, std::size_t index) const;
 
         bool readRecord(ESM::ESMReader& reader, uint32_t type);
 
