@@ -314,6 +314,20 @@ testing.registerGlobalTest('record model property', function()
     testing.expectEqual(types.NPC.record(player).model, 'meshes/basicplayer.dae')
 end)
 
+testing.registerGlobalTest('multiplayer add and remove players', function()
+    testing.expectEqual(#world.players, 1, 'should start with a single player')
+
+    local extra = world.addPlayer()
+    testing.expectEqual(extra == nil, false, 'addPlayer should return an object')
+    testing.expectEqual(#world.players, 2, 'world.players should list two players after addPlayer')
+
+    world.removePlayer(extra)
+    testing.expectEqual(#world.players, 1, 'world.players should be back to one after removePlayer')
+
+    local ok = pcall(function() world.removePlayer(world.players[1]) end)
+    testing.expectEqual(ok, false, 'removing the primary player should fail')
+end)
+
 local function registerPlayerTest(name)
     testing.registerGlobalTest(name, function()
         local player = initPlayer()
