@@ -102,6 +102,32 @@ namespace MWNet
             EXPECT_FALSE(parsed->mEntities[1].mAppearance->mIsMale);
         }
 
+        TEST(MWNetSnapshotTest, equipmentRoundTrips)
+        {
+            SnapshotDelta delta;
+            EntityState dressed = makeEntity(20, -1000, makeTransform(2.f));
+            dressed.mEquipment = std::vector<EquipmentSlot>{
+                EquipmentSlot{ 1, "iron_cuirass" }, // Slot_Cuirass
+                EquipmentSlot{ 16, "iron_longsword" }, // Slot_CarriedRight
+            };
+            delta.mEntities.push_back(dressed);
+            // An explicit empty list ("wearing nothing") must round-trip distinct from absent.
+            EntityState naked = makeEntity(21, -1000, std::nullopt);
+            naked.mEquipment = std::vector<EquipmentSlot>{};
+            delta.mEntities.push_back(naked);
+
+            const std::optional<SnapshotDelta> parsed = deserializeSnapshot(serializeSnapshot(delta));
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(*parsed, delta);
+            ASSERT_EQ(parsed->mEntities.size(), 2u);
+            ASSERT_TRUE(parsed->mEntities[0].mEquipment.has_value());
+            ASSERT_EQ(parsed->mEntities[0].mEquipment->size(), 2u);
+            EXPECT_EQ((*parsed->mEntities[0].mEquipment)[0].mSlot, 1u);
+            EXPECT_EQ((*parsed->mEntities[0].mEquipment)[1].mItem, "iron_longsword");
+            ASSERT_TRUE(parsed->mEntities[1].mEquipment.has_value());
+            EXPECT_TRUE(parsed->mEntities[1].mEquipment->empty());
+        }
+
         TEST(MWNetSnapshotTest, rejectsEmptyBuffer)
         {
             EXPECT_FALSE(deserializeSnapshot(std::span<const std::byte>{}).has_value());
