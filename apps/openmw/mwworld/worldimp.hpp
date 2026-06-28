@@ -17,6 +17,7 @@
 #include "globals.hpp"
 #include "groundcoverstore.hpp"
 #include "localscripts.hpp"
+#include "players.hpp"
 #include "ptr.hpp"
 #include "scene.hpp"
 #include "timestamp.hpp"
@@ -98,7 +99,7 @@ namespace MWWorld
 
         std::string mCurrentWorldSpace;
 
-        std::unique_ptr<MWWorld::Player> mPlayer;
+        MWWorld::Players mPlayers;
         std::unique_ptr<MWPhysics::PhysicsSystem> mPhysics;
         std::unique_ptr<DetourNavigator::Navigator> mNavigator;
         std::unique_ptr<MWRender::RenderingManager> mRendering;
@@ -236,6 +237,8 @@ namespace MWWorld
         Player& getPlayer() override;
         MWWorld::Ptr getPlayerPtr() override;
         MWWorld::ConstPtr getPlayerConstPtr() const override;
+
+        bool isPlayer(const MWWorld::ConstPtr& ptr) const override;
 
         MWWorld::ESMStore& getStore() override { return mStore; }
 

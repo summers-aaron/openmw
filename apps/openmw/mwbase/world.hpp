@@ -149,6 +149,10 @@ namespace MWBase
         virtual MWWorld::Ptr getPlayerPtr() = 0;
         virtual MWWorld::ConstPtr getPlayerConstPtr() const = 0;
 
+        /// Is the given object one of the players? Identity test that does not rely on the
+        /// hardcoded "player" RefId, so it remains correct once multiple players exist.
+        virtual bool isPlayer(const MWWorld::ConstPtr& ptr) const = 0;
+
         virtual MWWorld::ESMStore& getStore() = 0;
         virtual const MWWorld::ESMStore& getStore() const = 0;
 

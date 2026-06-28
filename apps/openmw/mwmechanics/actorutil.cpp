@@ -18,6 +18,11 @@ namespace MWMechanics
         return MWBase::Environment::get().getWorld()->getPlayerPtr();
     }
 
+    bool isPlayer(const MWWorld::ConstPtr& ptr)
+    {
+        return MWBase::Environment::get().getWorld()->isPlayer(ptr);
+    }
+
     bool isPlayerInCombat()
     {
         return MWBase::Environment::get().getWorld()->getPlayer().isInCombat();
