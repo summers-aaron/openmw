@@ -1941,7 +1941,7 @@ namespace MWMechanics
         if (npcStats.isWerewolf() == werewolf)
             return;
 
-        MWWorld::Player* player = &MWBase::Environment::get().getWorld()->getPlayer();
+        MWBase::World* world = MWBase::Environment::get().getWorld();
 
         // Werewolfs can not cast spells, so we need to unset the prepared spell if there is one.
         if (npcStats.getDrawState() == MWMechanics::DrawState::Spell)
@@ -1963,33 +1963,45 @@ namespace MWMechanics
             inv.ContainerStore::remove(ESM::RefId::stringRefId("werewolfrobe"), 1);
         }
 
-        if (actor == player->getPlayer())
+        if (world->isPlayer(actor))
         {
-            MWBase::Environment::get().getWorld()->reattachPlayerCamera();
+            const bool isLocalPlayer = (actor == world->getPlayerPtr());
+            MWWorld::Player& transformingPlayer = world->getPlayer(actor);
 
-            // Update the GUI only when called on the player
-            MWBase::WindowManager* windowManager = MWBase::Environment::get().getWindowManager();
+            if (isLocalPlayer)
+                world->reattachPlayerCamera();
 
             // Transforming removes all temporary effects
             actor.getClass().getCreatureStats(actor).getActiveSpells().purge(
                 [](const auto& params) { return params.hasFlag(ESM::ActiveSpells::Flag_Temporary); }, actor);
             mActors.updateActor(actor, 0.f);
 
+            // Save/restore the transforming player's pre-werewolf stats on its own player slot.
             if (werewolf)
             {
-                player->saveStats();
-                player->setWerewolfStats();
-                windowManager->forceHide(MWGui::GW_Inventory);
-                windowManager->forceHide(MWGui::GW_Magic);
+                transformingPlayer.saveStats();
+                transformingPlayer.setWerewolfStats();
             }
             else
-            {
-                player->restoreStats();
-                windowManager->unsetForceHide(MWGui::GW_Inventory);
-                windowManager->unsetForceHide(MWGui::GW_Magic);
-            }
+                transformingPlayer.restoreStats();
 
-            windowManager->setWerewolfOverlay(werewolf);
+            // Update the GUI only when called on the local (primary) player.
+            MWBase::WindowManager* windowManager = MWBase::Environment::get().getWindowManager();
+            if (isLocalPlayer)
+            {
+                if (werewolf)
+                {
+                    windowManager->forceHide(MWGui::GW_Inventory);
+                    windowManager->forceHide(MWGui::GW_Magic);
+                }
+                else
+                {
+                    windowManager->unsetForceHide(MWGui::GW_Inventory);
+                    windowManager->unsetForceHide(MWGui::GW_Magic);
+                }
+
+                windowManager->setWerewolfOverlay(werewolf);
+            }
 
             // Witnesses of the player's transformation will make them a globally known werewolf
             std::vector<MWWorld::Ptr> neighbors;
@@ -2004,7 +2016,7 @@ namespace MWMechanics
                 if (neighbor == actor || !neighbor.getClass().isNpc())
                     continue;
 
-                if (MWBase::Environment::get().getWorld()->getLOS(neighbor, actor) && awarenessCheck(actor, neighbor))
+                if (world->getLOS(neighbor, actor) && awarenessCheck(actor, neighbor))
                 {
                     detected = true;
                     if (neighbor.getClass()
@@ -2021,8 +2033,9 @@ namespace MWMechanics
 
             if (detected)
             {
-                windowManager->messageBox("#{sWerewolfAlarmMessage}");
-                MWBase::Environment::get().getWorld()->setGlobalInt(MWWorld::Globals::sPCKnownWerewolf, 1);
+                if (isLocalPlayer)
+                    windowManager->messageBox("#{sWerewolfAlarmMessage}");
+                world->setGlobalInt(MWWorld::Globals::sPCKnownWerewolf, 1);
 
                 if (reported)
                 {

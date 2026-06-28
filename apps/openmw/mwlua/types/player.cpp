@@ -115,7 +115,7 @@ namespace MWLua
 {
     static void verifyPlayer(const Object& player)
     {
-        if (player.ptr() != MWBase::Environment::get().getWorld()->getPlayerPtr())
+        if (!MWBase::Environment::get().getWorld()->isPlayer(player.ptr()))
             throw std::runtime_error("The argument must be a player!");
     }
 
@@ -433,7 +433,7 @@ namespace MWLua
             const MWWorld::Class& cls = o.ptr().getClass();
             cls.getNpcStats(o.ptr()).setBounty(amount);
             if (amount == 0)
-                MWBase::Environment::get().getWorld()->getPlayer().recordCrimeId();
+                MWBase::Environment::get().getWorld()->getPlayer(o.ptr()).recordCrimeId();
         };
         player["isCharGenFinished"] = [](const Object&) -> bool {
             return MWBase::Environment::get().getWorld()->getGlobalFloat(MWWorld::Globals::sCharGenState) == -1;
@@ -472,13 +472,13 @@ namespace MWLua
         player["birthSigns"] = initBirthSignRecordBindings(context);
         player["getBirthSign"] = [](const Object& object) -> std::string {
             verifyPlayer(object);
-            return MWBase::Environment::get().getWorld()->getPlayer().getBirthSign().serializeText();
+            return MWBase::Environment::get().getWorld()->getPlayer(object.ptr()).getBirthSign().serializeText();
         };
         player["setBirthSign"] = [](const Object& object, const sol::object& recordOrId) {
             verifyPlayer(object);
             if (!object.isGObject())
                 throw std::runtime_error("Only global scripts can change birth signs");
-            MWBase::Environment::get().getWorld()->getPlayer().setBirthSign(toBirthSignId(recordOrId));
+            MWBase::Environment::get().getWorld()->getPlayer(object.ptr()).setBirthSign(toBirthSignId(recordOrId));
         };
     }
 }

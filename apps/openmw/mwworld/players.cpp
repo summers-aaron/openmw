@@ -36,6 +36,16 @@ namespace MWWorld
         return ptr.mRef != nullptr && mPlayerRefs.find(ptr.mRef) != mPlayerRefs.end();
     }
 
+    Player* Players::findPlayer(const ConstPtr& ptr)
+    {
+        if (!isPlayer(ptr))
+            return nullptr;
+        for (auto& player : mPlayers)
+            if (player->getConstPlayer().mRef == ptr.mRef)
+                return player.get();
+        return nullptr;
+    }
+
     Player& Players::setupPrimary(const ESM::NPC* record)
     {
         if (mPlayers.empty())

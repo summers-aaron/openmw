@@ -243,6 +243,7 @@ namespace MWWorld
         std::size_t getPlayerCount() const override;
         MWWorld::Player& getPlayer(std::size_t index) override;
         MWWorld::Ptr getPlayerPtr(std::size_t index) override;
+        MWWorld::Player& getPlayer(const MWWorld::ConstPtr& ptr) override;
         MWWorld::Ptr addPlayer() override;
         MWWorld::Ptr addPlayer(MWWorld::CellStore& cell, const ESM::Position& position) override;
         void removePlayer(std::size_t index) override;

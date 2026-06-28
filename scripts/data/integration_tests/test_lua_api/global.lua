@@ -338,6 +338,29 @@ testing.registerGlobalTest('multiplayer persistence - check players', function()
     testing.expectEqual(#world.players, 2, 'both players should still be present after reload')
 end)
 
+testing.registerGlobalTest('per-player stats are independent', function()
+    local p1 = world.players[1]
+    local p2 = world.addPlayer()
+    coroutine.yield()
+    testing.expectEqual(#world.players, 2, 'two players expected')
+
+    -- Birthsign is stored per player (only the player it is set on changes).
+    local signs = types.Player.birthSigns.records
+    if #signs >= 1 then
+        types.Player.setBirthSign(p1, signs[1])
+        testing.expectEqual(types.Player.getBirthSign(p1), signs[1].id, 'player 1 keeps its birthsign')
+        testing.expectEqual(types.Player.getBirthSign(p2), '', 'player 2 birthsign is independent (still unset)')
+    end
+
+    -- Bounty / crime level is stored per player.
+    types.Player.setCrimeLevel(p1, 100)
+    types.Player.setCrimeLevel(p2, 5)
+    testing.expectEqual(types.Player.getCrimeLevel(p1), 100, 'player 1 bounty')
+    testing.expectEqual(types.Player.getCrimeLevel(p2), 5, 'player 2 bounty is independent')
+
+    world.removePlayer(p2)
+end)
+
 testing.registerGlobalTest('multiplayer simulates extra player cell', function()
     local primary = world.players[1]
     primary:teleport('', util.vector3(4096, 4096, 1745), util.transform.identity)

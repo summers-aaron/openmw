@@ -95,6 +95,7 @@ registerGlobalTest('nan float', 'world.setGameTimeScale should not accept nan')
 registerGlobalTest('nan vector', 'weather.stormDirection should not accept a vector with a nan component')
 registerGlobalTest('load script generated static')
 registerGlobalTest('multiplayer add and remove players')
+registerGlobalTest('per-player stats are independent')
 registerGlobalTest('multiplayer simulates extra player cell')
 
 registerGlobalTest('player yaw rotation', 'rotating player with controls.yawChange should change rotation')

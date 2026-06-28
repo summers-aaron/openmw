@@ -3481,6 +3481,14 @@ namespace MWWorld
         return mPlayers.get(index).getPlayer();
     }
 
+    MWWorld::Player& World::getPlayer(const MWWorld::ConstPtr& ptr)
+    {
+        MWWorld::Player* player = mPlayers.findPlayer(ptr);
+        if (player == nullptr)
+            throw std::runtime_error("getPlayer: object is not a player");
+        return *player;
+    }
+
     MWWorld::Ptr World::addPlayer()
     {
         // Place the new player where the primary player is, so it has a valid cell to be saved in.

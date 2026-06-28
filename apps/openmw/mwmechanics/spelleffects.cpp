@@ -201,9 +201,9 @@ namespace
         if (newItem.isEmpty() || boundPtr != newItem)
             return false;
 
-        if (actor == MWMechanics::getPlayer())
+        if (MWBase::Environment::get().getWorld()->isPlayer(actor))
         {
-            MWWorld::Player& player = MWBase::Environment::get().getWorld()->getPlayer();
+            MWWorld::Player& player = MWBase::Environment::get().getWorld()->getPlayer(actor);
 
             // change draw state only if the item is in player's right hand
             if (slot == MWWorld::InventoryStore::Slot_CarriedRight)
@@ -234,7 +234,7 @@ namespace
         else
             store.remove(itemId, 1);
 
-        if (actor != MWMechanics::getPlayer())
+        if (!MWBase::Environment::get().getWorld()->isPlayer(actor))
         {
             // Equip a replacement
             if (!wasEquipped)
@@ -258,7 +258,7 @@ namespace
             return;
         }
 
-        MWWorld::Player& player = MWBase::Environment::get().getWorld()->getPlayer();
+        MWWorld::Player& player = MWBase::Environment::get().getWorld()->getPlayer(actor);
         ESM::RefId prevItemId = player.getPreviousItem(itemId);
         player.erasePreviousItem(itemId);
 
@@ -496,23 +496,23 @@ namespace MWMechanics
             }
             else if (effect.mEffectId == ESM::MagicEffect::Mark)
             {
-                if (target != getPlayer())
+                if (!world->isPlayer(target))
                     return ESM::ActiveEffect::Flag_Invalid;
                 else if (world->isTeleportingEnabled())
-                    world->getPlayer().markPosition(target.getCell(), target.getRefData().getPosition());
+                    world->getPlayer(target).markPosition(target.getCell(), target.getRefData().getPosition());
                 else if (caster == getPlayer())
                     MWBase::Environment::get().getWindowManager()->messageBox("#{sTeleportDisabled}");
             }
             else if (effect.mEffectId == ESM::MagicEffect::Recall)
             {
-                if (target != getPlayer())
+                if (!world->isPlayer(target))
                     return ESM::ActiveEffect::Flag_Invalid;
                 else if (world->isTeleportingEnabled())
                 {
                     MWWorld::CellStore* markedCell = nullptr;
                     ESM::Position markedPosition;
 
-                    world->getPlayer().getMarkedPosition(markedCell, markedPosition);
+                    world->getPlayer(target).getMarkedPosition(markedCell, markedPosition);
                     if (markedCell)
                     {
                         ESM::RefId dest = markedCell->getCell()->getId();

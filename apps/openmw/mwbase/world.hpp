@@ -158,6 +158,9 @@ namespace MWBase
         virtual std::size_t getPlayerCount() const = 0;
         virtual MWWorld::Player& getPlayer(std::size_t index) = 0;
         virtual MWWorld::Ptr getPlayerPtr(std::size_t index) = 0;
+        /// The Player wrapper for the given object. Throws if it is not one of the players;
+        /// guard with isPlayer() first.
+        virtual MWWorld::Player& getPlayer(const MWWorld::ConstPtr& ptr) = 0;
 
         /// Spawn an additional (non-primary) player at the primary player's cell/position and
         /// register it with the world. Returns the new player's Ptr. Note: the new player is not

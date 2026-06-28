@@ -59,6 +59,9 @@ namespace MWWorld
         /// hardcoded "player" RefId, so it remains correct once multiple players exist.
         bool isPlayer(const ConstPtr& ptr) const;
 
+        /// The Player wrapper for the given object, or nullptr if it is not one of the players.
+        Player* findPlayer(const ConstPtr& ptr);
+
         /// Create (or, if one already exists, leave in place) the primary player from an NPC
         /// record and return it. Use Player::set() to re-point an existing primary player.
         Player& setupPrimary(const ESM::NPC* record);
