@@ -7,13 +7,14 @@ namespace MWNet
     namespace
     {
         // Wire format version. Bumped if the layout below changes incompatibly.
-        constexpr std::uint8_t sVersion = 1;
+        constexpr std::uint8_t sVersion = 2;
 
         // EntityState field bits (mFieldMask).
         constexpr std::uint8_t sFieldTransform = 1 << 0;
         constexpr std::uint8_t sFieldStats = 1 << 1;
         constexpr std::uint8_t sFieldDrawState = 1 << 2;
-        constexpr std::uint8_t sKnownFields = sFieldTransform | sFieldStats | sFieldDrawState;
+        constexpr std::uint8_t sFieldAppearance = 1 << 3;
+        constexpr std::uint8_t sKnownFields = sFieldTransform | sFieldStats | sFieldDrawState | sFieldAppearance;
 
         // Smallest possible encoded entity: RefNum (4 + 4) + field mask (1).
         constexpr std::uint32_t sMinEntityBytes = 9;
@@ -40,6 +41,8 @@ namespace MWNet
                 fieldMask |= sFieldStats;
             if (entity.mDrawState)
                 fieldMask |= sFieldDrawState;
+            if (entity.mAppearance)
+                fieldMask |= sFieldAppearance;
             writer.write(fieldMask);
 
             if (entity.mTransform)
@@ -57,6 +60,15 @@ namespace MWNet
             }
             if (entity.mDrawState)
                 writer.write(*entity.mDrawState);
+            if (entity.mAppearance)
+            {
+                writer.writeString(entity.mAppearance->mRace);
+                writer.writeString(entity.mAppearance->mHead);
+                writer.writeString(entity.mAppearance->mHair);
+                writer.writeString(entity.mAppearance->mClass);
+                writer.writeString(entity.mAppearance->mName);
+                writer.write(static_cast<std::uint8_t>(entity.mAppearance->mIsMale ? 1 : 0));
+            }
         }
 
         return out;
@@ -120,6 +132,17 @@ namespace MWNet
                 if (!reader.read(drawState))
                     return std::nullopt;
                 entity.mDrawState = drawState;
+            }
+            if (fieldMask & sFieldAppearance)
+            {
+                AppearanceState appearance;
+                std::uint8_t isMale = 0;
+                if (!reader.readString(appearance.mRace) || !reader.readString(appearance.mHead)
+                    || !reader.readString(appearance.mHair) || !reader.readString(appearance.mClass)
+                    || !reader.readString(appearance.mName) || !reader.read(isMale))
+                    return std::nullopt;
+                appearance.mIsMale = isMale != 0;
+                entity.mAppearance = appearance;
             }
 
             delta.mEntities.push_back(entity);

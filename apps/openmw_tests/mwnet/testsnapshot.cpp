@@ -80,6 +80,28 @@ namespace MWNet
             EXPECT_EQ(parsed->mEntities[1].mDrawState, std::uint8_t{ 2 });
         }
 
+        TEST(MWNetSnapshotTest, appearanceRoundTrips)
+        {
+            SnapshotDelta delta;
+            EntityState withAppearance = makeEntity(11, -1000, makeTransform(7.f));
+            withAppearance.mAppearance = AppearanceState{ "Dark Elf", "b_n_dark elf_m_head_01",
+                "b_n_dark elf_m_hair_01", "Acrobat", "Jiub", /*isMale=*/true };
+            delta.mEntities.push_back(withAppearance);
+            // An empty-string / female appearance must round-trip too.
+            EntityState minimal = makeEntity(12, -1000, std::nullopt);
+            minimal.mAppearance = AppearanceState{ "", "", "", "", "", /*isMale=*/false };
+            delta.mEntities.push_back(minimal);
+
+            const std::optional<SnapshotDelta> parsed = deserializeSnapshot(serializeSnapshot(delta));
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(*parsed, delta);
+            ASSERT_EQ(parsed->mEntities.size(), 2u);
+            ASSERT_TRUE(parsed->mEntities[0].mAppearance.has_value());
+            EXPECT_EQ(parsed->mEntities[0].mAppearance->mRace, "Dark Elf");
+            EXPECT_TRUE(parsed->mEntities[0].mAppearance->mIsMale);
+            EXPECT_FALSE(parsed->mEntities[1].mAppearance->mIsMale);
+        }
+
         TEST(MWNetSnapshotTest, rejectsEmptyBuffer)
         {
             EXPECT_FALSE(deserializeSnapshot(std::span<const std::byte>{}).has_value());

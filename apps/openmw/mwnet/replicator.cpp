@@ -5,6 +5,7 @@
 
 #include <components/debug/debuglog.hpp>
 #include <components/esm/refid.hpp>
+#include <components/esm3/loadnpc.hpp>
 
 #include "../mwbase/environment.hpp"
 #include "../mwbase/mechanicsmanager.hpp"
@@ -28,10 +29,45 @@ namespace MWNet
 {
     namespace
     {
-        // Placeholder body other peers' players are shown as. A real per-player
-        // appearance (race/equipment) is a later step; "rat" is a record guaranteed
-        // to exist in Morrowind data so instantiation can never fail on a missing id.
-        constexpr std::string_view sAvatarRecord = "rat";
+        // Read a player/avatar NPC's body identity for replication. Empty for a non-NPC
+        // (creatures keep the placeholder path). The RefIds are serialized as stable text
+        // so they round-trip to the same content records on the receiving peer.
+        std::optional<AppearanceState> sampleAppearance(const MWWorld::Ptr& actor)
+        {
+            if (!actor.getClass().isNpc())
+                return std::nullopt;
+            const ESM::NPC* npc = actor.get<ESM::NPC>()->mBase;
+            AppearanceState appearance;
+            appearance.mRace = npc->mRace.serializeText();
+            appearance.mHead = npc->mHead.serializeText();
+            appearance.mHair = npc->mHair.serializeText();
+            appearance.mClass = npc->mClass.serializeText();
+            appearance.mName = npc->mName;
+            appearance.mIsMale = npc->isMale();
+            return appearance;
+        }
+
+        // Build a throwaway NPC record matching a peer's appearance, to instantiate as
+        // its avatar. Stats are set generously (not autocalc) so a freshly placed avatar
+        // is alive and full — the owner's real current health/magicka/fatigue then arrive
+        // via DynamicStats and clamp into this envelope. Appearance RefIds come straight
+        // from the wire; they resolve against the shared content store on this peer.
+        ESM::NPC buildAvatarRecord(const AppearanceState& appearance)
+        {
+            ESM::NPC npc;
+            npc.blank();
+            npc.mRace = ESM::RefId::deserializeText(appearance.mRace);
+            npc.mHead = ESM::RefId::deserializeText(appearance.mHead);
+            npc.mHair = ESM::RefId::deserializeText(appearance.mHair);
+            npc.mClass = ESM::RefId::deserializeText(appearance.mClass);
+            npc.mName = appearance.mName;
+            npc.setIsMale(appearance.mIsMale);
+            npc.mNpdt.mLevel = 1;
+            npc.mNpdt.mAttributes.fill(100);
+            npc.mNpdt.mSkills.fill(50);
+            npc.mNpdt.mHealth = npc.mNpdt.mMana = npc.mNpdt.mFatigue = 1000;
+            return npc;
+        }
 
         // Drive an applied actor's walk/idle animation from the motion it's about to make.
         // The mechanics animation pass (CharacterController::update) still runs for remote-owned
@@ -118,7 +154,11 @@ namespace MWNet
         const bool fullSnapshot = (delta.mTick % sFullSnapshotInterval) == 0;
 
         const auto include = [&](const ESM::RefNum& id, const TransformState& transform,
-                                 std::optional<DynamicStats> stats, std::optional<std::uint8_t> drawState) {
+                                 std::optional<DynamicStats> stats, std::optional<std::uint8_t> drawState,
+                                 std::optional<AppearanceState> appearance = std::nullopt) {
+            // Appearance is deliberately outside the dedup key: it is only ever passed on
+            // full-refresh ticks (which always resend anyway), so it never perturbs the
+            // change detection that decides whether to emit transform/stats at all.
             SentState current{ transform, stats, drawState };
             const auto [it, inserted] = mLastSent.try_emplace(id, current);
             if (!inserted)
@@ -132,6 +172,7 @@ namespace MWNet
             entity.mTransform = transform;
             entity.mStats = stats;
             entity.mDrawState = drawState;
+            entity.mAppearance = appearance;
             delta.mEntities.push_back(entity);
         };
 
@@ -152,6 +193,10 @@ namespace MWNet
             self.mTransform = TransformState{ pos.asVec3(), osg::Vec3f(pos.rot[0], pos.rot[1], pos.rot[2]) };
             self.mStats = sampleStats(player);
             self.mDrawState = sampleDrawState(player);
+            // Re-advertise our body identity occasionally so late-joining peers can build
+            // our avatar; it barely changes, so once per full-refresh interval is plenty.
+            if (fullSnapshot)
+                self.mAppearance = sampleAppearance(player);
             delta.mEntities.push_back(self);
         }
 
@@ -194,7 +239,8 @@ namespace MWNet
                 const ESM::Position& pos = avatar.getRefData().getPosition();
                 include(netId,
                     TransformState{ pos.asVec3(), osg::Vec3f(pos.rot[0], pos.rot[1], pos.rot[2]) },
-                    sampleStats(avatar), sampleDrawState(avatar));
+                    sampleStats(avatar), sampleDrawState(avatar),
+                    fullSnapshot ? sampleAppearance(avatar) : std::nullopt);
             }
         }
 
@@ -218,16 +264,27 @@ namespace MWNet
                 if (entity.mId == mLocalPlayerNetId)
                     continue;
 
+                // Remember the peer's body identity whenever it's (re-)advertised, so the
+                // avatar is built to match it the moment we can place one.
+                if (entity.mAppearance)
+                    mAppearances[entity.mId] = *entity.mAppearance;
+
                 auto found = mAvatars.find(entity.mId);
                 if (found == mAvatars.end())
                 {
+                    const auto appearance = mAppearances.find(entity.mId);
+                    if (appearance == mAppearances.end())
+                        continue; // appearance not received yet; wait for it before building the body
+
                     const MWWorld::Ptr localPlayer = world.getPlayerPtr();
                     if (localPlayer.isEmpty() || !localPlayer.isInCell())
                         continue; // need a cell to place the avatar in
                     try
                     {
-                        MWWorld::ManualRef ref(
-                            *MWBase::Environment::get().getESMStore(), ESM::RefId::stringRefId(sAvatarRecord));
+                        // Synthesize a humanoid NPC matching the peer and instantiate that, so the
+                        // avatar has the player's race/sex/head/hair instead of a placeholder body.
+                        const ESM::NPC* record = world.getStore().insert(buildAvatarRecord(appearance->second));
+                        MWWorld::ManualRef ref(world.getStore(), record->mId);
                         MWWorld::Ptr avatar
                             = world.placeObject(ref.getPtr(), localPlayer.getCell(), toPosition(*entity.mTransform));
                         avatar.getRefData().setRemoteOwned(true); // driven by the network, not local AI
