@@ -328,14 +328,45 @@ testing.registerGlobalTest('multiplayer add and remove players', function()
     testing.expectEqual(ok, false, 'removing the primary player should fail')
 end)
 
+-- The far cell holding the second player is derived deterministically from the primary's cell, so
+-- both the add and the post-reload check compute the same coordinates (the primary reloads at the
+-- same position). Global Lua state is reset on load, so nothing can be stashed across the reload.
+local function multiplayerFarCellGrid()
+    local c = world.players[1].cell
+    return c.gridX + 50, c.gridY + 50
+end
+
 testing.registerGlobalTest('multiplayer persistence - add player', function()
     testing.expectEqual(#world.players, 1, 'should start with a single player')
-    world.addPlayer()
+
+    world.players[1]:teleport('', util.vector3(4096, 4096, 1745), util.transform.identity)
+    coroutine.yield()
+
+    -- Put the second player (and a creature) in a cell far from the primary, so reloading must
+    -- re-activate that cell for the creature to be simulated again.
+    local fx, fy = multiplayerFarCellGrid()
+    local farCell = world.getExteriorCell(fx, fy)
+    local pos = util.vector3(fx * 8192 + 4096, fy * 8192 + 4096, 1000)
+    world.addPlayer(farCell, pos)
+    local creature = world.createObject('landracer')
+    creature:teleport(farCell, pos)
+    coroutine.yield()
     testing.expectEqual(#world.players, 2, 'should have two players before saving')
 end)
 
 testing.registerGlobalTest('multiplayer persistence - check players', function()
     testing.expectEqual(#world.players, 2, 'both players should still be present after reload')
+
+    -- The creature placed in the second player's far cell should be simulated again, proving the
+    -- cell was re-activated on load.
+    local fx, fy = multiplayerFarCellGrid()
+    local active = false
+    for _, a in ipairs(world.activeActors) do
+        if a.cell and a.cell.isExterior and a.cell.gridX == fx and a.cell.gridY == fy then
+            active = true
+        end
+    end
+    testing.expect(active, "the second player's cell should be re-activated after loading")
 end)
 
 testing.registerGlobalTest('per-player stats are independent', function()
@@ -343,6 +374,7 @@ testing.registerGlobalTest('per-player stats are independent', function()
     local p2 = world.addPlayer()
     coroutine.yield()
     testing.expectEqual(#world.players, 2, 'two players expected')
+    testing.expectEqual(tostring(p2.type), 'Player', 'an extra player is classified as the Player type')
 
     -- Birthsign is stored per player (only the player it is set on changes).
     local signs = types.Player.birthSigns.records
