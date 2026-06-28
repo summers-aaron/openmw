@@ -15,8 +15,9 @@ namespace MWNet
         constexpr std::uint8_t sFieldDrawState = 1 << 2;
         constexpr std::uint8_t sFieldAppearance = 1 << 3;
         constexpr std::uint8_t sFieldEquipment = 1 << 4;
-        constexpr std::uint8_t sKnownFields
-            = sFieldTransform | sFieldStats | sFieldDrawState | sFieldAppearance | sFieldEquipment;
+        constexpr std::uint8_t sFieldMoveFlags = 1 << 5;
+        constexpr std::uint8_t sKnownFields = sFieldTransform | sFieldStats | sFieldDrawState
+            | sFieldAppearance | sFieldEquipment | sFieldMoveFlags;
 
         // Smallest possible encoded equipment entry: slot (1) + a zero-length item string (4).
         constexpr std::uint32_t sMinEquipmentBytes = 5;
@@ -50,6 +51,8 @@ namespace MWNet
                 fieldMask |= sFieldAppearance;
             if (entity.mEquipment)
                 fieldMask |= sFieldEquipment;
+            if (entity.mMoveFlags)
+                fieldMask |= sFieldMoveFlags;
             writer.write(fieldMask);
 
             if (entity.mTransform)
@@ -67,6 +70,8 @@ namespace MWNet
             }
             if (entity.mDrawState)
                 writer.write(*entity.mDrawState);
+            if (entity.mMoveFlags)
+                writer.write(*entity.mMoveFlags);
             if (entity.mAppearance)
             {
                 writer.writeString(entity.mAppearance->mRace);
@@ -148,6 +153,13 @@ namespace MWNet
                 if (!reader.read(drawState))
                     return std::nullopt;
                 entity.mDrawState = drawState;
+            }
+            if (fieldMask & sFieldMoveFlags)
+            {
+                std::uint8_t moveFlags = 0;
+                if (!reader.read(moveFlags))
+                    return std::nullopt;
+                entity.mMoveFlags = moveFlags;
             }
             if (fieldMask & sFieldAppearance)
             {

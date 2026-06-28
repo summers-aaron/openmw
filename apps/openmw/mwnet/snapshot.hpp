@@ -92,6 +92,10 @@ namespace MWNet
         // 1 weapon, 2 spell. Replicated so a remote actor visibly draws its weapon and adopts a
         // combat stance — the first slice of animation-state replication.
         std::optional<std::uint8_t> mDrawState;
+        // The actor's run/sneak stance as a bit set (bit 0 run, bit 1 sneak). A
+        // high-frequency field like the transform: it selects the run/sneak vs walk
+        // animation variants, so a remote avatar moves in the gait its owner chose.
+        std::optional<std::uint8_t> mMoveFlags;
         // The avatar's body identity (race/sex/head/hair/class/name). Present only on
         // the occasional ticks that re-advertise it (it rarely changes), and only for
         // a peer's own player entity — a receiver needs it once to build the avatar.
