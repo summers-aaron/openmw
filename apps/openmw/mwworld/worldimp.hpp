@@ -244,6 +244,7 @@ namespace MWWorld
         MWWorld::Player& getPlayer(std::size_t index) override;
         MWWorld::Ptr getPlayerPtr(std::size_t index) override;
         MWWorld::Ptr addPlayer() override;
+        MWWorld::Ptr addPlayer(MWWorld::CellStore& cell, const ESM::Position& position) override;
         void removePlayer(std::size_t index) override;
 
         MWWorld::ESMStore& getStore() override { return mStore; }

@@ -16,10 +16,13 @@
 -- @field [parent=#world] openmw.core#ObjectList players
 
 ---
--- Create an additional player at the primary player's position and add it to @{#world.players}.
--- The new player exists as a model actor only; it is not yet wired into rendering, physics,
--- input or AI. Can be used only in global scripts.
+-- Create an additional player and add it to @{#world.players}. With no arguments the player is
+-- placed at the primary player's position; given a cell and position it is placed there and that
+-- cell is loaded and kept active so the player's surroundings are simulated. The new player exists
+-- as a model actor only; it is not yet wired into rendering, physics or input. Global scripts only.
 -- @function [parent=#world] addPlayer
+-- @param openmw.core#Cell cell (optional) cell to place the new player in
+-- @param openmw.util#Vector3 position (optional) position within the cell
 -- @return openmw.core#GameObject
 
 ---

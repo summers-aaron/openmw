@@ -16,8 +16,11 @@
 #include <components/esm3/loadspel.hpp>
 #include <components/esm3/loadstat.hpp>
 #include <components/esm3/loadweap.hpp>
+#include <components/esm/position.hpp>
 #include <components/lua/luastate.hpp>
 #include <components/misc/finitevalues.hpp>
+
+#include <cstring>
 
 #include "../mwbase/environment.hpp"
 #include "../mwbase/mechanicsmanager.hpp"
@@ -166,9 +169,20 @@ namespace MWLua
         api["activeActors"] = GObjectList{ objectLists->getActorsInScene() };
         api["players"] = GObjectList{ objectLists->getPlayers() };
 
-        api["addPlayer"] = [lua = context.mLua, objectLists]() -> GObject {
+        api["addPlayer"]
+            = [lua = context.mLua, objectLists](sol::optional<GCell> cell, sol::optional<osg::Vec3f> position) -> GObject {
             checkGameInitialized(lua);
-            MWWorld::Ptr ptr = MWBase::Environment::get().getWorld()->addPlayer();
+            MWBase::World* world = MWBase::Environment::get().getWorld();
+            MWWorld::Ptr ptr;
+            if (cell.has_value() && position.has_value())
+            {
+                ESM::Position pos{};
+                std::memcpy(pos.pos, &position.value(), sizeof(osg::Vec3f));
+                pos.rot[0] = pos.rot[1] = pos.rot[2] = 0;
+                ptr = world->addPlayer(*cell->mStore, pos);
+            }
+            else
+                ptr = world->addPlayer();
             objectLists->addPlayer(ptr);
             return GObject(ptr);
         };

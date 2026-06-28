@@ -140,6 +140,9 @@ namespace MWWorld
         void loadCell(CellStore& cell, Loading::Listener* loadingListener, bool respawn, const osg::Vec3f& position,
             const DetourNavigator::UpdateGuard* navigatorUpdateGuard);
 
+        // True if a non-primary player currently occupies this cell, so it must stay loaded.
+        bool isCellOccupiedByNonPrimaryPlayer(const CellStore* cell) const;
+
     public:
         Scene(MWWorld::World& world, MWRender::RenderingManager& rendering, MWPhysics::PhysicsSystem* physics,
             DetourNavigator::Navigator& navigator);
@@ -151,6 +154,9 @@ namespace MWWorld
         void playerMoved(const osg::Vec3f& pos);
 
         void changePlayerCell(CellStore& newCell, const ESM::Position& position, bool adjustPlayerPos);
+
+        // Load and keep active the cell that a newly added non-primary player occupies.
+        void addExtraPlayer(const MWWorld::Ptr& player);
 
         CellStore* getCurrentCell();
 

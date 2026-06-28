@@ -338,6 +338,40 @@ testing.registerGlobalTest('multiplayer persistence - check players', function()
     testing.expectEqual(#world.players, 2, 'both players should still be present after reload')
 end)
 
+testing.registerGlobalTest('multiplayer simulates extra player cell', function()
+    local primary = world.players[1]
+    primary:teleport('', util.vector3(4096, 4096, 1745), util.transform.identity)
+    coroutine.yield()
+    testing.expect(primary.cell.isExterior, 'primary must be in an exterior cell')
+
+    -- A cell far outside the primary player's active grid.
+    local fx, fy = primary.cell.gridX + 50, primary.cell.gridY + 50
+    local farCell = world.getExteriorCell(fx, fy)
+    local pos = util.vector3(fx * 8192 + 4096, fy * 8192 + 4096, 1000)
+
+    local creature = world.createObject('landracer')
+    creature:teleport(farCell, pos)
+    coroutine.yield()
+
+    local function isActive(obj)
+        for _, a in ipairs(world.activeActors) do
+            if a == obj then return true end
+        end
+        return false
+    end
+
+    testing.expect(not isActive(creature), 'a creature in a distant cell is not simulated without a player there')
+
+    local extra = world.addPlayer(farCell, pos)
+    testing.expectEqual(#world.players, 2, 'the extra player should have been added')
+    coroutine.yield()
+
+    testing.expect(isActive(creature), 'the creature should be simulated once a player occupies its cell')
+
+    world.removePlayer(extra)
+    creature:remove()
+end)
+
 local function registerPlayerTest(name)
     testing.registerGlobalTest(name, function()
         local player = initPlayer()

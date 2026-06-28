@@ -161,8 +161,11 @@ namespace MWBase
 
         /// Spawn an additional (non-primary) player at the primary player's cell/position and
         /// register it with the world. Returns the new player's Ptr. Note: the new player is not
-        /// yet wired into rendering/physics/input/AI; it exists as a model actor only.
+        /// yet wired into rendering/physics/input; it exists as a model actor only.
         virtual MWWorld::Ptr addPlayer() = 0;
+        /// As above, but place the new player in the given cell at the given position. The cell is
+        /// loaded and kept active so the player's surroundings are simulated.
+        virtual MWWorld::Ptr addPlayer(MWWorld::CellStore& cell, const ESM::Position& position) = 0;
         /// Remove a non-primary player by index (index 0, the primary player, cannot be removed).
         virtual void removePlayer(std::size_t index) = 0;
 

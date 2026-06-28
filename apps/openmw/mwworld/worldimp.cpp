@@ -3483,16 +3483,23 @@ namespace MWWorld
 
     MWWorld::Ptr World::addPlayer()
     {
-        const ESM::NPC* record = mStore.get<ESM::NPC>().find(ESM::RefId::stringRefId("Player"));
-        MWWorld::Player& player = mPlayers.addPlayer(record);
-
         // Place the new player where the primary player is, so it has a valid cell to be saved in.
         const MWWorld::Ptr primary = mPlayers.primary().getPlayer();
-        player.setCell(primary.getCell());
+        return addPlayer(*primary.getCell(), primary.getRefData().getPosition());
+    }
+
+    MWWorld::Ptr World::addPlayer(MWWorld::CellStore& cell, const ESM::Position& position)
+    {
+        const ESM::NPC* record = mStore.get<ESM::NPC>().find(ESM::RefId::stringRefId("Player"));
+        MWWorld::Player& player = mPlayers.addPlayer(record);
+        player.setCell(&cell);
 
         MWWorld::Ptr ptr = player.getPlayer();
-        ptr.getRefData().setPosition(primary.getRefData().getPosition());
+        ptr.getRefData().setPosition(position);
         mWorldModel.registerPtr(ptr);
+
+        // Load and keep the player's cell active so the cell that this player occupies is simulated.
+        mWorldScene->addExtraPlayer(ptr);
         return ptr;
     }
 
