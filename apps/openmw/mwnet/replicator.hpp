@@ -66,6 +66,12 @@ namespace MWNet
         // The last swing received for each avatar, so the host relays the peer's ORIGINAL swing
         // (its own counter) to other clients rather than re-deriving one from its brief overlay.
         std::map<ESM::RefNum, std::optional<SwingState>> mAvatarSwing;
+        // The last locomotion (speed + gait flags) received for each avatar, relayed VERBATIM for the
+        // same reason as the swing: the avatar is a remote-driven puppet on the host, so re-sampling
+        // its own getCurrentSpeed/stance is unreliable — a stopped owner left the host puppet's
+        // speed factor non-zero, so downstream peers kept playing its walk cycle in place.
+        std::map<ESM::RefNum, std::optional<float>> mAvatarSpeed;
+        std::map<ESM::RefNum, std::optional<std::uint8_t>> mAvatarMoveFlags;
         // Per actor, the health last applied and the tick we last played a hit reaction, so a drop
         // in replicated health makes the victim flinch + grunt once per hit on this client (the
         // authoritative damage is applied directly, bypassing the onHit that would normally react).
@@ -114,13 +120,13 @@ namespace MWNet
         void setAuthority(bool value) { mIsAuthority = value; }
         bool isAuthority() const { return mIsAuthority; }
 
-        /// Report (from combat code on a client) that our player struck a host-owned actor
-        /// for a computed amount of damage. Queued for the host, which resolves it
-        /// authoritatively. healthDamage selects health vs fatigue.
-        void reportHit(ESM::RefNum victim, float damage, bool healthDamage)
-        {
-            mOutgoingHits.push_back({ mLocalPlayerNetId, victim, damage, healthDamage });
-        }
+        /// Report (from combat code on a client) that our player struck a host-resolved actor for a
+        /// computed amount of damage, queued for the host to apply authoritatively. The victim is
+        /// identified on the wire by its shared world RefNum if it is a host-owned actor, or — if it
+        /// is another peer's player avatar (a local-only ref the host can't resolve) — by that peer's
+        /// network id, so the host routes the damage to that player (PvP). healthDamage selects
+        /// health vs fatigue.
+        void reportHit(const MWWorld::Ptr& victim, float damage, bool healthDamage);
 
         /// Report (host only) that a host-owned actor dealt damage to a remote player's avatar,
         /// so the owning client can apply it to its real player. A no-op off the authority or if

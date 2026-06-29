@@ -21,6 +21,8 @@
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
 
+#include "../mwmechanics/aipackage.hpp"
+#include "../mwmechanics/aisequence.hpp"
 #include "../mwmechanics/character.hpp"
 #include "../mwmechanics/creaturestats.hpp"
 #include "../mwmechanics/drawstate.hpp"
@@ -84,6 +86,16 @@ namespace MWNet
             npc.mNpdt.mSkills.fill(50);
             npc.mNpdt.mHealth = npc.mNpdt.mMana = npc.mNpdt.mFatigue = 1000;
             return npc;
+        }
+
+        // Read the cell an actor occupies, as a stable serialized-text cell RefId (an
+        // interior's id or an exterior worldspace id), so a receiver can place its avatar in
+        // the same cell rather than guessing from a position alone. nullopt if not in a cell.
+        std::optional<std::string> sampleCellId(const MWWorld::Ptr& actor)
+        {
+            if (!actor.isInCell())
+                return std::nullopt;
+            return actor.getCell()->getCell()->getId().serializeText();
         }
 
         // Read which items an NPC/avatar has worn, as (slot, stable-text item RefId) pairs.
@@ -261,7 +273,8 @@ namespace MWNet
                                  std::optional<std::uint8_t> moveFlags, std::optional<SwingState> swing,
                                  std::optional<float> speed,
                                  std::optional<AppearanceState> appearance = std::nullopt,
-                                 std::optional<std::vector<EquipmentSlot>> equipment = std::nullopt) {
+                                 std::optional<std::vector<EquipmentSlot>> equipment = std::nullopt,
+                                 std::optional<std::string> cellId = std::nullopt) {
             // Appearance and equipment are deliberately outside the dedup key: they are only
             // ever passed on full-refresh ticks (which always resend anyway), so they never
             // perturb the change detection that decides whether to emit transform/stats at all.
@@ -285,6 +298,7 @@ namespace MWNet
             entity.mSpeed = speed;
             entity.mAppearance = appearance;
             entity.mEquipment = std::move(equipment);
+            entity.mCellId = std::move(cellId);
             delta.mEntities.push_back(entity);
         };
 
@@ -308,6 +322,10 @@ namespace MWNet
             self.mMoveFlags = sampleMoveFlags(player);
             self.mSwing = sampleSwing(player, mLocalPlayerNetId);
             self.mSpeed = sampleSpeed(player);
+            // Carry our cell every tick so peers place our avatar in the same cell we're in
+            // (and the host loads it to simulate its NPCs). It rides with the always-sent self
+            // entity rather than the occasional appearance refresh: cell changes must apply at once.
+            self.mCellId = sampleCellId(player);
             // Re-advertise our body identity and worn items occasionally so late-joining peers
             // can build/dress our avatar; they barely change, so once per full-refresh interval
             // is plenty (equip changes show within that interval).
@@ -357,16 +375,25 @@ namespace MWNet
                 if (avatar.isEmpty() || !avatar.isInCell())
                     continue;
                 const ESM::Position& pos = avatar.getRefData().getPosition();
-                // Relay the swing we RECEIVED for this peer (its original playhead), not a re-sample
-                // of our own short overlay on the avatar — that would drop the swing for downstream
-                // clients. Other fields are fine to re-sample (they were applied verbatim).
+                // Relay the discrete/locomotion state we RECEIVED for this peer (swing playhead, speed,
+                // gait flags), not a re-sample of the host puppet — re-sampling drops a brief swing and,
+                // because the puppet is network-driven, leaves a stopped peer's speed factor non-zero so
+                // downstream clients keep walking it in place. Stats/draw-state are safe to re-sample
+                // (applied verbatim).
                 const auto storedSwing = mAvatarSwing.find(netId);
+                const auto storedSpeed = mAvatarSpeed.find(netId);
+                const auto storedMoveFlags = mAvatarMoveFlags.find(netId);
                 include(netId,
                     TransformState{ pos.asVec3(), osg::Vec3f(pos.rot[0], pos.rot[1], pos.rot[2]) },
-                    sampleStats(avatar), sampleDrawState(avatar), sampleMoveFlags(avatar),
-                    storedSwing != mAvatarSwing.end() ? storedSwing->second : std::nullopt, sampleSpeed(avatar),
+                    sampleStats(avatar), sampleDrawState(avatar),
+                    storedMoveFlags != mAvatarMoveFlags.end() ? storedMoveFlags->second : std::nullopt,
+                    storedSwing != mAvatarSwing.end() ? storedSwing->second : std::nullopt,
+                    storedSpeed != mAvatarSpeed.end() ? storedSpeed->second : std::nullopt,
                     fullSnapshot ? sampleAppearance(avatar) : std::nullopt,
-                    fullSnapshot ? sampleEquipment(avatar) : std::nullopt);
+                    fullSnapshot ? sampleEquipment(avatar) : std::nullopt,
+                    // Relay the cell we placed the avatar in (kept correct on receipt below), so a
+                    // downstream client puts its copy in the same cell rather than the host's.
+                    sampleCellId(avatar));
             }
         }
 
@@ -616,6 +643,14 @@ namespace MWNet
                 if (entity.mAppearance)
                     mAppearances[entity.mId] = *entity.mAppearance;
 
+                // The cell the owner says it's in: place and keep the avatar there so it shares
+                // its owner's cell (interiors included), not whichever cell we happen to be in.
+                // Falls back to our own cell when the peer hasn't advertised one (older peers, or
+                // an exterior where a position would suffice) or it doesn't resolve here.
+                MWWorld::CellStore* targetCell = nullptr;
+                if (entity.mCellId)
+                    targetCell = worldModel.findCell(ESM::RefId::deserializeText(*entity.mCellId));
+
                 auto found = mAvatars.find(entity.mId);
                 if (found == mAvatars.end())
                 {
@@ -626,17 +661,33 @@ namespace MWNet
                     const MWWorld::Ptr localPlayer = world.getPlayerPtr();
                     if (localPlayer.isEmpty() || !localPlayer.isInCell())
                         continue; // need a cell to place the avatar in
+                    MWWorld::CellStore* cell = targetCell ? targetCell : localPlayer.getCell();
                     try
                     {
                         // Synthesize a humanoid NPC matching the peer and instantiate that, so the
                         // avatar has the player's race/sex/head/hair instead of a placeholder body.
                         const ESM::NPC* record = world.getStore().insert(buildAvatarRecord(appearance->second));
-                        MWWorld::ManualRef ref(world.getStore(), record->mId);
-                        MWWorld::Ptr avatar
-                            = world.placeObject(ref.getPtr(), localPlayer.getCell(), toPosition(*entity.mTransform));
+                        MWWorld::Ptr avatar;
+                        if (mIsAuthority)
+                            // On the authority the avatar IS a non-primary player: that makes the host
+                            // keep its cell loaded (cells another player occupies are not unloaded) and
+                            // run the AI of the NPCs around it, which sampleDelta then replicates back to
+                            // every peer. Built from the peer's record so the host relays its true look.
+                            avatar = world.addPlayer(*cell, toPosition(*entity.mTransform), record);
+                        else
+                        {
+                            // On a client the avatar is purely cosmetic (the client simulates nothing for
+                            // it), so a plain placed reference in the right cell is enough.
+                            MWWorld::ManualRef ref(world.getStore(), record->mId);
+                            avatar = world.placeObject(ref.getPtr(), cell, toPosition(*entity.mTransform));
+                        }
                         avatar.getRefData().setRemoteOwned(true); // driven by the network, not local AI
                         found = mAvatars.emplace(entity.mId, avatar).first;
-                        Log(Debug::Info) << "Instantiated avatar for remote player " << entity.mId.mIndex;
+                        const ESM::RefNum avRef = avatar.getCellRef().getRefNum();
+                        Log(Debug::Info) << "Instantiated avatar for remote player netId=" << entity.mId.mIndex
+                                         << " in cell " << cell->getCell()->getId() << " as refId="
+                                         << avatar.getCellRef().getRefId() << " refNum=(" << avRef.mIndex << ","
+                                         << avRef.mContentFile << ")";
                     }
                     catch (const std::exception&)
                     {
@@ -651,7 +702,22 @@ namespace MWNet
                     applyMoveFlags(avatar, *entity.mMoveFlags); // before record: maxSpeed depends on stance
                 recordMotion(entity.mId, avatar, entity.mTransform->mPosition, entity.mTransform->mRotation,
                     entity.mSpeed);
-                world.moveObject(avatar, entity.mTransform->mPosition);
+                // Move the avatar to the owner's reported position (and cell). On the authority the
+                // avatar is a player ref, so ALL of its movement — even within one cell — must go
+                // through placeNetworkPlayer, never moveObject: moveObject re-derives an exterior
+                // sub-cell from the position and would drag the player ref through the cell-ref
+                // machinery that strands it. On a client the avatar is an ordinary placed ref, so
+                // moveObject is correct (and carries it across cells when its owner does).
+                if (mIsAuthority)
+                {
+                    MWWorld::CellStore* dest = targetCell != nullptr ? targetCell : avatar.getCell();
+                    if (dest != nullptr)
+                        avatar = world.placeNetworkPlayer(avatar, *dest, entity.mTransform->mPosition);
+                }
+                else if (targetCell != nullptr && avatar.getCell() != targetCell)
+                    avatar = world.moveObject(avatar, targetCell, entity.mTransform->mPosition, true, true);
+                else
+                    world.moveObject(avatar, entity.mTransform->mPosition);
                 world.rotateObject(avatar, entity.mTransform->mRotation, MWBase::RotationFlag_none);
                 if (entity.mStats)
                 {
@@ -660,7 +726,11 @@ namespace MWNet
                 }
                 if (entity.mDrawState)
                     applyDrawState(avatar, *entity.mDrawState);
-                mAvatarSwing[entity.mId] = entity.mSwing; // remember it so the host can relay it on
+                // Remember the locomotion exactly as received so the host relays it on verbatim
+                // (re-sampling the host puppet's own speed/stance is unreliable — see the maps' note).
+                mAvatarSwing[entity.mId] = entity.mSwing;
+                mAvatarSpeed[entity.mId] = entity.mSpeed;
+                mAvatarMoveFlags[entity.mId] = entity.mMoveFlags;
                 if (entity.mSwing)
                     applySwing(avatar, entity.mId, *entity.mSwing);
                 else
@@ -710,15 +780,46 @@ namespace MWNet
 
         for (const CombatHit& hit : batch.mHits)
         {
+            // PvP: the victim is another peer's player (carried as a network id, not a world ref).
+            // Route the damage straight to that player — their client applies it to its real player,
+            // the same channel host-owned actors use. No world actor to aggro; players drive
+            // themselves. (A net-player id never collides with a real world RefNum.)
+            if (isNetPlayer(hit.mVictim))
+            {
+                mOutgoingPlayerDamages.push_back({ hit.mVictim, hit.mDamage, hit.mHealthDamage });
+                Log(Debug::Verbose) << "PvP hit: player " << hit.mAttacker.mIndex << " struck player "
+                                    << hit.mVictim.mIndex << " for " << hit.mDamage
+                                    << (hit.mHealthDamage ? " hp" : " fatigue");
+                continue;
+            }
+
             const MWWorld::Ptr victim = worldModel.getPtr(hit.mVictim);
             if (victim.isEmpty() || !victim.isInCell() || !victim.getClass().isActor())
+            {
+                Log(Debug::Info) << "applyActions: victim refNum=(" << hit.mVictim.mIndex << ","
+                                 << hit.mVictim.mContentFile << ") from netId=" << hit.mAttacker.mIndex
+                                 << " unresolved/not-in-cell/not-actor — hit dropped";
                 continue;
+            }
             const auto attackerAvatar = mAvatars.find(hit.mAttacker);
             if (attackerAvatar == mAvatars.end())
+            {
+                Log(Debug::Info) << "applyActions: no avatar yet for attacker netId=" << hit.mAttacker.mIndex
+                                 << " — hit dropped";
                 continue; // we don't have an avatar for this peer's player yet
+            }
             const MWWorld::Ptr& aggressor = attackerAvatar->second;
             if (aggressor.isEmpty() || !aggressor.isInCell())
+            {
+                Log(Debug::Info) << "applyActions: aggressor avatar for netId=" << hit.mAttacker.mIndex
+                                 << " empty/not-in-cell — hit dropped";
                 continue;
+            }
+            const ESM::RefNum agRef = aggressor.getCellRef().getRefNum();
+            Log(Debug::Info) << "applyActions: " << victim.getCellRef().getRefId() << " in cell "
+                             << victim.getCell()->getCell()->getId() << " hit by netId=" << hit.mAttacker.mIndex
+                             << " avatar refId=" << aggressor.getCellRef().getRefId() << " refNum=(" << agRef.mIndex
+                             << "," << agRef.mContentFile << ") in cell " << aggressor.getCell()->getCell()->getId();
 
             // Authoritative reaction: the struck actor aggros onto the reporting peer's avatar
             // and takes the real damage the client computed (health for weapons, fatigue for a
@@ -726,6 +827,16 @@ namespace MWNet
             // so death (health <= 0) and its consequences play out here and replicate back via
             // CreatureStats. (Trusting the client's number; host-side re-validation is later.)
             mechanics.startCombat(victim, aggressor, nullptr);
+            // Did the guard actually acquire a resolvable target? If AiCombat stored a target it
+            // can't resolve back to a Ptr (e.g. a blank/colliding avatar refNum), it has no one to
+            // fight — this is the line that proves whether the identity is the problem.
+            {
+                MWMechanics::AiSequence& seq = victim.getClass().getCreatureStats(victim).getAiSequence();
+                const MWWorld::Ptr tgt = seq.isInCombat() ? seq.getActivePackage().getTarget() : MWWorld::Ptr();
+                Log(Debug::Info) << "applyActions: after startCombat " << victim.getCellRef().getRefId()
+                                 << " inCombat=" << seq.isInCombat() << " resolvedTarget="
+                                 << (tgt.isEmpty() ? std::string("<none>") : tgt.getCellRef().getRefId().toDebugString());
+            }
             MWMechanics::CreatureStats& victimStats = victim.getClass().getCreatureStats(victim);
             const int index = hit.mHealthDamage ? 0 : 2; // 0 = health, 2 = fatigue
             MWMechanics::DynamicStat<float> stat = victimStats.getDynamic(index);
@@ -735,6 +846,24 @@ namespace MWNet
                                 << hit.mDamage << (hit.mHealthDamage ? " hp -> " : " fatigue -> ") << stat.getCurrent()
                                 << ", aggroes onto remote player " << hit.mAttacker.mIndex;
         }
+    }
+
+    void Replicator::reportHit(const MWWorld::Ptr& victim, float damage, bool healthDamage)
+    {
+        // A host-owned world actor is identified by its shared world RefNum, which the host resolves
+        // directly. Another peer's player avatar, though, has only a RefNum local to THIS client, so
+        // report it under that peer's network id instead — the host then routes the damage straight
+        // to that player (PvP) rather than failing to resolve a meaningless local ref.
+        ESM::RefNum victimId = victim.getCellRef().getRefNum();
+        for (const auto& [netId, avatar] : mAvatars)
+        {
+            if (avatar == victim)
+            {
+                victimId = netId;
+                break;
+            }
+        }
+        mOutgoingHits.push_back({ mLocalPlayerNetId, victimId, damage, healthDamage });
     }
 
     void Replicator::reportRemotePlayerHit(const MWWorld::Ptr& avatar, float damage, bool healthDamage)

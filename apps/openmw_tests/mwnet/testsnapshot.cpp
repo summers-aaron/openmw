@@ -146,6 +146,24 @@ namespace MWNet
             EXPECT_EQ(parsed->mEntities[1].mMoveFlags, std::uint8_t{ 0b10 });
         }
 
+        TEST(MWNetSnapshotTest, cellIdRoundTrips)
+        {
+            SnapshotDelta delta;
+            EntityState inInterior = makeEntity(50, -1000, makeTransform(1.f));
+            inInterior.mCellId = "Balmora, Guild of Mages";
+            delta.mEntities.push_back(inInterior);
+            EntityState cellless = makeEntity(51, -1000, makeTransform(2.f)); // no cell advertised
+            delta.mEntities.push_back(cellless);
+
+            const std::optional<SnapshotDelta> parsed = deserializeSnapshot(serializeSnapshot(delta));
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(*parsed, delta);
+            ASSERT_EQ(parsed->mEntities.size(), 2u);
+            ASSERT_TRUE(parsed->mEntities[0].mCellId.has_value());
+            EXPECT_EQ(*parsed->mEntities[0].mCellId, "Balmora, Guild of Mages");
+            EXPECT_FALSE(parsed->mEntities[1].mCellId.has_value());
+        }
+
         TEST(MWNetSnapshotTest, swingAndSpeedRoundTrip)
         {
             SnapshotDelta delta;

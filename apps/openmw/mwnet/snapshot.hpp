@@ -135,6 +135,13 @@ namespace MWNet
         // authoritative full list the receiver reconciles its avatar's equipment to;
         // absent means "no update, leave equipment as is".
         std::optional<std::vector<EquipmentSlot>> mEquipment;
+        // The cell the entity occupies, as a stable serialized-text cell RefId (an
+        // interior's id or an exterior worldspace id). Present only for a peer's player
+        // entity, sent every tick alongside its transform: the receiver needs it to place
+        // and move the avatar in the SAME cell its owner is in (a raw position is ambiguous
+        // across interiors, which share coordinate spaces), and the host needs it to load
+        // that cell so the NPCs there are simulated and replicated back to every peer.
+        std::optional<std::string> mCellId;
 
         friend bool operator==(const EntityState&, const EntityState&) = default;
     };

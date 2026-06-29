@@ -647,7 +647,7 @@ namespace MWClass
             {
                 MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
                 if (replicator && !replicator->isAuthority() && ptr == MWMechanics::getPlayer())
-                    replicator->reportHit(victim.getCellRef().getRefNum(), 0.f, true);
+                    replicator->reportHit(victim, 0.f, true);
                 return;
             }
             MWBase::Environment::get().getLuaManager()->onHit(ptr, victim, weapon, MWWorld::Ptr(), type, attackStrength,
@@ -733,7 +733,7 @@ namespace MWClass
                 if (replicator->isAuthority())
                     replicator->reportRemotePlayerHit(victim, damage, healthdmg);
                 else if (ptr == MWMechanics::getPlayer())
-                    replicator->reportHit(victim.getCellRef().getRefNum(), damage, healthdmg);
+                    replicator->reportHit(victim, damage, healthdmg);
             }
             return;
         }

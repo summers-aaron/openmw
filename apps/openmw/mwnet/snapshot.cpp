@@ -7,7 +7,7 @@ namespace MWNet
     namespace
     {
         // Wire format version. Bumped if the layout below changes incompatibly.
-        constexpr std::uint8_t sVersion = 4;
+        constexpr std::uint8_t sVersion = 5;
 
         // EntityState field bits (mFieldMask, a uint16 to leave room for more states).
         constexpr std::uint16_t sFieldTransform = 1 << 0;
@@ -18,8 +18,9 @@ namespace MWNet
         constexpr std::uint16_t sFieldMoveFlags = 1 << 5;
         constexpr std::uint16_t sFieldSwing = 1 << 6;
         constexpr std::uint16_t sFieldSpeed = 1 << 7;
+        constexpr std::uint16_t sFieldCell = 1 << 8;
         constexpr std::uint16_t sKnownFields = sFieldTransform | sFieldStats | sFieldDrawState | sFieldAppearance
-            | sFieldEquipment | sFieldMoveFlags | sFieldSwing | sFieldSpeed;
+            | sFieldEquipment | sFieldMoveFlags | sFieldSwing | sFieldSpeed | sFieldCell;
 
         // Smallest possible encoded equipment entry: slot (1) + a zero-length item string (4).
         constexpr std::uint32_t sMinEquipmentBytes = 5;
@@ -59,6 +60,8 @@ namespace MWNet
                 fieldMask |= sFieldSwing;
             if (entity.mSpeed)
                 fieldMask |= sFieldSpeed;
+            if (entity.mCellId)
+                fieldMask |= sFieldCell;
             writer.write(fieldMask);
 
             if (entity.mTransform)
@@ -104,6 +107,8 @@ namespace MWNet
                     writer.writeString(worn.mItem);
                 }
             }
+            if (entity.mCellId)
+                writer.writeString(*entity.mCellId);
         }
 
         return out;
@@ -219,6 +224,13 @@ namespace MWNet
                     equipment.push_back(std::move(worn));
                 }
                 entity.mEquipment = std::move(equipment);
+            }
+            if (fieldMask & sFieldCell)
+            {
+                std::string cellId;
+                if (!reader.readString(cellId))
+                    return std::nullopt;
+                entity.mCellId = std::move(cellId);
             }
 
             delta.mEntities.push_back(entity);
