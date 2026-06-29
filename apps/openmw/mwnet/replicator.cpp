@@ -972,6 +972,95 @@ namespace MWNet
         }
     }
 
+    ActionBatch Replicator::takeOutgoingActions()
+    {
+        ActionBatch batch;
+        batch.mHits = std::move(mOutgoingHits);
+        batch.mPlayerDamages = std::move(mOutgoingPlayerDamages);
+        batch.mDrops = std::move(mOutgoingDrops);
+        batch.mItemsTaken = std::move(mOutgoingTakes);
+        mOutgoingHits.clear();
+        mOutgoingPlayerDamages.clear();
+        mOutgoingDrops.clear();
+        mOutgoingTakes.clear();
+        // Each lootable inventory that changed: send its current full contents.
+        for (const ESM::RefNum& id : mDirtyContainers)
+            if (std::optional<ContainerState> state = buildContainerState(id))
+                batch.mContainers.push_back(std::move(*state));
+        mDirtyContainers.clear();
+        return batch;
+    }
+
+    std::optional<ContainerState> Replicator::buildContainerState(ESM::RefNum id)
+    {
+        const MWWorld::Ptr ptr = MWBase::Environment::get().getWorldModel()->getPtr(id);
+        if (ptr.isEmpty() || !ptr.isInCell())
+            return std::nullopt;
+        const bool isContainer = ptr.getType() == ESM::REC_CONT;
+        const bool isCorpse = ptr.getClass().isActor() && ptr.getClass().getCreatureStats(ptr).isDead();
+        if (!isContainer && !isCorpse)
+            return std::nullopt; // a live actor's gear / the player's inventory isn't a shared lootable
+        ContainerState state;
+        state.mId = id;
+        MWWorld::ContainerStore& store = ptr.getClass().getContainerStore(ptr);
+        for (const MWWorld::Ptr& item : store)
+        {
+            if (item.getCellRef().getCount() <= 0)
+                continue;
+            state.mItems.push_back(
+                ContainerItem{ item.getCellRef().getRefId().serializeText(), item.getCellRef().getCount() });
+        }
+        return state;
+    }
+
+    void Replicator::applyContainerState(const ContainerState& state)
+    {
+        const MWWorld::Ptr ptr = MWBase::Environment::get().getWorldModel()->getPtr(state.mId);
+        if (ptr.isEmpty() || !ptr.isInCell())
+            return; // its cell isn't loaded here; it will resolve deterministically when it loads
+        MWWorld::ContainerStore& store = ptr.getClass().getContainerStore(ptr);
+
+        // Skip if our contents already match: this avoids tearing down and rebuilding the store (and
+        // disrupting an open loot window) on the very peer that made the change and is now getting it
+        // relayed back to it, and avoids needless churn generally. Compared as total count per item id.
+        std::map<std::string, std::int64_t> incoming, current;
+        for (const ContainerItem& item : state.mItems)
+            incoming[item.mRefId] += item.mCount;
+        for (const MWWorld::Ptr& item : store)
+            if (item.getCellRef().getCount() > 0)
+                current[item.getCellRef().getRefId().serializeText()] += item.getCellRef().getCount();
+        if (incoming == current)
+            return;
+        // Force a leveled-list container resolved first, so a later lazy resolve() can't re-roll over
+        // the contents we're about to set (clear() leaves mResolved alone).
+        if (ptr.getType() == ESM::REC_CONT && !store.isResolved())
+            store.resolve();
+        store.clear();
+        const auto& esmStore = *MWBase::Environment::get().getESMStore();
+        for (const ContainerItem& item : state.mItems)
+        {
+            try
+            {
+                MWWorld::ManualRef ref(esmStore, ESM::RefId::deserializeText(item.mRefId), item.mCount);
+                store.add(ref.getPtr(), item.mCount, /*allowAutoEquip=*/false);
+            }
+            catch (const std::exception&)
+            {
+                continue; // unknown item id from the wire — skip it
+            }
+        }
+    }
+
+    void Replicator::applyContainers(const ActionBatch& batch, bool relay)
+    {
+        for (const ContainerState& state : batch.mContainers)
+        {
+            applyContainerState(state);
+            if (relay)
+                mDirtyContainers.insert(state.mId); // host: relay this change to every other peer
+        }
+    }
+
     void Replicator::reportHit(const MWWorld::Ptr& victim, float damage, bool healthDamage)
     {
         // A host-owned world actor is identified by its shared world RefNum, which the host resolves

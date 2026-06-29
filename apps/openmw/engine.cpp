@@ -282,6 +282,8 @@ void OMW::Engine::pumpTransport()
                         mReplicator->applyActions(*actions);
                     else
                         mReplicator->applyIncomingPlayerDamage(*actions);
+                    // Changed lootable inventories flow both ways; the host relays them onward.
+                    mReplicator->applyContainers(*actions, /*relay=*/authority);
                 }
             }
         }

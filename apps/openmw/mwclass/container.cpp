@@ -13,6 +13,8 @@
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
 
+#include "../mwnet/replicator.hpp"
+
 #include "../mwphysics/physicssystem.hpp"
 #include "../mwworld/actionharvest.hpp"
 #include "../mwworld/actionopen.hpp"
@@ -38,10 +40,22 @@
 
 namespace MWClass
 {
-    ContainerCustomData::ContainerCustomData(const ESM::Container& container, MWWorld::CellStore* cell)
+    ContainerCustomData::ContainerCustomData(
+        const ESM::Container& container, MWWorld::CellStore* cell, ESM::RefNum refNum)
     {
-        auto& prng = MWBase::Environment::get().getWorld()->getPrng();
-        unsigned int seed = Misc::Rng::rollDice(std::numeric_limits<int>::max(), prng);
+        unsigned int seed;
+        const MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+        if (replicator != nullptr && replicator->isNetworked() && refNum.isSet())
+            // Multiplayer: seed the leveled-list roll deterministically from the container's RefNum,
+            // so the host and every client resolve the SAME loot for this container without having to
+            // replicate its contents. (Single-player keeps the historical random roll.)
+            seed = static_cast<unsigned int>(refNum.mIndex) * 2654435761u
+                + static_cast<unsigned int>(refNum.mContentFile);
+        else
+        {
+            auto& prng = MWBase::Environment::get().getWorld()->getPrng();
+            seed = Misc::Rng::rollDice(std::numeric_limits<int>::max(), prng);
+        }
         // setting ownership not needed, since taking items from a container inherits the
         // container's owner automatically
         mStore.fillNonRandom(container.mInventory, ESM::RefId(), seed);
@@ -74,7 +88,8 @@ namespace MWClass
             MWWorld::LiveCellRef<ESM::Container>* ref = ptr.get<ESM::Container>();
 
             // store
-            ptr.getRefData().setCustomData(std::make_unique<ContainerCustomData>(*ref->mBase, ptr.getCell()));
+            ptr.getRefData().setCustomData(
+                std::make_unique<ContainerCustomData>(*ref->mBase, ptr.getCell(), ptr.getCellRef().getRefNum()));
             getContainerStore(ptr).setPtr(ptr);
 
             MWBase::Environment::get().getWorld()->addContainerScripts(ptr, ptr.getCell());

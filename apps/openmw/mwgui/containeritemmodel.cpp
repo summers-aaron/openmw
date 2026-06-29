@@ -14,8 +14,24 @@
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
 
+#include "../mwnet/replicator.hpp"
+
 namespace
 {
+
+    // Multiplayer: a player has just changed this window's container/corpse contents — mark the
+    // source object(s) so the replicator syncs the new contents to the other peers this tick. A
+    // no-op in single-player (markContainerDirty checks the session).
+    void markContainerSourcesDirty(
+        const std::vector<std::pair<MWWorld::Ptr, MWWorld::ResolutionHandle>>& sources)
+    {
+        MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+        if (replicator == nullptr)
+            return;
+        for (const auto& source : sources)
+            if (source.first.getCellRef().getRefNum().isSet())
+                replicator->markContainerDirty(source.first.getCellRef().getRefNum());
+    }
 
     bool stacks(const MWWorld::Ptr& left, const MWWorld::Ptr& right)
     {
@@ -102,6 +118,7 @@ namespace MWGui
 
     MWWorld::Ptr ContainerItemModel::addItem(const ItemStack& item, size_t count, bool allowAutoEquip)
     {
+        markContainerSourcesDirty(mItemSources);
         auto& source = mItemSources[0];
         MWWorld::ContainerStore& store = source.first.getClass().getContainerStore(source.first);
         if (item.mBase.getContainerStore() == &store)
@@ -111,6 +128,7 @@ namespace MWGui
 
     MWWorld::Ptr ContainerItemModel::copyItem(const ItemStack& item, size_t count, bool allowAutoEquip)
     {
+        markContainerSourcesDirty(mItemSources);
         auto& source = mItemSources[0];
         MWWorld::ContainerStore& store = source.first.getClass().getContainerStore(source.first);
         if (item.mBase.getContainerStore() == &store)
@@ -121,6 +139,7 @@ namespace MWGui
 
     void ContainerItemModel::removeItem(const ItemStack& item, size_t count)
     {
+        markContainerSourcesDirty(mItemSources);
         int toRemove = static_cast<int>(count);
 
         for (auto& source : mItemSources)

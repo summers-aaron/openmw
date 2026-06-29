@@ -106,6 +106,10 @@ namespace MWNet
         // Client only: items this peer dropped / picked up, awaiting send to the host to resolve.
         std::vector<ItemDrop> mOutgoingDrops;
         std::vector<ESM::RefNum> mOutgoingTakes;
+        // Lootable inventories (world containers / corpses) whose contents changed and must be
+        // synced. Filled by the loot UI on any peer; drained each tick into the outgoing action
+        // batch. On the host, also re-filled when a client's change is applied, to relay it on.
+        std::set<ESM::RefNum> mDirtyContainers;
         // Host only: loose items created during the session (a peer's drop), which must be
         // replicated for existence — unlike items already in the shared save, which every peer
         // loads identically and so needs no syncing. Sampled each tick and dropped when deleted.
@@ -143,6 +147,12 @@ namespace MWNet
         /// network id but is not the authority. False on the host AND in single-player / loopback
         /// (no id assigned), so gating client-side world interception on this keeps SP unchanged.
         bool isNetworkClient() const { return mLocalPlayerNetId.isSet() && !mIsAuthority; }
+
+        /// True in any networked session — host OR client (a network id is assigned). Single-player
+        /// and loopback leave it false. Used where the host and every client must make the SAME
+        /// shared-world choice deterministically (e.g. seeding a container's leveled-list roll from
+        /// its RefNum so every peer rolls identical loot without replicating the contents).
+        bool isNetworked() const { return mLocalPlayerNetId.isSet(); }
 
         /// Guard a deletion the world is doing to hand a just-dropped item to the host, so that
         /// deletion is NOT mistaken for a pickup and reported back (the drop is already reported,
@@ -187,20 +197,22 @@ namespace MWNet
             mPendingItemRemovals.push_back(item);
         }
 
-        /// Drain this tick's reported actions for sending.
-        ActionBatch takeOutgoingActions()
+        /// Mark a lootable inventory (a world container or a corpse) as changed, so this tick's
+        /// action batch carries its new contents. Called by the loot UI on whichever peer made the
+        /// change. No-op outside a networked session, so single-player is unaffected.
+        void markContainerDirty(ESM::RefNum id)
         {
-            ActionBatch batch;
-            batch.mHits = std::move(mOutgoingHits);
-            batch.mPlayerDamages = std::move(mOutgoingPlayerDamages);
-            batch.mDrops = std::move(mOutgoingDrops);
-            batch.mItemsTaken = std::move(mOutgoingTakes);
-            mOutgoingHits.clear();
-            mOutgoingPlayerDamages.clear();
-            mOutgoingDrops.clear();
-            mOutgoingTakes.clear();
-            return batch;
+            if (isNetworked())
+                mDirtyContainers.insert(id);
         }
+
+        /// Apply received lootable-inventory contents, overwriting each local store. relay=true (on
+        /// the host) also re-marks them dirty so the change is relayed to every other peer.
+        void applyContainers(const ActionBatch& batch, bool relay);
+
+        /// Drain this tick's reported actions for sending (including the contents of any container
+        /// that changed since the last tick).
+        ActionBatch takeOutgoingActions();
 
         /// Apply received actions authoritatively (host only): make each struck actor aggro
         /// onto the reporting peer's avatar and take the reported damage.
@@ -247,6 +259,14 @@ namespace MWNet
         /// each frame.
         void recordMotion(const ESM::RefNum& id, const MWWorld::Ptr& actor, const osg::Vec3f& target,
             const osg::Vec3f& rotation, std::optional<float> speed);
+
+        /// Read a lootable inventory's current contents into a ContainerState. nullopt if the object
+        /// isn't a syncable lootable (a world container or a corpse) currently loaded in a cell.
+        std::optional<ContainerState> buildContainerState(ESM::RefNum id);
+
+        /// Overwrite a lootable inventory's local contents to match a received ContainerState, and
+        /// keep it from being re-rolled by a later lazy resolve.
+        void applyContainerState(const ContainerState& state);
 
     public:
         /// Apply a received delta. Other peers' players are always shown as avatars
