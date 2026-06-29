@@ -1429,7 +1429,26 @@ namespace MWWorld
             if (const auto object = mPhysics->getObject(door.first))
                 updateNavigatorObject(*object, navigatorUpdateGuard.get());
 
-        mNavigator->update(getPlayerPtr().getRefData().getPosition().asVec3(), navigatorUpdateGuard.get());
+        // The navigator builds tiles around a single focus point and removes those far from it. On a
+        // dedicated server the primary player is a stationary placeholder, so focusing on it would
+        // build navmesh nowhere useful and tear down whatever a peer's cell load (addExtraPlayer) just
+        // built. Follow a network avatar instead, so host-owned NPCs have navmesh to pursue it. Single
+        // focus point: with several avatars in different cells only one is covered at a time — a known
+        // multi-player navmesh limitation, not a headless/GL one.
+        osg::Vec3f navMeshFocus = getPlayerPtr().getRefData().getPosition().asVec3();
+        if (mDedicatedServer)
+        {
+            for (std::size_t i = 1; i < mPlayers.size(); ++i)
+            {
+                const MWWorld::Ptr avatar = mPlayers.get(i).getPlayer();
+                if (avatar.isInCell())
+                {
+                    navMeshFocus = avatar.getRefData().getPosition().asVec3();
+                    break;
+                }
+            }
+        }
+        mNavigator->update(navMeshFocus, navigatorUpdateGuard.get());
     }
 
     void World::updateNavigatorObject(

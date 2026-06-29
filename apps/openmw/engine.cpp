@@ -1038,6 +1038,7 @@ void OMW::Engine::prepareEngine()
     // Create the world
     mWorld = std::make_unique<MWWorld::World>(
         mResourceSystem.get(), mActivationDistanceOverride, mCellName, mCfgMgr.getUserDataPath());
+    mWorld->setDedicatedServer(isDedicated());
     mEnvironment.setWorld(*mWorld);
     mEnvironment.setWorldRendering(*mWorld);
     mEnvironment.setWorldModel(mWorld->getWorldModel());

@@ -562,24 +562,41 @@ namespace MWWorld
             return;
         auto navigatorUpdateGuard = mNavigator.makeUpdateGuard();
         const osg::Vec3f pos = player.getRefData().getPosition().asVec3();
+        const ESM::RefId worldspace = cell->getCell()->getWorldSpace();
+        // Drive the navmesh build around this peer, exactly as a cell change does for the local player:
+        // set the navmesh bounds, load the cell geometry (which also registers the actors' agents),
+        // then kick an update so tiles actually generate. loadCell alone only feeds geometry — without
+        // updateBounds + update the navigator never builds tiles here, so host-owned NPCs have nothing
+        // to path on and a provoked one can only fight a target already in melee range. (This is the
+        // real cause of the "headless server can't chase" symptom; navmesh is CPU work and builds fine
+        // headless — it just was never being requested for a peer's surroundings.)
         if (cell->getCell()->isExterior())
         {
             // Load the whole grid of exterior cells around this player, not just the single cell it
             // stands in, so a network peer's avatar has the same surroundings simulated as the local
             // player keeps. Otherwise actors in neighbouring cells the peer can see and interact with
             // (e.g. a town NPC it punches) are never loaded here, so the authority can't react to them.
-            const ESM::RefId worldspace = cell->getCell()->getWorldSpace();
             const int halfGridSize
                 = isEsm4Ext(worldspace) ? Constants::ESM4CellGridRadius : Constants::CellGridRadius;
             const ESM::ExteriorCellLocation center = cell->getCell()->getExteriorCellLocation();
+            const DetourNavigator::CellGridBounds cellGridBounds{
+                .mCenter = osg::Vec2i(center.mX, center.mY),
+                .mHalfSize = halfGridSize,
+            };
+            mNavigator.updateBounds(worldspace, cellGridBounds, pos, navigatorUpdateGuard.get());
             iterateOverCellsAround(center.mX, center.mY, halfGridSize, [&](int x, int y) {
                 CellStore& grid = mWorld.getWorldModel().getExterior(ESM::ExteriorCellLocation(x, y, worldspace));
                 if (mActiveCells.find(&grid) == mActiveCells.end())
                     loadCell(grid, nullptr, false, pos, navigatorUpdateGuard.get());
             });
         }
-        else if (mActiveCells.find(cell) == mActiveCells.end())
-            loadCell(*cell, nullptr, false, pos, navigatorUpdateGuard.get());
+        else
+        {
+            mNavigator.updateBounds(worldspace, std::nullopt, pos, navigatorUpdateGuard.get());
+            if (mActiveCells.find(cell) == mActiveCells.end())
+                loadCell(*cell, nullptr, false, pos, navigatorUpdateGuard.get());
+        }
+        mNavigator.update(pos, navigatorUpdateGuard.get());
         navigatorUpdateGuard.reset();
     }
 

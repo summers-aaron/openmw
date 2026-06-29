@@ -105,6 +105,9 @@ namespace MWWorld
         // every time, never reused, so a freshly added avatar can never collide with one still
         // referenced by an in-flight AiCombat target (which tracks its quarry purely by RefNum).
         std::uint32_t mNextNetworkPlayerRefNum = 1;
+        // Dedicated server: the primary player is a stationary placeholder (no human controls it), so
+        // the navmesh must follow the network avatars instead of it. Set by the engine at startup.
+        bool mDedicatedServer = false;
         std::unique_ptr<MWPhysics::PhysicsSystem> mPhysics;
         std::unique_ptr<DetourNavigator::Navigator> mNavigator;
         std::unique_ptr<MWRender::RenderingManager> mRendering;
@@ -255,6 +258,9 @@ namespace MWWorld
         MWWorld::Ptr placeNetworkPlayer(
             const MWWorld::Ptr& ptr, MWWorld::CellStore& cell, const osg::Vec3f& position) override;
         void removePlayer(std::size_t index) override;
+        // Mark this World as belonging to a dedicated server (no local human player), so the navmesh
+        // follows the network avatars rather than the stationary primary placeholder.
+        void setDedicatedServer(bool value) { mDedicatedServer = value; }
 
         MWWorld::ESMStore& getStore() override { return mStore; }
 
