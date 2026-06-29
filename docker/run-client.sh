@@ -62,11 +62,23 @@ else
     done
 fi
 
+# New-game clients get onboarded: a startup script gives them a character and drops them into Seyda
+# Neen (so they land in the shared world, not the char-creation intro). Skipped when joining a save
+# (it already has a character/position) or when OPENMW_ONBOARD=none. Edit docker/onboard.txt to change.
+onboard_mount=()
+onboard_run=()
+ONBOARD="${OPENMW_ONBOARD:-$REPO/docker/onboard.txt}"
+if [ ${#MP_SAVE_LOAD[@]} -eq 0 ] && [ "$ONBOARD" != none ] && [ -f "$ONBOARD" ]; then
+    onboard_abs="$(cd "$(dirname "$ONBOARD")" && pwd)/$(basename "$ONBOARD")"
+    onboard_mount=(-v "$onboard_abs:/onboard.txt:ro")
+    onboard_run=(--script-run /onboard.txt)
+fi
+
 echo "Connecting client '$NAME' to $SERVER (gpu=$MP_GPU) — a window will open, ~20-40s to load..."
 exec "$MP_RUNTIME" run --rm --name "$NAME" --network host --security-opt label=disable \
     "${MP_RENDER[@]}" \
     -v "$REPO:/openmw:Z" -v "$MP_DATA:$MP_DATA:ro" -v "$MP_CFG:/root/.config/openmw" -v "$MP_USERDATA:/userdata" \
-    ${MP_SAVE_MOUNT[@]+"${MP_SAVE_MOUNT[@]}"} \
+    ${MP_SAVE_MOUNT[@]+"${MP_SAVE_MOUNT[@]}"} ${onboard_mount[@]+"${onboard_mount[@]}"} \
     -w /openmw/build "$IMAGE" \
-    bash -lc "./openmw --resources resources --no-grab --user-data /userdata \
-        ${game[*]:-} --connect $SERVER ${passthrough[*]:-}"
+    bash -lc "./openmw --resources resources --skip-menu --no-grab --user-data /userdata \
+        ${game[*]:-} ${onboard_run[*]:-} --connect $SERVER ${passthrough[*]:-}"
