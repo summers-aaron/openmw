@@ -279,10 +279,16 @@ void OMW::Engine::pumpTransport()
                     // Host resolves clients' reported hits; a client applies the host's report
                     // that its own player was hit by the shared world.
                     if (authority)
+                    {
                         mReplicator->applyActions(*actions);
+                        mReplicator->applyContainerChanges(*actions); // resolve clients' take/put requests
+                    }
                     else
+                    {
                         mReplicator->applyIncomingPlayerDamage(*actions);
-                    // Changed lootable inventories flow both ways; the host relays them onward.
+                        mReplicator->applyContainerRevokes(*actions); // drop items we lost a take race for
+                    }
+                    // Authoritative lootable contents flow host -> clients; the host relays them onward.
                     mReplicator->applyContainers(*actions, /*relay=*/authority);
                 }
             }

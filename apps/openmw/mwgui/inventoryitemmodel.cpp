@@ -13,8 +13,32 @@
 #include "../mwbase/environment.hpp"
 #include "../mwbase/mechanicsmanager.hpp"
 
+#include "../mwnet/replicator.hpp"
+
 namespace MWGui
 {
+    namespace
+    {
+        // Multiplayer: a corpse's inventory IS a shared lootable, so syncing a take/put from it works
+        // exactly like a container. But this same model also drives the player's own inventory and a
+        // live NPC's gear (pickpocket), which must NOT sync — so report only when the owner is a dead
+        // body. On a client the take/put is resolved by the host; on the host its contents broadcast.
+        void reportCorpseMutation(const MWWorld::Ptr& actor, const MWWorld::Ptr& item, int count, bool take)
+        {
+            if (!actor.getClass().isActor() || !actor.getClass().getCreatureStats(actor).isDead())
+                return;
+            MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+            if (replicator == nullptr)
+                return;
+            const ESM::RefNum refNum = actor.getCellRef().getRefNum();
+            if (!refNum.isSet())
+                return;
+            if (replicator->isNetworkClient())
+                replicator->reportContainerChange(refNum, item, count, take);
+            else
+                replicator->markContainerDirty(refNum);
+        }
+    }
 
     InventoryItemModel::InventoryItemModel(const MWWorld::Ptr& actor)
         : mActor(actor)
@@ -49,6 +73,7 @@ namespace MWGui
 
     MWWorld::Ptr InventoryItemModel::addItem(const ItemStack& item, size_t count, bool allowAutoEquip)
     {
+        reportCorpseMutation(mActor, item.mBase, static_cast<int>(count), /*take=*/false);
         if (item.mBase.getContainerStore() == &mActor.getClass().getContainerStore(mActor))
             throw std::runtime_error("Item to add needs to be from a different container!");
         return *mActor.getClass().getContainerStore(mActor).add(item.mBase, static_cast<int>(count), allowAutoEquip);
@@ -56,6 +81,7 @@ namespace MWGui
 
     MWWorld::Ptr InventoryItemModel::copyItem(const ItemStack& item, size_t count, bool allowAutoEquip)
     {
+        reportCorpseMutation(mActor, item.mBase, static_cast<int>(count), /*take=*/false);
         if (item.mBase.getContainerStore() == &mActor.getClass().getContainerStore(mActor))
             throw std::runtime_error("Item to copy needs to be from a different container!");
 
@@ -66,6 +92,7 @@ namespace MWGui
 
     void InventoryItemModel::removeItem(const ItemStack& item, size_t count)
     {
+        reportCorpseMutation(mActor, item.mBase, static_cast<int>(count), /*take=*/true);
         int removed = 0;
         // Re-equipping makes sense only if a target has inventory
         if (mActor.getClass().hasInventoryStore(mActor))

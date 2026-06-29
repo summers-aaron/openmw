@@ -967,22 +967,24 @@ namespace MWWorld
             if (ptr == getPlayerPtr())
                 throw std::runtime_error("can not delete player object");
 
-            // Multiplayer: a loose item leaving the world must stay in sync across peers.
+            // Multiplayer: a shared world object leaving the world must stay in sync across peers.
+            // This covers a loose item (picked up / dropped) and a CORPSE being disposed — both are
+            // host-owned refs that, when deleted, must vanish for everyone.
             //  - On the host, broadcast the removal so every client deletes its copy (covers a
-            //    client-reported pickup applied here, and host-side script/NPC deletes).
-            //  - On a client, deleting a host-owned loose item means this peer picked it up; tell the
-            //    host so it removes the shared instance and relays that to the others. We still delete
-            //    our own copy below, so the taker sees it gone at once.
+            //    client-reported pickup/dispose applied here, and host-side script/NPC deletes).
+            //  - On a client, deleting one means this peer picked it up or disposed it; tell the host
+            //    so it removes the shared instance and relays that to the others. We still delete our
+            //    own copy below, so the actor sees it gone at once.
+            const bool isLooseItem = ptr.getClass().isItem(ptr);
+            const bool isCorpse = ptr.getClass().isActor() && ptr.getClass().getCreatureStats(ptr).isDead();
             if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
-                replicator != nullptr && ptr.getCellRef().getRefNum().isSet() && ptr.getClass().isItem(ptr))
+                replicator != nullptr && ptr.getCellRef().getRefNum().isSet() && (isLooseItem || isCorpse))
             {
                 if (replicator->isAuthority())
                     replicator->reportItemRemoved(ptr.getCellRef().getRefNum());
-                // A client deleting any host-owned loose item means a pickup — report it so the host
-                // removes the shared instance. This covers items already in the save (a pre-placed
-                // floor item, e.g. Arrille's bottles), which share a RefNum across peers, not just
-                // ones we spawned from the host. The handoff guard excludes a drop we're handing off
-                // (its local RefNum is meaningless on the host) so it isn't mistaken for a pickup.
+                // The handoff guard excludes a drop we're handing off (its local RefNum is meaningless
+                // on the host) so it isn't mistaken for a pickup. Save items (a pre-placed floor item
+                // or a content NPC's corpse) share a RefNum across peers, so the host resolves them.
                 else if (replicator->isNetworkClient() && !replicator->isHandingOffDrop())
                     replicator->reportItemTaken(ptr.getCellRef().getRefNum());
             }

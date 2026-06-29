@@ -99,6 +99,64 @@ namespace MWNet
             return actor.getCell()->getCell()->getId().serializeText();
         }
 
+        // A ContainerItem capturing one stack's full identity (record + condition/charge/soul) and a
+        // count. Items differing in any identity field don't stack and are kept distinct.
+        ContainerItem buildContainerItem(const MWWorld::Ptr& item, int count)
+        {
+            const MWWorld::CellRef& ref = item.getCellRef();
+            return ContainerItem{ ref.getRefId().serializeText(), count, ref.getCharge(), ref.getEnchantmentCharge(),
+                ref.getSoul().serializeText() };
+        }
+
+        // Two ContainerItems are the same stack (ignoring count) iff every identity field matches.
+        bool sameStack(const ContainerItem& a, const ContainerItem& b)
+        {
+            return a.mRefId == b.mRefId && a.mCharge == b.mCharge && a.mEnchantCharge == b.mEnchantCharge
+                && a.mSoul == b.mSoul;
+        }
+
+        // How many of a stack a container record holds.
+        int countInRecord(const ContainerState& record, const ContainerItem& item)
+        {
+            int total = 0;
+            for (const ContainerItem& it : record.mItems)
+                if (sameStack(it, item))
+                    total += it.mCount;
+            return total;
+        }
+
+        // Remove up to n of a stack from a record (dropping any entry that hits zero).
+        void removeFromRecord(ContainerState& record, const ContainerItem& item, int n)
+        {
+            for (auto it = record.mItems.begin(); it != record.mItems.end() && n > 0;)
+            {
+                if (sameStack(*it, item))
+                {
+                    const int taken = std::min(n, it->mCount);
+                    it->mCount -= taken;
+                    n -= taken;
+                    if (it->mCount <= 0)
+                    {
+                        it = record.mItems.erase(it);
+                        continue;
+                    }
+                }
+                ++it;
+            }
+        }
+
+        // Add a stack to a record, merging into a matching one if present.
+        void addToRecord(ContainerState& record, const ContainerItem& item)
+        {
+            for (ContainerItem& it : record.mItems)
+                if (sameStack(it, item))
+                {
+                    it.mCount += item.mCount;
+                    return;
+                }
+            record.mItems.push_back(item);
+        }
+
         // Read which items an NPC/avatar has worn, as (slot, stable-text item RefId) pairs.
         // Empty list for an inventory-less actor (it just won't drive any equipment).
         std::optional<std::vector<EquipmentSlot>> sampleEquipment(const MWWorld::Ptr& actor)
@@ -979,10 +1037,14 @@ namespace MWNet
         batch.mPlayerDamages = std::move(mOutgoingPlayerDamages);
         batch.mDrops = std::move(mOutgoingDrops);
         batch.mItemsTaken = std::move(mOutgoingTakes);
+        batch.mContainerChanges = std::move(mOutgoingContainerChanges); // client -> host take/put requests
+        batch.mContainerRevokes = std::move(mOutgoingRevokes); // host -> client over-take corrections
         mOutgoingHits.clear();
         mOutgoingPlayerDamages.clear();
         mOutgoingDrops.clear();
         mOutgoingTakes.clear();
+        mOutgoingContainerChanges.clear();
+        mOutgoingRevokes.clear();
 
         // Host: periodically re-assert every changed lootable so a peer that arrived after a loot is
         // brought up to date, and so a container whose cell unloaded-and-reloaded (rolling it back to
@@ -1068,7 +1130,9 @@ namespace MWNet
                 ref.getPtr().getCellRef().setCharge(item.mCharge);
                 ref.getPtr().getCellRef().setEnchantmentCharge(item.mEnchantCharge);
                 ref.getPtr().getCellRef().setSoul(ESM::RefId::deserializeText(item.mSoul));
-                store.add(ref.getPtr(), item.mCount, /*allowAutoEquip=*/false);
+                // allowAutoEquip so a corpse re-dresses in its remaining gear instead of appearing
+                // stripped after a synced loot; for a (non-actor) container it has no effect.
+                store.add(ref.getPtr(), item.mCount, /*allowAutoEquip=*/true);
             }
             catch (const std::exception&)
             {
@@ -1091,6 +1155,79 @@ namespace MWNet
                 // survives a re-resolve and reaches late-joiners) and relay it to every other peer.
                 mAuthoritativeContainers[state.mId] = state;
                 mDirtyContainers.insert(state.mId);
+            }
+        }
+    }
+
+    void Replicator::reportContainerChange(ESM::RefNum container, const MWWorld::Ptr& item, int count, bool take)
+    {
+        mOutgoingContainerChanges.push_back({ mLocalPlayerNetId, container, buildContainerItem(item, count), take });
+    }
+
+    void Replicator::applyContainerChanges(const ActionBatch& batch)
+    {
+        for (const ContainerChange& change : batch.mContainerChanges)
+        {
+            // Resolve against the authoritative record, seeding it from the deterministic live store
+            // the first time we touch this container (every peer rolled the same contents).
+            auto [recIt, inserted] = mAuthoritativeContainers.try_emplace(change.mContainer);
+            if (inserted)
+            {
+                if (std::optional<ContainerState> seed = buildContainerState(change.mContainer))
+                    recIt->second = std::move(*seed);
+                else
+                {
+                    mAuthoritativeContainers.erase(recIt); // not loaded here — can't resolve the request
+                    continue;
+                }
+            }
+            ContainerState& record = recIt->second;
+            record.mId = change.mContainer;
+
+            if (change.mTake)
+            {
+                // Grant only up to what's actually there; if the peer claimed more (another beat it to
+                // them), tell it to drop the excess from its inventory.
+                const int available = countInRecord(record, change.mItem);
+                const int grant = std::min(change.mItem.mCount, available);
+                removeFromRecord(record, change.mItem, grant);
+                if (grant < change.mItem.mCount)
+                {
+                    ContainerItem excess = change.mItem;
+                    excess.mCount = change.mItem.mCount - grant;
+                    mOutgoingRevokes.push_back({ change.mActor, excess });
+                }
+            }
+            else
+                addToRecord(record, change.mItem);
+
+            applyContainerState(record); // bring the host's live store in line with the record
+            mDirtyContainers.insert(change.mContainer); // broadcast the new authoritative contents
+        }
+    }
+
+    void Replicator::applyContainerRevokes(const ActionBatch& batch)
+    {
+        if (!mLocalPlayerNetId.isSet())
+            return;
+        const MWWorld::Ptr player = MWBase::Environment::get().getWorld()->getPlayerPtr();
+        if (player.isEmpty() || !player.getClass().hasInventoryStore(player))
+            return;
+        MWWorld::InventoryStore& inv = player.getClass().getInventoryStore(player);
+        for (const ContainerRevoke& revoke : batch.mContainerRevokes)
+        {
+            if (revoke.mTarget != mLocalPlayerNetId)
+                continue; // addressed to another peer
+            // We lost a take race: drop the items the container didn't actually have from our inventory.
+            const ContainerItem& item = revoke.mItem;
+            const ESM::RefId refId = ESM::RefId::deserializeText(item.mRefId);
+            const ESM::RefId soul = ESM::RefId::deserializeText(item.mSoul);
+            int toRemove = item.mCount;
+            for (auto it = inv.begin(); it != inv.end() && toRemove > 0; ++it)
+            {
+                const MWWorld::CellRef& ref = it->getCellRef();
+                if (ref.getRefId() == refId && ref.getCharge() == item.mCharge && ref.getSoul() == soul)
+                    toRemove -= inv.remove(*it, toRemove);
             }
         }
     }

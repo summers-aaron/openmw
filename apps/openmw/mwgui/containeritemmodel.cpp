@@ -19,18 +19,23 @@
 namespace
 {
 
-    // Multiplayer: a player has just changed this window's container/corpse contents — mark the
-    // source object(s) so the replicator syncs the new contents to the other peers this tick. A
-    // no-op in single-player (markContainerDirty checks the session).
-    void markContainerSourcesDirty(
-        const std::vector<std::pair<MWWorld::Ptr, MWWorld::ResolutionHandle>>& sources)
+    // Multiplayer: a player has just taken (take=true) or put (take=false) an item in this window's
+    // container/corpse. On a client, ask the host to resolve it authoritatively (it grants a take
+    // only up to what's actually there, so two peers can't loot the same item); on the host, mark the
+    // source so its new contents are broadcast. A no-op in single-player.
+    void reportContainerMutation(const std::vector<std::pair<MWWorld::Ptr, MWWorld::ResolutionHandle>>& sources,
+        const MWWorld::Ptr& item, int count, bool take)
     {
         MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
-        if (replicator == nullptr)
+        if (replicator == nullptr || sources.empty())
             return;
-        for (const auto& source : sources)
-            if (source.first.getCellRef().getRefNum().isSet())
-                replicator->markContainerDirty(source.first.getCellRef().getRefNum());
+        const ESM::RefNum container = sources[0].first.getCellRef().getRefNum();
+        if (!container.isSet())
+            return;
+        if (replicator->isNetworkClient())
+            replicator->reportContainerChange(container, item, count, take);
+        else
+            replicator->markContainerDirty(container); // host's own change (or single-player no-op)
     }
 
     bool stacks(const MWWorld::Ptr& left, const MWWorld::Ptr& right)
@@ -118,7 +123,7 @@ namespace MWGui
 
     MWWorld::Ptr ContainerItemModel::addItem(const ItemStack& item, size_t count, bool allowAutoEquip)
     {
-        markContainerSourcesDirty(mItemSources);
+        reportContainerMutation(mItemSources, item.mBase, static_cast<int>(count), /*take=*/false);
         auto& source = mItemSources[0];
         MWWorld::ContainerStore& store = source.first.getClass().getContainerStore(source.first);
         if (item.mBase.getContainerStore() == &store)
@@ -128,7 +133,7 @@ namespace MWGui
 
     MWWorld::Ptr ContainerItemModel::copyItem(const ItemStack& item, size_t count, bool allowAutoEquip)
     {
-        markContainerSourcesDirty(mItemSources);
+        reportContainerMutation(mItemSources, item.mBase, static_cast<int>(count), /*take=*/false);
         auto& source = mItemSources[0];
         MWWorld::ContainerStore& store = source.first.getClass().getContainerStore(source.first);
         if (item.mBase.getContainerStore() == &store)
@@ -139,7 +144,7 @@ namespace MWGui
 
     void ContainerItemModel::removeItem(const ItemStack& item, size_t count)
     {
-        markContainerSourcesDirty(mItemSources);
+        reportContainerMutation(mItemSources, item.mBase, static_cast<int>(count), /*take=*/true);
         int toRemove = static_cast<int>(count);
 
         for (auto& source : mItemSources)

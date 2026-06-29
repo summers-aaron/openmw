@@ -106,6 +106,10 @@ namespace MWNet
         // Client only: items this peer dropped / picked up, awaiting send to the host to resolve.
         std::vector<ItemDrop> mOutgoingDrops;
         std::vector<ESM::RefNum> mOutgoingTakes;
+        // Client only: take/put requests against lootable inventories, awaiting host resolution.
+        std::vector<ContainerChange> mOutgoingContainerChanges;
+        // Host only: over-take corrections, awaiting send to the clients that lost a take race.
+        std::vector<ContainerRevoke> mOutgoingRevokes;
         // Lootable inventories (world containers / corpses) whose contents changed and must be
         // synced. Filled by the loot UI on any peer; drained each tick into the outgoing action
         // batch. On the host, also re-filled when a client's change is applied, to relay it on.
@@ -215,6 +219,20 @@ namespace MWNet
         /// Apply received lootable-inventory contents, overwriting each local store. relay=true (on
         /// the host) also re-marks them dirty so the change is relayed to every other peer.
         void applyContainers(const ActionBatch& batch, bool relay);
+
+        /// Report (from a client) that this peer took an item out of / put an item into a lootable
+        /// inventory, for the host to resolve authoritatively. The local change happens optimistically;
+        /// the host validates a take against its authoritative record and corrects an over-take.
+        void reportContainerChange(ESM::RefNum container, const MWWorld::Ptr& item, int count, bool take);
+
+        /// Apply received take/put requests (host only): resolve each against the authoritative
+        /// container record — grant a take only up to what's actually there (queuing a revoke for the
+        /// rest), always apply a put — then update the live store and broadcast the new contents.
+        void applyContainerChanges(const ActionBatch& batch);
+
+        /// Apply received over-take corrections (client only): drop from this peer's own inventory the
+        /// items the host says it claimed but the container didn't have.
+        void applyContainerRevokes(const ActionBatch& batch);
 
         /// Drain this tick's reported actions for sending (including the contents of any container
         /// that changed since the last tick).
