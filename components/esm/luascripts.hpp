@@ -28,6 +28,11 @@ namespace ESM
         static constexpr Flags sMenu = 1ull << 4; // start as a menu script
         static constexpr Flags sLoad = 1ull << 5; // content loading script
 
+        // Among player scripts (sPlayer), attach only to this client's own local player, not to
+        // additional players (e.g. other peers in multiplayer). For input/UI/camera scripts that
+        // drive per-client view state and would otherwise run, and conflict, once per player.
+        static constexpr Flags sLocalPlayer = 1ull << 6;
+
         VFS::Path::Normalized mScriptPath;
         std::string mInitializationData; // Serialized Lua table. It is a binary data. Can contain '\0'.
         Flags mFlags; // bitwise OR of Flags.

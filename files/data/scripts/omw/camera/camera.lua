@@ -41,23 +41,27 @@ local MODE = camera.MODE
 local previewIfStandStill = false
 local showCrosshairInThirdPerson = false
 local slowViewChange = false
-local maxDistance = settings:get('maxDistance')
+-- Fall back to the registered defaults: a settings group registered in the menu context may
+-- not be seeded into this player's storage yet when this script first loads (notably on a
+-- --skip-menu load), so settings:get can transiently return nil. The settings:subscribe below
+-- re-runs updateSettings with the real values once the group is available.
+local maxDistance = settings:get('maxDistance') or 800
 
 local function updateSettings()
-    previewIfStandStill = settings:get('previewIfStandStill')
-    showCrosshairInThirdPerson = settings:get('viewOverShoulder')
-    camera.allowCharacterDeferredRotation(settings:get('deferredPreviewRotation'))
+    previewIfStandStill = settings:get('previewIfStandStill') or false
+    showCrosshairInThirdPerson = settings:get('viewOverShoulder') or false
+    camera.allowCharacterDeferredRotation(settings:get('deferredPreviewRotation') or false)
     local collisionType = util.bitAnd(nearby.COLLISION_TYPE.Default, util.bitNot(nearby.COLLISION_TYPE.Actor))
     collisionType = util.bitOr(collisionType, nearby.COLLISION_TYPE.Camera)
     if settings:get('ignoreNC') then
         collisionType = util.bitOr(collisionType, nearby.COLLISION_TYPE.VisualOnly)
     end
     camera.setCollisionType(collisionType)
-    move360.enabled = settings:get('move360')
-    move360.turnSpeed = settings:get('move360TurnSpeed')
-    pov_auto_switch.enabled = settings:get('povAutoSwitch')
-    slowViewChange = settings:get('slowViewChange')
-    maxDistance = settings:get('maxDistance')
+    move360.enabled = settings:get('move360') or false
+    move360.turnSpeed = settings:get('move360TurnSpeed') or 5
+    pov_auto_switch.enabled = settings:get('povAutoSwitch') or false
+    slowViewChange = settings:get('slowViewChange') or false
+    maxDistance = settings:get('maxDistance') or 800
 end
 
 local primaryMode

@@ -13,10 +13,14 @@ local settings = storage.playerSection('SettingsOMWCameraHeadBobbing')
 local doubleStepLength, stepHeight, maxRoll
 
 local function updateSettings()
-    M.enabled = settings:get('enabled')
-    doubleStepLength = settings:get('step') * 2
-    stepHeight = settings:get('height')
-    maxRoll = math.rad(settings:get('roll'))
+    -- Fall back to the registered defaults: the head-bobbing settings group (registered in the
+    -- menu context) may not be seeded into this player's storage yet when this script first loads
+    -- (notably on a --skip-menu load), so settings:get can transiently return nil. The
+    -- settings:subscribe below re-runs this with the real values once the group is available.
+    M.enabled = settings:get('enabled') or false
+    doubleStepLength = (settings:get('step') or 90) * 2
+    stepHeight = settings:get('height') or 3
+    maxRoll = math.rad(settings:get('roll') or 0.2)
 end
 
 updateSettings()
