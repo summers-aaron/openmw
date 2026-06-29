@@ -110,6 +110,12 @@ namespace MWNet
         // synced. Filled by the loot UI on any peer; drained each tick into the outgoing action
         // batch. On the host, also re-filled when a client's change is applied, to relay it on.
         std::set<ESM::RefNum> mDirtyContainers;
+        // Host only: the authoritative contents of every lootable that has changed from its
+        // deterministic default this session. The persistent record behind late-join (a peer that
+        // arrives after a loot gets the real contents on the periodic re-broadcast) and re-resolve
+        // recovery (if the host's cell unloads and rolls the container back to default, the record
+        // restores it). Survives the live store; never trusts a re-rolled store.
+        std::map<ESM::RefNum, ContainerState> mAuthoritativeContainers;
         // Host only: loose items created during the session (a peer's drop), which must be
         // replicated for existence — unlike items already in the shared save, which every peer
         // loads identically and so needs no syncing. Sampled each tick and dropped when deleted.

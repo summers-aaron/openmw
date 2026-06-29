@@ -66,15 +66,18 @@ namespace MWNet
         {
             ActionBatch batch;
             batch.mContainers.push_back({ ESM::RefNum{ 12, 0 },
-                { { "gold_001", 137 }, { "iron_dagger", 1 }, { "potion_cyrodilic_brandy_01", 3 } } });
+                { { "gold_001", 137 }, { "iron_dagger", 1, 250, -1.f, "" },
+                    { "misc_soulgem_common", 1, -1, -1.f, "rat" }, { "potion_cyrodilic_brandy_01", 3 } } });
             batch.mContainers.push_back({ ESM::RefNum{ 99, -2 }, {} }); // emptied container
             const std::optional<ActionBatch> parsed = deserializeActions(serializeActions(batch));
             ASSERT_TRUE(parsed.has_value());
             EXPECT_EQ(*parsed, batch);
             ASSERT_EQ(parsed->mContainers.size(), 2u);
-            ASSERT_EQ(parsed->mContainers[0].mItems.size(), 3u);
+            ASSERT_EQ(parsed->mContainers[0].mItems.size(), 4u);
             EXPECT_EQ(parsed->mContainers[0].mItems[0].mRefId, "gold_001");
             EXPECT_EQ(parsed->mContainers[0].mItems[0].mCount, 137);
+            EXPECT_EQ(parsed->mContainers[0].mItems[1].mCharge, 250); // weapon condition preserved
+            EXPECT_EQ(parsed->mContainers[0].mItems[2].mSoul, "rat"); // soul gem soul preserved
             EXPECT_TRUE(parsed->mContainers[1].mItems.empty());
         }
 

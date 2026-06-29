@@ -19,8 +19,9 @@ namespace MWNet
         constexpr std::uint32_t sMinTakenBytes = 8;
         // Smallest encoded ContainerState: RefNum (4 + 4) + item count (4).
         constexpr std::uint32_t sMinContainerBytes = 12;
-        // Smallest encoded ContainerItem: zero-length RefId (4) + count (4).
-        constexpr std::uint32_t sMinContainerItemBytes = 8;
+        // Smallest encoded ContainerItem: zero-length RefId (4) + count (4) + charge (4) +
+        // enchant charge (4) + zero-length soul (4).
+        constexpr std::uint32_t sMinContainerItemBytes = 20;
     }
 
     std::vector<std::byte> serializeActions(const ActionBatch& batch)
@@ -72,6 +73,9 @@ namespace MWNet
             {
                 writer.writeString(item.mRefId);
                 writer.write(item.mCount);
+                writer.write(item.mCharge);
+                writer.write(item.mEnchantCharge);
+                writer.writeString(item.mSoul);
             }
         }
         return out;
@@ -173,7 +177,8 @@ namespace MWNet
             for (std::uint32_t j = 0; j < itemCount; ++j)
             {
                 ContainerItem item;
-                if (!reader.readString(item.mRefId) || !reader.read(item.mCount))
+                if (!reader.readString(item.mRefId) || !reader.read(item.mCount) || !reader.read(item.mCharge)
+                    || !reader.read(item.mEnchantCharge) || !reader.readString(item.mSoul))
                     return std::nullopt;
                 container.mItems.push_back(std::move(item));
             }

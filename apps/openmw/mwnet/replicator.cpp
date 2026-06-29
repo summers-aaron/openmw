@@ -983,10 +983,30 @@ namespace MWNet
         mOutgoingPlayerDamages.clear();
         mOutgoingDrops.clear();
         mOutgoingTakes.clear();
-        // Each lootable inventory that changed: send its current full contents.
+
+        // Host: periodically re-assert every changed lootable so a peer that arrived after a loot is
+        // brought up to date, and so a container whose cell unloaded-and-reloaded (rolling it back to
+        // its deterministic default) is restored from the authoritative record. applyContainerState
+        // no-ops when the live store already matches, so this is cheap when nothing drifted.
+        constexpr std::uint32_t sContainerRefreshInterval = 300;
+        if (mIsAuthority && (mTick % sContainerRefreshInterval) == 0)
+        {
+            for (const auto& [id, state] : mAuthoritativeContainers)
+            {
+                applyContainerState(state);
+                mDirtyContainers.insert(id);
+            }
+        }
+
+        // Each lootable inventory that changed (or is being re-asserted): send its current contents.
+        // On the host, record them as the new authoritative state.
         for (const ESM::RefNum& id : mDirtyContainers)
             if (std::optional<ContainerState> state = buildContainerState(id))
+            {
+                if (mIsAuthority)
+                    mAuthoritativeContainers[id] = *state;
                 batch.mContainers.push_back(std::move(*state));
+            }
         mDirtyContainers.clear();
         return batch;
     }
@@ -1007,8 +1027,9 @@ namespace MWNet
         {
             if (item.getCellRef().getCount() <= 0)
                 continue;
-            state.mItems.push_back(
-                ContainerItem{ item.getCellRef().getRefId().serializeText(), item.getCellRef().getCount() });
+            const MWWorld::CellRef& ref = item.getCellRef();
+            state.mItems.push_back(ContainerItem{ ref.getRefId().serializeText(), ref.getCount(), ref.getCharge(),
+                ref.getEnchantmentCharge(), ref.getSoul().serializeText() });
         }
         return state;
     }
@@ -1042,6 +1063,11 @@ namespace MWNet
             try
             {
                 MWWorld::ManualRef ref(esmStore, ESM::RefId::deserializeText(item.mRefId), item.mCount);
+                // Set the per-instance state BEFORE adding, so two stacks of the same id but different
+                // condition/charge/soul don't wrongly merge (they'd both be default at add time).
+                ref.getPtr().getCellRef().setCharge(item.mCharge);
+                ref.getPtr().getCellRef().setEnchantmentCharge(item.mEnchantCharge);
+                ref.getPtr().getCellRef().setSoul(ESM::RefId::deserializeText(item.mSoul));
                 store.add(ref.getPtr(), item.mCount, /*allowAutoEquip=*/false);
             }
             catch (const std::exception&)
@@ -1049,6 +1075,9 @@ namespace MWNet
                 continue; // unknown item id from the wire — skip it
             }
         }
+        // If a peer has this container/corpse open, live-refresh the loot window to show the change
+        // (otherwise it would only update on the next local interaction or a reopen).
+        MWBase::Environment::get().getWindowManager()->inventoryUpdated(ptr);
     }
 
     void Replicator::applyContainers(const ActionBatch& batch, bool relay)
@@ -1057,7 +1086,12 @@ namespace MWNet
         {
             applyContainerState(state);
             if (relay)
-                mDirtyContainers.insert(state.mId); // host: relay this change to every other peer
+            {
+                // Host: this client's report is now the authoritative contents — remember it (so it
+                // survives a re-resolve and reaches late-joiners) and relay it to every other peer.
+                mAuthoritativeContainers[state.mId] = state;
+                mDirtyContainers.insert(state.mId);
+            }
         }
     }
 

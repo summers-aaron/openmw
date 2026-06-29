@@ -60,14 +60,17 @@ namespace MWNet
         friend bool operator==(const ItemDrop&, const ItemDrop&) = default;
     };
 
-    /// One item stack inside a container/corpse: the record to instantiate and the stack size.
-    /// (First slice: per-instance state — condition, enchant charge, soul — is not carried, so a
-    /// synced container's items reset to default condition. Fine for the common loot; a later pass
-    /// can carry full ObjectState.)
+    /// One item stack inside a container/corpse: the record to instantiate, the stack size, and the
+    /// per-instance state that distinguishes otherwise-identical items — condition (mCharge, -1 =
+    /// full/unset), enchantment charge (mEnchantCharge, -1 = full/unset), and a bound soul (mSoul,
+    /// empty = none). Items differing in any of these don't stack, so each is its own ContainerItem.
     struct ContainerItem
     {
         std::string mRefId;
         std::int32_t mCount = 1;
+        std::int32_t mCharge = -1;
+        float mEnchantCharge = -1.f;
+        std::string mSoul;
 
         friend bool operator==(const ContainerItem&, const ContainerItem&) = default;
     };
