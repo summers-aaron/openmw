@@ -30,26 +30,43 @@ source "$REPO/docker/_mp-common.sh"
 
 DEFAULT_PORT="${PORT:-25565}"
 
-[ $# -ge 1 ] || { echo "usage: $(basename "$0") <SERVER_IP[:PORT]> [extra openmw args...]" >&2; exit 1; }
+[ $# -ge 1 ] || { echo "usage: $(basename "$0") <SERVER_IP[:PORT]> [--save FILE.omwsave] [extra openmw args...]" >&2; exit 1; }
 SERVER="$1"; shift
 case "$SERVER" in *:*) ;; *) SERVER="$SERVER:$DEFAULT_PORT" ;; esac
+
+# Pull --save out; leave the rest as pass-through to openmw.
+SAVE_HOST="${OPENMW_SAVE:-}"
+passthrough=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --save) SAVE_HOST="$2"; shift 2 ;;
+        *) passthrough+=("$1"); shift ;;
+    esac
+done
 
 mp_common_preflight
 mp_common_pick_name openmw-client   # -> NAME (auto-numbered so two clients coexist)
 mp_common_config_copy "$NAME"   # -> MP_CFG
 mp_common_userdata "$NAME"      # -> MP_USERDATA
 mp_common_gpu_render            # -> MP_RENDER, MP_GPU
+mp_common_save "$SAVE_HOST"     # -> MP_SAVE_MOUNT, MP_SAVE_LOAD (load the same save as the server)
 
-# Default to a new game when no game/save selector was passed through.
-game=(--new-game)
-for a in "$@"; do
-    case "$a" in --new-game|--load-savegame|--skip-menu) game=() ;; esac
-done
+# An explicit --save loads that save; otherwise default to a new game unless the pass-through already
+# carries its own game/save selector.
+if [ ${#MP_SAVE_LOAD[@]} -gt 0 ]; then
+    game=("${MP_SAVE_LOAD[@]}")
+else
+    game=(--new-game)
+    for a in ${passthrough[@]+"${passthrough[@]}"}; do
+        case "$a" in --new-game|--load-savegame|--skip-menu) game=() ;; esac
+    done
+fi
 
 echo "Connecting client '$NAME' to $SERVER (gpu=$MP_GPU) — a window will open, ~20-40s to load..."
 exec "$MP_RUNTIME" run --rm --name "$NAME" --network host --security-opt label=disable \
     "${MP_RENDER[@]}" \
     -v "$REPO:/openmw:Z" -v "$MP_DATA:$MP_DATA:ro" -v "$MP_CFG:/root/.config/openmw" -v "$MP_USERDATA:/userdata" \
+    ${MP_SAVE_MOUNT[@]+"${MP_SAVE_MOUNT[@]}"} \
     -w /openmw/build "$IMAGE" \
     bash -lc "./openmw --resources resources --no-grab --user-data /userdata \
-        ${game[*]:-} --connect $SERVER $*"
+        ${game[*]:-} --connect $SERVER ${passthrough[*]:-}"

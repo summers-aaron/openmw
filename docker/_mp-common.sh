@@ -52,6 +52,19 @@ mp_common_userdata() {
     fi
 }
 
+# Resolve a host .omwsave file into a container mount + load flag, so you can point a launcher at a
+# save on the host without the mounted-user-data dance. $1 = host path (may be empty -> no save).
+# Sets MP_SAVE_MOUNT (array of run flags, possibly empty) and MP_SAVE_LOAD (the --load-savegame flags).
+mp_common_save() {
+    MP_SAVE_MOUNT=()
+    MP_SAVE_LOAD=()
+    [ -n "${1:-}" ] || return 0
+    [ -f "$1" ] || { echo "error: save file not found: $1" >&2; exit 1; }
+    local abs; abs="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
+    MP_SAVE_MOUNT=(-v "$abs:/game.omwsave:ro")
+    MP_SAVE_LOAD=(--load-savegame /game.omwsave)
+}
+
 # Resolve the container name. If NAME is set explicitly, keep it and remove any same-named (stale)
 # container so it can be reused. Otherwise auto-pick the first free "<base>", "<base>-2", "<base>-3", …
 # so running a launcher repeatedly starts COEXISTING instances instead of the new one evicting the

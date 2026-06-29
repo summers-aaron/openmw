@@ -30,13 +30,15 @@ docker/run-client.sh <IP>     # second client (auto-named, runs alongside the fi
 Set `NAME=…` only if you want a specific, fixed container name (re-running with the same `NAME`
 replaces that one).
 
-Host a specific save instead of a new game:
+Host a specific save instead of a new game — point `--save` at a host `.omwsave` file:
 
 ```sh
-OPENMW_USERDATA=~/openmw-mp-userdata docker/run-server.sh --load-savegame /userdata/saves/test/MP.omwsave
+docker/run-server.sh --save ~/openmw-mp-userdata/saves/test/MP.omwsave        # server hosts the save
+docker/run-client.sh <IP> --save ~/openmw-mp-userdata/saves/test/MP.omwsave   # each client loads it too
 ```
 
-(`OPENMW_USERDATA` is copied to `/userdata` inside the container; the original is never modified.)
+The save is mounted read-only; the server and every client must load the **same** save so they share
+one world. (`OPENMW_SAVE=<path>` is the env equivalent of `--save`.)
 
 ## Scripts
 
@@ -57,6 +59,7 @@ All host-specific paths default to this machine but can be overridden:
 | `OPENMW_DATA` | a Steam Morrowind path | Morrowind `Data Files` (must match `openmw.cfg` `data=`) |
 | `OPENMW_CONFIG` | `~/.config/openmw` | openmw config dir (copied per instance) |
 | `OPENMW_USERDATA` | throwaway temp dir | dir mounted at `/userdata` for saves (copied) |
+| `OPENMW_SAVE` | _(none)_ | a host `.omwsave` to load (same as `--save`) |
 | `IMAGE` | `openmw.server:latest` | build/run image tag |
 | `CONTAINER_RUNTIME` | auto | `podman` or `docker` |
 | `PORT` | `25565` | default port when none is in the address |
