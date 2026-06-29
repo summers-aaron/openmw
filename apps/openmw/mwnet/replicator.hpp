@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <set>
 #include <utility>
 #include <vector>
 
@@ -102,10 +103,28 @@ namespace MWNet
         std::vector<CombatHit> mOutgoingHits;
         // Host only: damage dealt to remote players' avatars, awaiting send to their owners.
         std::vector<PlayerDamage> mOutgoingPlayerDamages;
+        // Client only: items this peer dropped / picked up, awaiting send to the host to resolve.
+        std::vector<ItemDrop> mOutgoingDrops;
+        std::vector<ESM::RefNum> mOutgoingTakes;
+        // Host only: loose items created during the session (a peer's drop), which must be
+        // replicated for existence — unlike items already in the shared save, which every peer
+        // loads identically and so needs no syncing. Sampled each tick and dropped when deleted.
+        std::set<ESM::RefNum> mNetworkItems;
+        // Host only: RefNums of loose items deleted on the authority this tick (a pickup, or a
+        // script/NPC delete), to broadcast as removals. Covers save items too — every peer holds a
+        // save item under the same RefNum, so the removal deletes their copy as well.
+        std::vector<ESM::RefNum> mPendingItemRemovals;
+        // Client only: loose items spawned from the host's replication, keyed by their (host) RefNum.
+        // Used to tell a host-owned floor item apart from anything else when this peer deletes one
+        // (picks it up), so only those are reported back to the host.
+        std::set<ESM::RefNum> mReplicatedItems;
         // Host only: re-broadcast clients' players (avatars) so clients see each other.
         bool mRelayAvatars = false;
         // True on the host (the authority that resolves combat for the shared world).
         bool mIsAuthority = false;
+        // Set transiently while the world deletes a just-dropped item being handed to the host, so
+        // that deletion isn't reported back as a pickup (see setHandingOffDrop).
+        bool mHandingOffDrop = false;
 
     public:
         /// Identify this peer's player on the wire (host and each client get distinct ids).
@@ -120,6 +139,17 @@ namespace MWNet
         void setAuthority(bool value) { mIsAuthority = value; }
         bool isAuthority() const { return mIsAuthority; }
 
+        /// True only on an actual networked client — a peer that connected to a host, so it has a
+        /// network id but is not the authority. False on the host AND in single-player / loopback
+        /// (no id assigned), so gating client-side world interception on this keeps SP unchanged.
+        bool isNetworkClient() const { return mLocalPlayerNetId.isSet() && !mIsAuthority; }
+
+        /// Guard a deletion the world is doing to hand a just-dropped item to the host, so that
+        /// deletion is NOT mistaken for a pickup and reported back (the drop is already reported,
+        /// and the local ref's RefNum is meaningless — or worse, colliding — on the host).
+        void setHandingOffDrop(bool value) { mHandingOffDrop = value; }
+        bool isHandingOffDrop() const { return mHandingOffDrop; }
+
         /// Report (from combat code on a client) that our player struck a host-resolved actor for a
         /// computed amount of damage, queued for the host to apply authoritatively. The victim is
         /// identified on the wire by its shared world RefNum if it is a host-owned actor, or — if it
@@ -133,14 +163,42 @@ namespace MWNet
         /// the struck Ptr isn't one of our avatars.
         void reportRemotePlayerHit(const MWWorld::Ptr& avatar, float damage, bool healthDamage);
 
+        /// Report (from a client) that this peer dropped an item into the shared world, for the
+        /// host to place authoritatively and replicate back to everyone. cellId is the serialized
+        /// text RefId of the cell to drop it in.
+        void reportDrop(std::string refId, int count, const osg::Vec3f& position, std::string cellId)
+        {
+            mOutgoingDrops.push_back({ std::move(refId), count, position, std::move(cellId) });
+        }
+
+        /// Report (from a client) that this peer picked a host-owned loose item up, for the host to
+        /// delete it from the shared world (and replicate the removal to every other peer).
+        void reportItemTaken(ESM::RefNum item) { mOutgoingTakes.push_back(item); }
+
+        /// Is this RefNum a loose item this peer mirrors from the host? Lets the world tell a
+        /// picked-up host item apart from any other deletion before reporting it back.
+        bool isReplicatedItem(ESM::RefNum item) const { return mReplicatedItems.count(item) != 0; }
+
+        /// Report (host only) that a loose item was deleted from the shared world (a pickup, or a
+        /// script/NPC delete), to broadcast as a removal so every peer drops its copy.
+        void reportItemRemoved(ESM::RefNum item)
+        {
+            mNetworkItems.erase(item);
+            mPendingItemRemovals.push_back(item);
+        }
+
         /// Drain this tick's reported actions for sending.
         ActionBatch takeOutgoingActions()
         {
             ActionBatch batch;
             batch.mHits = std::move(mOutgoingHits);
             batch.mPlayerDamages = std::move(mOutgoingPlayerDamages);
+            batch.mDrops = std::move(mOutgoingDrops);
+            batch.mItemsTaken = std::move(mOutgoingTakes);
             mOutgoingHits.clear();
             mOutgoingPlayerDamages.clear();
+            mOutgoingDrops.clear();
+            mOutgoingTakes.clear();
             return batch;
         }
 

@@ -65,6 +65,8 @@
 #include "../mwbase/statemanager.hpp"
 #include "../mwbase/windowmanager.hpp"
 
+#include "../mwnet/replicator.hpp"
+
 #include "../mwmechanics/actorutil.hpp"
 #include "../mwmechanics/aiavoiddoor.hpp" //Used to tell actors to avoid doors
 #include "../mwmechanics/combat.hpp"
@@ -964,6 +966,26 @@ namespace MWWorld
         {
             if (ptr == getPlayerPtr())
                 throw std::runtime_error("can not delete player object");
+
+            // Multiplayer: a loose item leaving the world must stay in sync across peers.
+            //  - On the host, broadcast the removal so every client deletes its copy (covers a
+            //    client-reported pickup applied here, and host-side script/NPC deletes).
+            //  - On a client, deleting a host-owned loose item means this peer picked it up; tell the
+            //    host so it removes the shared instance and relays that to the others. We still delete
+            //    our own copy below, so the taker sees it gone at once.
+            if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+                replicator != nullptr && ptr.getCellRef().getRefNum().isSet() && ptr.getClass().isItem(ptr))
+            {
+                if (replicator->isAuthority())
+                    replicator->reportItemRemoved(ptr.getCellRef().getRefNum());
+                // A client deleting any host-owned loose item means a pickup — report it so the host
+                // removes the shared instance. This covers items already in the save (a pre-placed
+                // floor item, e.g. Arrille's bottles), which share a RefNum across peers, not just
+                // ones we spawned from the host. The handoff guard excludes a drop we're handing off
+                // (its local RefNum is meaningless on the host) so it isn't mistaken for a pickup.
+                else if (replicator->isNetworkClient() && !replicator->isHandingOffDrop())
+                    replicator->reportItemTaken(ptr.getCellRef().getRefNum());
+            }
 
             ptr.getCellRef().setCount(0);
 
@@ -1943,6 +1965,21 @@ namespace MWWorld
         // only the player place items in the world, so no need to check actor
         PCDropped(dropped);
 
+        // Multiplayer: this is the cursor-placed drop path the inventory UI normally takes (it only
+        // falls back to dropObjectOnGround when the cursor isn't over a placeable spot), so it needs
+        // the same handling — hand a client's drop to the host and remove the local copy. See
+        // dropObjectOnGround for the full rationale.
+        if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+            replicator != nullptr && replicator->isNetworkClient() && !dropped.isEmpty() && dropped.isInCell()
+            && dropped.getClass().isItem(dropped))
+        {
+            replicator->reportDrop(dropped.getCellRef().getRefId().serializeText(), dropped.getCellRef().getCount(),
+                dropped.getRefData().getPosition().asVec3(), dropped.getCell()->getCell()->getId().serializeText());
+            replicator->setHandingOffDrop(true);
+            deleteObject(dropped);
+            replicator->setHandingOffDrop(false);
+        }
+
         return dropped;
     }
 
@@ -2064,6 +2101,21 @@ namespace MWWorld
 
         if (actor == mPlayers.primary().getPlayer()) // Only call if dropped by player
             PCDropped(dropped);
+
+        // Multiplayer: a client doesn't own the shared world, so hand its player's drop to the host
+        // — report it, then remove our just-made local copy. The host places the item authoritatively
+        // (its own RefNum) and replicates it back to every peer, the dropper included; that echo is
+        // the instance everyone then shares (no duplicate, no divergent identity).
+        if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+            replicator != nullptr && replicator->isNetworkClient() && actor == mPlayers.primary().getPlayer()
+            && !dropped.isEmpty() && dropped.isInCell() && dropped.getClass().isItem(dropped))
+        {
+            replicator->reportDrop(dropped.getCellRef().getRefId().serializeText(), dropped.getCellRef().getCount(),
+                dropped.getRefData().getPosition().asVec3(), dropped.getCell()->getCell()->getId().serializeText());
+            replicator->setHandingOffDrop(true);
+            deleteObject(dropped);
+            replicator->setHandingOffDrop(false);
+        }
         return dropped;
     }
 

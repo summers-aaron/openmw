@@ -42,6 +42,7 @@
 #include "../mwworld/manualref.hpp"
 #include "../mwworld/ptr.hpp"
 #include "../mwworld/refdata.hpp"
+#include "../mwworld/scene.hpp"
 #include "../mwworld/worldmodel.hpp"
 
 namespace MWNet
@@ -274,7 +275,8 @@ namespace MWNet
                                  std::optional<float> speed,
                                  std::optional<AppearanceState> appearance = std::nullopt,
                                  std::optional<std::vector<EquipmentSlot>> equipment = std::nullopt,
-                                 std::optional<std::string> cellId = std::nullopt) {
+                                 std::optional<std::string> cellId = std::nullopt,
+                                 std::optional<ItemState> item = std::nullopt) {
             // Appearance and equipment are deliberately outside the dedup key: they are only
             // ever passed on full-refresh ticks (which always resend anyway), so they never
             // perturb the change detection that decides whether to emit transform/stats at all.
@@ -299,6 +301,7 @@ namespace MWNet
             entity.mAppearance = appearance;
             entity.mEquipment = std::move(equipment);
             entity.mCellId = std::move(cellId);
+            entity.mItem = std::move(item);
             delta.mEntities.push_back(entity);
         };
 
@@ -395,6 +398,36 @@ namespace MWNet
                     // downstream client puts its copy in the same cell rather than the host's.
                     sampleCellId(avatar));
             }
+        }
+
+        // Host only: replicate loose items CREATED this session (a peer's drop) so every peer sees
+        // the same floor. Items already in the shared save are loaded identically everywhere and need
+        // no syncing — replicating them would only risk duplicating them into cells a client hasn't
+        // reached yet. Each item is a cell ref with a stable RefNum, so it rides the same entity
+        // channel as an actor; it carries an item descriptor (RefId + count) so a receiver can
+        // instantiate one it has never seen. Deletions can't be expressed by an absent delta entry,
+        // so they are listed explicitly (and come from the actual delete, not a guessed set diff).
+        if (mIsAuthority)
+        {
+            MWWorld::WorldModel& worldModel = *MWBase::Environment::get().getWorldModel();
+            for (auto it = mNetworkItems.begin(); it != mNetworkItems.end();)
+            {
+                const MWWorld::Ptr ptr = worldModel.getPtr(*it);
+                if (ptr.isEmpty() || ptr.getCellRef().getCount() <= 0 || !ptr.isInCell())
+                {
+                    ++it; // not currently resolvable (e.g. its cell is unloaded) — keep tracking it
+                    continue;
+                }
+                const ESM::Position& itemPos = ptr.getRefData().getPosition();
+                include(*it,
+                    TransformState{ itemPos.asVec3(), osg::Vec3f(itemPos.rot[0], itemPos.rot[1], itemPos.rot[2]) },
+                    std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt,
+                    sampleCellId(ptr),
+                    ItemState{ ptr.getCellRef().getRefId().serializeText(), ptr.getCellRef().getCount() });
+                ++it;
+            }
+            delta.mRemovedItems = std::move(mPendingItemRemovals);
+            mPendingItemRemovals.clear();
         }
 
         return delta;
@@ -744,6 +777,46 @@ namespace MWNet
             // Ordinary world entity: only a client obeying its host applies these.
             if (!applyWorldEntities)
                 continue;
+
+            if (entity.mItem)
+            {
+                // A loose item the host owns. Spawn it the first time we see it, adopting the host's
+                // RefNum so the item has one shared identity across peers — future moves/removals
+                // address it by that RefNum and our own pickup reports it directly. Afterwards just
+                // keep its position in step.
+                const MWWorld::Ptr existing = worldModel.getPtr(entity.mId);
+                if (existing.isEmpty() || !existing.isInCell())
+                {
+                    const MWWorld::Ptr localPlayer = world.getPlayerPtr();
+                    if (localPlayer.isEmpty() || !localPlayer.isInCell())
+                        continue;
+                    MWWorld::CellStore* cell = entity.mCellId
+                        ? worldModel.findCell(ESM::RefId::deserializeText(*entity.mCellId))
+                        : nullptr;
+                    if (cell == nullptr)
+                        cell = localPlayer.getCell();
+                    try
+                    {
+                        MWWorld::ManualRef ref(
+                            world.getStore(), ESM::RefId::deserializeText(entity.mItem->mRefId), entity.mItem->mCount);
+                        MWWorld::Ptr placed = world.placeObject(ref.getPtr(), cell, toPosition(*entity.mTransform));
+                        // placeObject assigns a fresh local RefNum; replace it with the host's.
+                        worldModel.deregisterLiveCellRef(*placed.getBase());
+                        placed.getCellRef().setRefNum(entity.mId);
+                        worldModel.registerPtr(placed);
+                        mReplicatedItems.insert(entity.mId);
+                    }
+                    catch (const std::exception&)
+                    {
+                        continue; // could not instantiate this tick; try again on the next update
+                    }
+                }
+                else
+                    world.moveObject(existing, entity.mTransform->mPosition);
+                ++applied;
+                continue;
+            }
+
             const MWWorld::Ptr ptr = worldModel.getPtr(entity.mId);
             if (ptr.isEmpty() || !ptr.isInCell())
                 continue; // not present / not loaded into an active cell yet — moveObject needs a cell
@@ -769,6 +842,19 @@ namespace MWNet
                 mAppliedSwingSeq.try_emplace(entity.mId, 0); // witnessed its pre-swing state: the first real swing will play
             ++applied;
         }
+
+        // Loose items that have left the shared world (picked up elsewhere, or a script/NPC delete):
+        // delete our copy. This covers both session-dropped items and save items — every peer holds a
+        // save item under the same RefNum, so getPtr finds it. A pickup we made ourselves already
+        // deleted its copy, so the echo is then a no-op (count already 0).
+        for (const ESM::RefNum& removed : delta.mRemovedItems)
+        {
+            mReplicatedItems.erase(removed); // cleanup if it was one we spawned
+            const MWWorld::Ptr item = worldModel.getPtr(removed);
+            if (!item.isEmpty() && item.getCellRef().getCount() > 0)
+                world.deleteObject(item);
+        }
+
         return applied;
     }
 
@@ -845,6 +931,44 @@ namespace MWNet
             Log(Debug::Verbose) << "Applied combat hit: " << victim.getCellRef().getRefId() << " -"
                                 << hit.mDamage << (hit.mHealthDamage ? " hp -> " : " fatigue -> ") << stat.getCurrent()
                                 << ", aggroes onto remote player " << hit.mAttacker.mIndex;
+        }
+
+        // A peer dropped an item: place it in the shared world authoritatively. It becomes a cell
+        // ref with a host RefNum, which sampleDelta then replicates to every peer (the dropper
+        // included — that is how the dropper's item appears, since it did not place one locally).
+        for (const ItemDrop& drop : batch.mDrops)
+        {
+            MWWorld::CellStore* cell = worldModel.findCell(ESM::RefId::deserializeText(drop.mCellId));
+            if (cell == nullptr)
+                continue;
+            try
+            {
+                MWWorld::ManualRef ref(world.getStore(), ESM::RefId::deserializeText(drop.mRefId), drop.mCount);
+                ESM::Position pos;
+                pos.pos[0] = drop.mPosition.x();
+                pos.pos[1] = drop.mPosition.y();
+                pos.pos[2] = drop.mPosition.z();
+                pos.rot[0] = pos.rot[1] = pos.rot[2] = 0.f;
+                const MWWorld::Ptr placed = world.placeObject(ref.getPtr(), cell, pos);
+                // Track it as a session-created item so sampleDelta replicates its existence to all
+                // peers (the dropper included — that is how the dropper's item appears).
+                if (placed.getCellRef().getRefNum().isSet())
+                    mNetworkItems.insert(placed.getCellRef().getRefNum());
+            }
+            catch (const std::exception& e)
+            {
+                Log(Debug::Warning) << "applyActions: could not place dropped item " << drop.mRefId << ": " << e.what();
+            }
+        }
+
+        // A peer picked a host-owned loose item up: delete it from the shared world. World::deleteObject
+        // broadcasts the removal (see its replicator hook) so every other peer drops its copy; the
+        // taker already removed its own on pickup.
+        for (const ESM::RefNum& taken : batch.mItemsTaken)
+        {
+            const MWWorld::Ptr item = worldModel.getPtr(taken);
+            if (!item.isEmpty() && item.getCellRef().getCount() > 0)
+                world.deleteObject(item);
         }
     }
 
