@@ -7,8 +7,9 @@ so you don't need a host toolchain. Works with **podman** (Fedora, rootless) or 
 ## Prerequisites
 
 - podman or docker.
-- A Morrowind install (the **`Data Files`** directory). Its path must match the `data=` line in your
-  `openmw.cfg`, because the container mounts it at that same path.
+- A Morrowind install. The launchers read the `data=` directories from your `openmw.cfg` and mount
+  them, so wherever the game lives (native Steam, Flatpak, GOG, manual) it works without configuration.
+  Override with `OPENMW_DATA=<Data Files path>` if you want a specific one.
 - An `openmw.cfg` (default `~/.config/openmw`) listing your content (`Morrowind.esm`, …).
 
 ## Quick start
@@ -56,7 +57,7 @@ All host-specific paths default to this machine but can be overridden:
 
 | Var | Default | Meaning |
 |---|---|---|
-| `OPENMW_DATA` | a Steam Morrowind path | Morrowind `Data Files` (must match `openmw.cfg` `data=`) |
+| `OPENMW_DATA` | _(read from openmw.cfg)_ | force a specific Morrowind `Data Files` path |
 | `OPENMW_CONFIG` | `~/.config/openmw` | openmw config dir (copied per instance) |
 | `OPENMW_USERDATA` | throwaway temp dir | dir mounted at `/userdata` for saves (copied) |
 | `OPENMW_SAVE` | _(none)_ | a host `.omwsave` to load (same as `--save`) |

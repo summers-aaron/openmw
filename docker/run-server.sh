@@ -57,7 +57,7 @@ fi
 echo "Starting dedicated server '$NAME' on port $LISTEN (Ctrl+C to stop)..."
 exec "$MP_RUNTIME" run --rm --name "$NAME" --network host --security-opt label=disable \
     -e LIBGL_ALWAYS_SOFTWARE=1 -e GALLIUM_DRIVER=llvmpipe -e SDL_VIDEODRIVER=offscreen -e EGL_PLATFORM=surfaceless \
-    -v "$REPO:/openmw:Z" -v "$MP_DATA:$MP_DATA:ro" -v "$MP_CFG:/root/.config/openmw" -v "$MP_USERDATA:/userdata" \
+    -v "$REPO:/openmw:Z" "${MP_DATA_MOUNTS[@]}" -v "$MP_CFG:/root/.config/openmw" -v "$MP_USERDATA:/userdata" \
     ${MP_SAVE_MOUNT[@]+"${MP_SAVE_MOUNT[@]}"} \
     -w /openmw/build "$IMAGE" \
     bash -lc "./openmw --resources resources --skip-menu --no-grab --dedicated --listen $LISTEN \

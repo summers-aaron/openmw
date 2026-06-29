@@ -4,9 +4,6 @@
 # Host-specific paths default to this machine but are all overridable via env.
 
 IMAGE="${IMAGE:-openmw.server:latest}"
-# Morrowind game data. MUST match the data= path in your openmw.cfg, because the container mounts
-# it at the same path so the config resolves inside the container too.
-MP_DATA="${OPENMW_DATA:-/home/aaron/.var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/common/Morrowind/Data Files}"
 MP_CONFIG="${OPENMW_CONFIG:-$HOME/.config/openmw}"
 
 # --- container runtime: explicit override, else podman (Fedora), else docker ---
@@ -17,19 +14,45 @@ if [ -z "$MP_RUNTIME" ]; then
     else echo "error: no podman or docker found" >&2; exit 1; fi
 fi
 
+# Resolve the game data directories to bind-mount. Generic across Steam install methods (native,
+# Flatpak, GOG, manual): if OPENMW_DATA is set, mount just that; otherwise read the data= lines from
+# your openmw.cfg — the exact paths OpenMW itself loads — so it works wherever the game is installed.
+# Each is mounted at its own host path so the (copied) config resolves inside the container.
+# Sets MP_DATA_MOUNTS (array of -v run flags).
+mp_common_data_mounts() {
+    MP_DATA_MOUNTS=()
+    if [ -n "${OPENMW_DATA:-}" ]; then
+        [ -d "$OPENMW_DATA" ] || { echo "error: OPENMW_DATA is not a directory: $OPENMW_DATA" >&2; exit 1; }
+        MP_DATA_MOUNTS=(-v "$OPENMW_DATA:$OPENMW_DATA:ro")
+        return
+    fi
+    local cfg="$MP_CONFIG/openmw.cfg"
+    [ -f "$cfg" ] || { echo "error: no openmw.cfg at $cfg (set OPENMW_CONFIG, or OPENMW_DATA directly)" >&2; exit 1; }
+    local line path
+    while IFS= read -r line; do
+        case "$line" in
+            data=*)
+                path="${line#data=}"
+                path="${path%\"}"; path="${path#\"}" # strip optional surrounding quotes
+                [ -n "$path" ] && [ -d "$path" ] && MP_DATA_MOUNTS+=(-v "$path:$path:ro")
+                ;;
+        esac
+    done < "$cfg"
+    if [ ${#MP_DATA_MOUNTS[@]} -eq 0 ]; then
+        echo "error: no usable data= directories found in $cfg" >&2
+        echo "  Set OPENMW_DATA to your Morrowind 'Data Files' path, or fix the data= lines in openmw.cfg." >&2
+        exit 1
+    fi
+}
+
 mp_common_preflight() {
     command -v "$MP_RUNTIME" >/dev/null 2>&1 || { echo "error: '$MP_RUNTIME' not found" >&2; exit 1; }
     if ! "$MP_RUNTIME" image inspect "$IMAGE" >/dev/null 2>&1; then
         echo "error: image '$IMAGE' not found — build it first with: docker/build-host.sh" >&2
         exit 1
     fi
-    if [ ! -d "$MP_DATA" ]; then
-        echo "error: Morrowind Data Files not found at:" >&2
-        echo "  $MP_DATA" >&2
-        echo "  Set OPENMW_DATA to the right path (it must match the data= line in your openmw.cfg)." >&2
-        exit 1
-    fi
     [ -d "$MP_CONFIG" ] || { echo "error: openmw config dir not found at: $MP_CONFIG (set OPENMW_CONFIG)" >&2; exit 1; }
+    mp_common_data_mounts # -> MP_DATA_MOUNTS (validated)
 }
 
 # Per-instance writable copy of the config, so each process can write settings/MyGUI.log without
