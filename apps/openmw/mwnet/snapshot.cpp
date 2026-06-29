@@ -7,23 +7,25 @@ namespace MWNet
     namespace
     {
         // Wire format version. Bumped if the layout below changes incompatibly.
-        constexpr std::uint8_t sVersion = 2;
+        constexpr std::uint8_t sVersion = 3;
 
-        // EntityState field bits (mFieldMask).
-        constexpr std::uint8_t sFieldTransform = 1 << 0;
-        constexpr std::uint8_t sFieldStats = 1 << 1;
-        constexpr std::uint8_t sFieldDrawState = 1 << 2;
-        constexpr std::uint8_t sFieldAppearance = 1 << 3;
-        constexpr std::uint8_t sFieldEquipment = 1 << 4;
-        constexpr std::uint8_t sFieldMoveFlags = 1 << 5;
-        constexpr std::uint8_t sKnownFields = sFieldTransform | sFieldStats | sFieldDrawState
-            | sFieldAppearance | sFieldEquipment | sFieldMoveFlags;
+        // EntityState field bits (mFieldMask, a uint16 to leave room for more states).
+        constexpr std::uint16_t sFieldTransform = 1 << 0;
+        constexpr std::uint16_t sFieldStats = 1 << 1;
+        constexpr std::uint16_t sFieldDrawState = 1 << 2;
+        constexpr std::uint16_t sFieldAppearance = 1 << 3;
+        constexpr std::uint16_t sFieldEquipment = 1 << 4;
+        constexpr std::uint16_t sFieldMoveFlags = 1 << 5;
+        constexpr std::uint16_t sFieldAttack = 1 << 6;
+        constexpr std::uint16_t sFieldSpeed = 1 << 7;
+        constexpr std::uint16_t sKnownFields = sFieldTransform | sFieldStats | sFieldDrawState | sFieldAppearance
+            | sFieldEquipment | sFieldMoveFlags | sFieldAttack | sFieldSpeed;
 
         // Smallest possible encoded equipment entry: slot (1) + a zero-length item string (4).
         constexpr std::uint32_t sMinEquipmentBytes = 5;
 
-        // Smallest possible encoded entity: RefNum (4 + 4) + field mask (1).
-        constexpr std::uint32_t sMinEntityBytes = 9;
+        // Smallest possible encoded entity: RefNum (4 + 4) + field mask (2).
+        constexpr std::uint32_t sMinEntityBytes = 10;
     }
 
     std::vector<std::byte> serializeSnapshot(const SnapshotDelta& delta)
@@ -40,7 +42,7 @@ namespace MWNet
             writer.write(entity.mId.mIndex);
             writer.write(entity.mId.mContentFile);
 
-            std::uint8_t fieldMask = 0;
+            std::uint16_t fieldMask = 0;
             if (entity.mTransform)
                 fieldMask |= sFieldTransform;
             if (entity.mStats)
@@ -53,6 +55,10 @@ namespace MWNet
                 fieldMask |= sFieldEquipment;
             if (entity.mMoveFlags)
                 fieldMask |= sFieldMoveFlags;
+            if (entity.mAttack)
+                fieldMask |= sFieldAttack;
+            if (entity.mSpeed)
+                fieldMask |= sFieldSpeed;
             writer.write(fieldMask);
 
             if (entity.mTransform)
@@ -72,6 +78,10 @@ namespace MWNet
                 writer.write(*entity.mDrawState);
             if (entity.mMoveFlags)
                 writer.write(*entity.mMoveFlags);
+            if (entity.mAttack)
+                writer.write(*entity.mAttack);
+            if (entity.mSpeed)
+                writer.write(*entity.mSpeed);
             if (entity.mAppearance)
             {
                 writer.writeString(entity.mAppearance->mRace);
@@ -123,7 +133,7 @@ namespace MWNet
             if (!reader.read(entity.mId.mIndex) || !reader.read(entity.mId.mContentFile))
                 return std::nullopt;
 
-            std::uint8_t fieldMask = 0;
+            std::uint16_t fieldMask = 0;
             if (!reader.read(fieldMask))
                 return std::nullopt;
             if (fieldMask & ~sKnownFields)
@@ -160,6 +170,20 @@ namespace MWNet
                 if (!reader.read(moveFlags))
                     return std::nullopt;
                 entity.mMoveFlags = moveFlags;
+            }
+            if (fieldMask & sFieldAttack)
+            {
+                std::uint8_t attack = 0;
+                if (!reader.read(attack))
+                    return std::nullopt;
+                entity.mAttack = attack;
+            }
+            if (fieldMask & sFieldSpeed)
+            {
+                float speed = 0.f;
+                if (!reader.read(speed))
+                    return std::nullopt;
+                entity.mSpeed = speed;
             }
             if (fieldMask & sFieldAppearance)
             {

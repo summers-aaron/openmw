@@ -37,6 +37,8 @@ namespace MWNet
             std::optional<DynamicStats> mStats;
             std::optional<std::uint8_t> mDrawState;
             std::optional<std::uint8_t> mMoveFlags;
+            std::optional<std::uint8_t> mAttack;
+            std::optional<float> mSpeed;
 
             friend bool operator==(const SentState&, const SentState&) = default;
         };
