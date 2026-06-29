@@ -1728,7 +1728,10 @@ namespace MWMechanics
             }
         }
         stats.getAiSequence().stack(MWMechanics::AiCombat(target), ptr);
-        if (target == getPlayer())
+        // Any player, not just the primary one: a guard provoked by a network peer's avatar must
+        // record it as its hit-attempt actor (so it doesn't immediately drop combat when the avatar
+        // is briefly unreachable) exactly as it would for the local player.
+        if (MWBase::Environment::get().getWorld()->isPlayer(target))
         {
             // if guard starts combat with player, guards pursuing player should do the same
             if (ptr.getClass().isClass(ptr, "Guard"))

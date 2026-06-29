@@ -1621,8 +1621,12 @@ namespace MWMechanics
                                     continue;
                                 if (otherActor.getPtr() == actor.getPtr() || isPlayer) // player is not AI-controlled
                                     continue;
-                                engageCombat(
-                                    actor.getPtr(), otherActor.getPtr(), cachedAllies, otherActor.getPtr() == player);
+                                // "against a player" gates the spontaneous on-sight aggression check, and
+                                // must hold for EVERY player (each network peer), not just the primary one —
+                                // otherwise NPCs only ever turn hostile to the first/host player and ignore
+                                // the others sharing the cell.
+                                engageCombat(actor.getPtr(), otherActor.getPtr(), cachedAllies,
+                                    world->isPlayer(otherActor.getPtr()));
                             }
                         }
                         if (mTimerUpdateHeadTrack == 0)
@@ -1678,7 +1682,15 @@ namespace MWMechanics
             {
                 if (actor.isInvalid())
                     continue;
-                const float dist = (playerPos - actor.getPtr().getRefData().getPosition().asVec3()).length();
+                // Distance to the NEAREST player, not just the primary one: an actor around any
+                // player (e.g. a network peer far from the dedicated server's own player) must still
+                // get its character/animation/movement update, or it freezes mid-pose while its AI
+                // keeps deciding to move — matching the multi-player range test in the AI loop above.
+                const osg::Vec3f animActorPos = actor.getPtr().getRefData().getPosition().asVec3();
+                float distSqr = (playerPositions[0] - animActorPos).length2();
+                for (std::size_t i = 1; i < playerPositions.size(); ++i)
+                    distSqr = std::min(distSqr, (playerPositions[i] - animActorPos).length2());
+                const float dist = std::sqrt(distSqr);
                 const bool isPlayer = actor.getPtr() == player;
                 CreatureStats& stats = actor.getPtr().getClass().getCreatureStats(actor.getPtr());
                 // Actors with active AI should be able to move.
