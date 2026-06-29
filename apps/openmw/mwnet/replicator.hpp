@@ -7,6 +7,8 @@
 #include <utility>
 #include <vector>
 
+#include <osg/Vec3f>
+
 #include <components/esm3/refnum.hpp>
 
 #include "../mwworld/ptr.hpp"
@@ -37,7 +39,7 @@ namespace MWNet
             std::optional<DynamicStats> mStats;
             std::optional<std::uint8_t> mDrawState;
             std::optional<std::uint8_t> mMoveFlags;
-            std::optional<std::uint8_t> mAttack;
+            std::optional<SwingState> mSwing;
             std::optional<float> mSpeed;
 
             friend bool operator==(const SentState&, const SentState&) = default;
@@ -48,6 +50,45 @@ namespace MWNet
         // Each peer's last-advertised body identity, so its avatar can be built to match
         // it (received occasionally; an avatar is only instantiated once it's known).
         std::map<ESM::RefNum, AppearanceState> mAppearances;
+        // Sampling side: each actor's attacking-or-spell state last tick, and whether a swing for
+        // the current attack pulse is still waiting to be captured. On the rising edge a capture is
+        // armed; the swing counter is bumped once at the first tick of that pulse where the weapon
+        // group is actually the active Torso group (so a same-tick weapon draw or hand-to-hand
+        // doesn't slip past an exact-edge check). We stream that counter rather than guessing swings
+        // from a free-running playhead. mSampledSwing holds the latest {group, type, seq} to emit.
+        std::map<ESM::RefNum, bool> mWasAttacking;
+        std::map<ESM::RefNum, bool> mPendingSwing;
+        std::map<ESM::RefNum, SwingState> mSampledSwing;
+        // Applying side: the swing counter last played on each actor, so a received swing fires its
+        // segment exactly once — when the counter changes. The first counter seen for an actor is
+        // recorded without firing (it's a stale latest-swing, not a fresh one to replay on sight).
+        std::map<ESM::RefNum, std::uint32_t> mAppliedSwingSeq;
+        // The last swing received for each avatar, so the host relays the peer's ORIGINAL swing
+        // (its own counter) to other clients rather than re-deriving one from its brief overlay.
+        std::map<ESM::RefNum, std::optional<SwingState>> mAvatarSwing;
+        // Per actor, the health last applied and the tick we last played a hit reaction, so a drop
+        // in replicated health makes the victim flinch + grunt once per hit on this client (the
+        // authoritative damage is applied directly, bypassing the onHit that would normally react).
+        // The tick gate keeps a damage-over-time effect from re-flinching every single tick.
+        std::map<ESM::RefNum, float> mLastHealth;
+        std::map<ESM::RefNum, std::uint32_t> mLastHitReactionTick;
+        // Per remote-owned actor's locomotion intent, re-asserted EVERY frame (driveRemoteActors)
+        // rather than only on snapshot-receipt frames. The mechanics pass consumes and zeroes an
+        // actor's movement vector every frame; for a remote avatar (AI skipped) only we write it,
+        // so driving it solely on snapshot frames left it idle between snapshots — the avatar slid
+        // (position corrected discretely under a frozen idle pose) and its walk cycle restarted on
+        // each snapshot. Re-asserting it every frame keeps the cycle continuous and lets the actor
+        // dead-reckon between snapshots, with the snapshot moveObject as authoritative correction.
+        struct RemoteMotion
+        {
+            MWWorld::Ptr mActor;          // the applied actor to drive each frame
+            osg::Vec3f mPrevTarget;       // last authoritative position, to derive the per-snapshot step
+            float mDirX = 0.f;            // movement direction in the actor's local frame: X right,
+            float mDirY = 0.f;            // Y forward (matching Movement::mPosition[0]/[1])
+            float mFraction = 0.f;        // speed as a fraction of the actor's max speed; 0 = idle
+            bool mHasPrev = false;        // false until the first snapshot establishes mPrevTarget
+        };
+        std::map<ESM::RefNum, RemoteMotion> mRemoteMotion;
         // This peer's own player network id (role-based: host vs client), so we never
         // instantiate an avatar for our own player echoed back.
         ESM::RefNum mLocalPlayerNetId;
@@ -108,6 +149,42 @@ namespace MWNet
         /// Read the world's active actors (and this peer's player) and build the delta.
         SnapshotDelta sampleDelta();
 
+        /// Re-assert every remote-owned actor's locomotion intent for THIS frame, so its walk
+        /// cycle plays continuously and it dead-reckons between snapshots. Must be called every
+        /// frame (the mechanics pass zeroes the movement vector each frame), before mechanics
+        /// update — applyDelta only records the intent (recordMotion) on snapshot frames.
+        void driveRemoteActors();
+
+    private:
+        /// Sample an actor's discrete swing state: bump its per-swing counter on the rising edge
+        /// of attacking-or-spell (capturing the weapon group and attack type then), and return the
+        /// latest {group, type, seq}. nullopt until the actor has swung at least once. Stateful
+        /// (keyed by id), so it must be called once per tick per actor.
+        std::optional<SwingState> sampleSwing(const MWWorld::Ptr& actor, const ESM::RefNum& id);
+
+        /// Overlay a received swing onto an applied actor: when its counter differs from the one
+        /// last played, play the attack segment once on the actor's upper body. No-op while the
+        /// counter is unchanged, so a continuously-active weapon animation never re-fires.
+        void applySwing(const MWWorld::Ptr& actor, const ESM::RefNum& id, const SwingState& swing);
+
+        /// React visibly to a drop in an actor's replicated health: make it flinch (hit-recovery
+        /// animation, played by its own controller) and play the pain sound, once per hit. localPlayer
+        /// also flashes the screen hit overlay. No-op when health didn't fall or the actor is dead.
+        void applyHitReaction(const MWWorld::Ptr& actor, const ESM::RefNum& id, float newHealth, bool localPlayer);
+
+        /// Spawn a blood splatter on a struck actor, mirroring omw/combat/local.lua spawnBloodEffect
+        /// (random of three blood meshes, texture by the actor's blood type). The receiver runs no
+        /// onHit, so the Lua handler that would normally spawn it never fires for a remote victim.
+        void spawnBloodEffect(const MWWorld::Ptr& actor);
+
+        /// Record a remote actor's locomotion intent from an applied snapshot: derive the
+        /// movement direction (in the actor's local frame) and speed fraction from the
+        /// authoritative step since the previous snapshot, for driveRemoteActors to replay
+        /// each frame.
+        void recordMotion(const ESM::RefNum& id, const MWWorld::Ptr& actor, const osg::Vec3f& target,
+            const osg::Vec3f& rotation, std::optional<float> speed);
+
+    public:
         /// Apply a received delta. Other peers' players are always shown as avatars
         /// (instantiated on first sight, then moved); ordinary world entities are moved
         /// only when applyWorldEntities is true (a client obeying its host) — never for a
