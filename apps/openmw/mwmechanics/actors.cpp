@@ -2386,6 +2386,15 @@ namespace MWMechanics
         return it->second->getCharacterController().isAttackingOrSpell();
     }
 
+    std::string_view Actors::getActiveAttackType(const MWWorld::Ptr& ptr) const
+    {
+        const auto it = mIndex.find(ptr.mRef);
+        if (it == mIndex.end())
+            return {};
+
+        return it->second->getCharacterController().getActiveAttackType();
+    }
+
     int Actors::getGreetingTimer(const MWWorld::Ptr& ptr) const
     {
         const auto it = mIndex.find(ptr.mRef);
