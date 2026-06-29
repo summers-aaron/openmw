@@ -1566,6 +1566,12 @@ namespace MWWorld
         return physicActor && physicActor->getCollisionMode();
     }
 
+    void World::setActorOnGround(const MWWorld::Ptr& ptr, bool onGround)
+    {
+        if (MWPhysics::Actor* physicActor = mPhysics->getActor(ptr))
+            physicActor->setOnGround(onGround);
+    }
+
     bool World::toggleCollisionMode()
     {
         if (mPhysics->toggleCollisionMode())

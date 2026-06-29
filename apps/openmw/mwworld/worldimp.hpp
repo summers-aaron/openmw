@@ -421,6 +421,7 @@ namespace MWWorld
 
         void setActorCollisionMode(const Ptr& ptr, bool internal, bool external) override;
         bool isActorCollisionEnabled(const Ptr& ptr) override;
+        void setActorOnGround(const Ptr& ptr, bool onGround) override;
 
         bool toggleCollisionMode() override;
         ///< Toggle collision mode for player. If disabled player object should ignore

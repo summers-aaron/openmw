@@ -352,6 +352,12 @@ namespace MWBase
         virtual void setActorCollisionMode(const MWWorld::Ptr& ptr, bool internal, bool external) = 0;
         virtual bool isActorCollisionEnabled(const MWWorld::Ptr& ptr) = 0;
 
+        // Multiplayer: force a network puppet's grounded state. Its body is teleported to its owner's
+        // position and its physics simulation is skipped, so the engine never works out whether it is
+        // airborne; setting it lets the puppet's own controller play jump/land and gate locomotion
+        // natively, just like the owner's does.
+        virtual void setActorOnGround(const MWWorld::Ptr& ptr, bool onGround) = 0;
+
         virtual bool toggleCollisionMode() = 0;
         ///< Toggle collision mode for player. If disabled player object should ignore
         /// collisions and gravity.

@@ -247,11 +247,21 @@ namespace MWNet
                 flags |= 1 << 0;
             if (stats.getStance(MWMechanics::CreatureStats::Stance_Sneak))
                 flags |= 1 << 1;
+            // Airborne (jumping or falling). A remote avatar is teleported onto its owner's position
+            // each snapshot, so its own controller always reads "on the ground" and would never play
+            // the jump. Carry the state explicitly — same condition the controller uses to enter
+            // JumpState_InAir — so the receiver can hold the jump loop while it is set and play the
+            // landing when it clears; the authoritative Z still drives the actual arc.
+            MWBase::World* world = MWBase::Environment::get().getWorld();
+            if (world->isActorCollisionEnabled(actor) && !world->isOnGround(actor) && !world->isSwimming(actor)
+                && !world->isFlying(actor))
+                flags |= 1 << 2;
             return flags;
         }
 
         // Apply a replicated run/sneak stance to an actor, so the controller picks the run/sneak
-        // animation variants. Out-of-range bits are ignored; only run and sneak are honored.
+        // animation variants. Out-of-range bits are ignored; only run and sneak are honored (the
+        // airborne bit is handled separately, by Replicator::applyJump).
         void applyMoveFlags(const MWWorld::Ptr& actor, std::uint8_t flags)
         {
             if (!actor.getClass().isActor())
@@ -549,11 +559,13 @@ namespace MWNet
 
     void Replicator::driveRemoteActors()
     {
+        MWBase::World& world = *MWBase::Environment::get().getWorld();
         for (auto it = mRemoteMotion.begin(); it != mRemoteMotion.end();)
         {
             MWWorld::Ptr& actor = it->second.mActor;
             if (actor.isEmpty() || !actor.isInCell() || !actor.getClass().isActor())
             {
+                mWasAirborne.erase(it->first);
                 it = mRemoteMotion.erase(it); // avatar gone (left range / disconnected) — stop driving it
                 continue;
             }
@@ -563,6 +575,15 @@ namespace MWNet
             MWMechanics::Movement& movement = actor.getClass().getMovementSettings(actor);
             movement.mPosition[0] = it->second.mDirX * it->second.mFraction;
             movement.mPosition[1] = it->second.mDirY * it->second.mFraction;
+            // Force the puppet's grounded state to the authoritative airborne flag. Its body is
+            // teleported to the owner's position and its physics simulation is skipped, so the engine
+            // never works out whether it is in the air — left to itself the value sticks, which made it
+            // both walk mid-jump and freeze in the fall pose after landing. With this set, the puppet's
+            // OWN controller does the rest natively: it plays the jump and gates locomotion off while
+            // airborne (exactly as the owner's controller does), then plays the land-out on touchdown.
+            // No hand-rolled jump animation to fight it on the shared anim group.
+            const auto airborne = mWasAirborne.find(it->first);
+            world.setActorOnGround(actor, airborne == mWasAirborne.end() || !airborne->second);
             ++it;
         }
     }
@@ -606,6 +627,13 @@ namespace MWNet
         if (it == mSampledSwing.end() || it->second.mSeq == 0)
             return std::nullopt; // this actor has not swung yet
         return it->second;
+    }
+
+    void Replicator::applyJump(const MWWorld::Ptr&, const ESM::RefNum& id, bool airborne)
+    {
+        // Record the authoritative airborne state; driveRemoteActors forces the puppet's grounded
+        // state from it each frame, and the puppet's own controller plays jump/land from that.
+        mWasAirborne[id] = airborne;
     }
 
     void Replicator::applySwing(const MWWorld::Ptr& actor, const ESM::RefNum& id, const SwingState& swing)
@@ -790,7 +818,10 @@ namespace MWNet
                 if (avatar.isEmpty() || !avatar.isInCell())
                     continue;
                 if (entity.mMoveFlags)
+                {
                     applyMoveFlags(avatar, *entity.mMoveFlags); // before record: maxSpeed depends on stance
+                    applyJump(avatar, entity.mId, (*entity.mMoveFlags & (1 << 2)) != 0);
+                }
                 recordMotion(entity.mId, avatar, entity.mTransform->mPosition, entity.mTransform->mRotation,
                     entity.mSpeed);
                 // Move the avatar to the owner's reported position (and cell). On the authority the
@@ -883,7 +914,10 @@ namespace MWNet
             // local simulation from fighting the applied pose (cease-remote-sim).
             ptr.getRefData().setRemoteOwned(true);
             if (entity.mMoveFlags)
+            {
                 applyMoveFlags(ptr, *entity.mMoveFlags); // before record: maxSpeed depends on stance
+                applyJump(ptr, entity.mId, (*entity.mMoveFlags & (1 << 2)) != 0);
+            }
             recordMotion(entity.mId, ptr, entity.mTransform->mPosition, entity.mTransform->mRotation, entity.mSpeed);
             world.moveObject(ptr, entity.mTransform->mPosition);
             world.rotateObject(ptr, entity.mTransform->mRotation, MWBase::RotationFlag_none);

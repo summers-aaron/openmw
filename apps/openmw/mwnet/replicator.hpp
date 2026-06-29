@@ -64,6 +64,10 @@ namespace MWNet
         // segment exactly once — when the counter changes. The first counter seen for an actor is
         // recorded without firing (it's a stale latest-swing, not a fresh one to replay on sight).
         std::map<ESM::RefNum, std::uint32_t> mAppliedSwingSeq;
+        // Applying side: the authoritative airborne state of each driven actor, recorded from its
+        // moveflags. driveRemoteActors forces the puppet's physics grounded state from it each frame,
+        // so the puppet's own controller plays jump/land and gates locomotion natively.
+        std::map<ESM::RefNum, bool> mWasAirborne;
         // The last swing received for each avatar, so the host relays the peer's ORIGINAL swing
         // (its own counter) to other clients rather than re-deriving one from its brief overlay.
         std::map<ESM::RefNum, std::optional<SwingState>> mAvatarSwing;
@@ -266,6 +270,7 @@ namespace MWNet
         /// last played, play the attack segment once on the actor's upper body. No-op while the
         /// counter is unchanged, so a continuously-active weapon animation never re-fires.
         void applySwing(const MWWorld::Ptr& actor, const ESM::RefNum& id, const SwingState& swing);
+        void applyJump(const MWWorld::Ptr& actor, const ESM::RefNum& id, bool airborne);
 
         /// React visibly to a drop in an actor's replicated health: make it flinch (hit-recovery
         /// animation, played by its own controller) and play the pain sound, once per hit. localPlayer
