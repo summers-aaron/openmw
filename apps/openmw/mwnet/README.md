@@ -80,6 +80,12 @@ second move).
     network id and applied to their real player (with flinch / hit overlay).
   - **AI retaliation** — striking a host-owned NPC makes it fight back, for **any**
     client, in **any** cell (interior or exterior).
+- **Loose-item world persistence (floor items)** — a player's dropped item is placed
+  authoritatively by the host and replicated to every peer under one shared RefNum; a
+  pickup (of a dropped *or* a save item) deletes it for everyone. Host-authoritative,
+  wait-for-echo. Items already in the save aren't re-replicated (they load identically),
+  and single-player is unaffected. *Not yet covered:* NPC death drops (only player drops
+  are tracked), and the two-clients-grab-the-same-item race can duplicate.
 - A test harness (`mp-server.sh`, see below) spins up the server + two pre-kitted clients.
 
 ## What's broken / known limitations
@@ -135,9 +141,10 @@ avatar rendered on the host and is less tested.
 2. Multi-anchor cell ref-counting → fix exterior accumulation (limitation #2).
 3. Disconnect handling: `removePlayer` + release kept-alive cells + drop the avatar.
 4. Host-side combat validation (limitation #4).
-5. Broaden replicated world state beyond actors (doors, containers, items, world script
-   state) — currently only actor transforms/stats/animation and player combat cross the
-   wire.
+5. Broaden replicated world state: **container contents** (resolve leveled lists on the
+   host and replicate the serialized store; route take/put through the host), then doors
+   and world script state. Loose floor items already cross the wire; extend item coverage
+   to NPC death drops and other host-side runtime drops.
 6. Networked navmesh strategy for headless servers, or document the host-renders
    requirement (limitation #1).
 
