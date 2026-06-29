@@ -4,6 +4,7 @@
 #include <cassert>
 #include <filesystem>
 #include <optional>
+#include <span>
 
 #include "cellgridbounds.hpp"
 #include "heightfieldshape.hpp"
@@ -34,6 +35,14 @@ namespace DetourNavigator
     struct Settings;
     struct AgentBounds;
     struct Stats;
+
+    // A single player's focus point for navmesh building, tagged with the worldspace it lives in.
+    // The multi-worldspace facade routes each position to the sub-navigator for its worldspace.
+    struct PlayerPosition
+    {
+        ESM::RefId mWorldspace;
+        osg::Vec3f mPosition;
+    };
 
     struct ObjectShapes
     {
@@ -169,7 +178,7 @@ namespace DetourNavigator
          * @brief update starts background navmesh update using current scene state.
          * @param playerPosition setup initial point to order build tiles of navmesh.
          */
-        virtual void update(const osg::Vec3f& playerPosition, const UpdateGuard* guard) = 0;
+        virtual void update(std::span<const PlayerPosition> playerPositions, const UpdateGuard* guard) = 0;
 
         /**
          * @brief wait locks thread until tiles are updated from last update call based on passed condition type.
@@ -182,7 +191,7 @@ namespace DetourNavigator
          * @brief getNavMesh returns navmesh for specific agent half extents
          * @return navmesh
          */
-        virtual SharedNavMeshCacheItem getNavMesh(const AgentBounds& agentBounds) const = 0;
+        virtual SharedNavMeshCacheItem getNavMesh(const AgentBounds& agentBounds, ESM::RefId worldspace) const = 0;
 
         /**
          * @brief getNavMeshes returns all current navmeshes

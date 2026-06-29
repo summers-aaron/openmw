@@ -106,11 +106,13 @@ namespace
     {
         const DetourNavigator::Navigator* mNavigator;
         const DetourNavigator::AgentBounds mAgentBounds;
+        const ESM::RefId mWorldspace;
         const DetourNavigator::Flags mFlags;
 
         bool operator()(const osg::Vec3f& start, const osg::Vec3f& end) const
         {
-            const auto position = DetourNavigator::raycast(*mNavigator, mAgentBounds, start, end, mFlags);
+            const auto position
+                = DetourNavigator::raycast(*mNavigator, mAgentBounds, mWorldspace, start, end, mFlags);
             return position.has_value()
                 && std::abs((position.value() - start).length2() - (end - start).length2()) <= 1;
         }
@@ -314,8 +316,9 @@ namespace MWMechanics
         while (mPath.size() > 1 && sqrDistanceIgnoreZ(mPath.front(), position) < pointTolerance * pointTolerance)
             mPath.pop_front();
 
+        const ESM::RefId worldspace = mCell ? mCell->getCell()->getWorldSpace() : ESM::RefId();
         const IsValidShortcut isValidShortcut{ MWBase::Environment::get().getWorld()->getNavigator(), agentBounds,
-            pathFlags };
+            worldspace, pathFlags };
 
         if ((updateFlags & UpdateFlag_ShortenIfAlmostStraight) != 0)
         {
@@ -424,8 +427,9 @@ namespace MWMechanics
     {
         const MWBase::World& world = *MWBase::Environment::get().getWorld();
         const DetourNavigator::Navigator& navigator = *world.getNavigator();
-        const DetourNavigator::Status status = DetourNavigator::findPath(
-            navigator, agentBounds, startPoint, endPoint, flags, areaCosts, endTolerance, checkpoints, out);
+        const ESM::RefId worldspace = actor.getCell()->getCell()->getWorldSpace();
+        const DetourNavigator::Status status = DetourNavigator::findPath(navigator, agentBounds, worldspace, startPoint,
+            endPoint, flags, areaCosts, endTolerance, checkpoints, out);
 
         if (pathType == PathType::Partial && status == DetourNavigator::Status::PartialPath)
             return DetourNavigator::Status::Success;

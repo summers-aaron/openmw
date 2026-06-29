@@ -314,8 +314,9 @@ namespace MWMechanics
                 // If there is no path, try to find a point on a line from the actor position to target projected
                 // on navmesh to attack the target from there.
                 const auto navigator = world->getNavigator();
-                const auto hit
-                    = DetourNavigator::raycast(*navigator, agentBounds, vActorPos, vTargetPos, navigatorFlags);
+                const ESM::RefId worldspace = actor.getCell()->getCell()->getWorldSpace();
+                const auto hit = DetourNavigator::raycast(
+                    *navigator, agentBounds, worldspace, vActorPos, vTargetPos, navigatorFlags);
 
                 if (hit.has_value() && (*hit - vTargetPos).length() <= rangeAttack)
                 {

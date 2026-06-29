@@ -69,11 +69,12 @@ namespace DetourNavigator
 
         void removePathgrid(const ESM::Pathgrid& /*pathgrid*/) override {}
 
-        void update(const osg::Vec3f& /*playerPosition*/, const UpdateGuard* /*guard*/) override {}
+        void update(std::span<const PlayerPosition> /*playerPositions*/, const UpdateGuard* /*guard*/) override {}
 
         void wait(WaitConditionType /*waitConditionType*/, Loading::Listener* /*listener*/) override {}
 
-        SharedNavMeshCacheItem getNavMesh(const AgentBounds& /*agentBounds*/) const override
+        SharedNavMeshCacheItem getNavMesh(
+            const AgentBounds& /*agentBounds*/, ESM::RefId /*worldspace*/) const override
         {
             return mEmptyNavMeshCacheItem;
         }

@@ -1429,26 +1429,24 @@ namespace MWWorld
             if (const auto object = mPhysics->getObject(door.first))
                 updateNavigatorObject(*object, navigatorUpdateGuard.get());
 
-        // The navigator builds tiles around a single focus point and removes those far from it. On a
-        // dedicated server the primary player is a stationary placeholder, so focusing on it would
-        // build navmesh nowhere useful and tear down whatever a peer's cell load (addExtraPlayer) just
-        // built. Follow a network avatar instead, so host-owned NPCs have navmesh to pursue it. Single
-        // focus point: with several avatars in different cells only one is covered at a time — a known
-        // multi-player navmesh limitation, not a headless/GL one.
-        osg::Vec3f navMeshFocus = getPlayerPtr().getRefData().getPosition().asVec3();
-        if (mDedicatedServer)
+        // Feed every player's focus point, tagged with its worldspace. The multi-worldspace navigator
+        // facade routes each to the sub-navigator for that worldspace, so avatars in different cells
+        // (interiors + exterior) each get navmesh built around them. Index 0 is the primary player, so
+        // single-player collapses to one focus point in one worldspace — identical to the old behavior.
+        //
+        // On a dedicated server the primary player is a stationary placeholder with no human behind it.
+        // Skip it: a single worldspace currently builds navmesh around its FIRST focus only, so a primary
+        // placeholder sharing the exterior with an avatar would steal the focus and starve the avatar's
+        // NPCs of navmesh. (Once a worldspace supports multiple foci this skip can go.)
+        std::vector<DetourNavigator::PlayerPosition> playerPositions;
+        for (std::size_t i = mDedicatedServer ? 1 : 0; i < mPlayers.size(); ++i)
         {
-            for (std::size_t i = 1; i < mPlayers.size(); ++i)
-            {
-                const MWWorld::Ptr avatar = mPlayers.get(i).getPlayer();
-                if (avatar.isInCell())
-                {
-                    navMeshFocus = avatar.getRefData().getPosition().asVec3();
-                    break;
-                }
-            }
+            const MWWorld::Ptr player = mPlayers.get(i).getPlayer();
+            if (player.isInCell())
+                playerPositions.push_back(DetourNavigator::PlayerPosition{
+                    player.getCell()->getCell()->getWorldSpace(), player.getRefData().getPosition().asVec3() });
         }
-        mNavigator->update(navMeshFocus, navigatorUpdateGuard.get());
+        mNavigator->update(playerPositions, navigatorUpdateGuard.get());
     }
 
     void World::updateNavigatorObject(

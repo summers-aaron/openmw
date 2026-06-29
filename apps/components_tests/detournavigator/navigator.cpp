@@ -44,6 +44,16 @@ namespace
     using namespace DetourNavigator;
     using namespace DetourNavigator::Tests;
 
+    // Wrap a single focus point into the span-based update API. The worldspace tag must match the one
+    // the navigator learned from updateBounds; tests that skip updateBounds rely on NavigatorImpl's
+    // empty-worldspace fallback, so any tag works there.
+    void updatePlayer(Navigator& navigator, const osg::Vec3f& position, const ESM::RefId& worldspace,
+        const UpdateGuard* guard)
+    {
+        const PlayerPosition playerPositions[] = { PlayerPosition{ worldspace, position } };
+        navigator.update(playerPositions, guard);
+    }
+
     constexpr int heightfieldTileSize = ESM::Land::REAL_SIZE / (ESM::Land::LAND_SIZE - 1);
 
     struct DetourNavigatorNavigatorTest : Test
@@ -145,7 +155,7 @@ namespace
 
     TEST_F(DetourNavigatorNavigatorTest, find_path_for_empty_should_return_empty)
     {
-        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mStart, mEnd, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
+        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mWorldspace, mStart, mEnd, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
             Status::NavMeshNotFound);
         EXPECT_EQ(mPath, std::deque<osg::Vec3f>());
     }
@@ -153,7 +163,7 @@ namespace
     TEST_F(DetourNavigatorNavigatorTest, find_path_for_existing_agent_with_no_navmesh_should_throw_exception)
     {
         ASSERT_TRUE(mNavigator->addAgent(mAgentBounds));
-        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mStart, mEnd, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
+        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mWorldspace, mStart, mEnd, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
             Status::StartPolygonNotFound);
     }
 
@@ -162,7 +172,7 @@ namespace
         ASSERT_TRUE(mNavigator->addAgent(mAgentBounds));
         ASSERT_TRUE(mNavigator->addAgent(mAgentBounds));
         mNavigator->removeAgent(mAgentBounds);
-        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mStart, mEnd, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
+        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mWorldspace, mStart, mEnd, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
             Status::StartPolygonNotFound);
     }
 
@@ -174,11 +184,11 @@ namespace
         ASSERT_TRUE(mNavigator->addAgent(mAgentBounds));
         auto updateGuard = mNavigator->makeUpdateGuard();
         mNavigator->addHeightfield(mCellPosition, cellSize, surface, updateGuard.get());
-        mNavigator->update(mPlayerPosition, updateGuard.get());
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, updateGuard.get());
         updateGuard.reset();
         mNavigator->wait(WaitConditionType::requiredTilesPresent, &mListener);
 
-        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mStart, mEnd, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
+        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mWorldspace, mStart, mEnd, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
             Status::Success);
 
         EXPECT_THAT(mPath,
@@ -196,11 +206,11 @@ namespace
         ASSERT_TRUE(mNavigator->addAgent(mAgentBounds));
         auto updateGuard = mNavigator->makeUpdateGuard();
         mNavigator->addHeightfield(mCellPosition, cellSize, surface, updateGuard.get());
-        mNavigator->update(mPlayerPosition, updateGuard.get());
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, updateGuard.get());
         updateGuard.reset();
         mNavigator->wait(WaitConditionType::requiredTilesPresent, &mListener);
 
-        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mStart, mStart, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
+        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mWorldspace, mStart, mStart, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
             Status::Success);
 
         EXPECT_THAT(mPath, ElementsAre(Vec3fEq(56.66666412353515625, 460, 1.99998295307159423828125))) << mPath;
@@ -221,10 +231,10 @@ namespace
 
         ASSERT_TRUE(mNavigator->addAgent(mAgentBounds));
         mNavigator->addHeightfield(mCellPosition, cellSize, surface, nullptr);
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
-        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mStart, mEnd, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
+        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mWorldspace, mStart, mEnd, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
             Status::Success);
 
         EXPECT_THAT(mPath,
@@ -237,13 +247,13 @@ namespace
             auto updateGuard = mNavigator->makeUpdateGuard();
             mNavigator->addObject(ObjectId(&compound.shape()), ObjectShapes(compound.instance(), mObjectTransform),
                 mTransform, updateGuard.get());
-            mNavigator->update(mPlayerPosition, updateGuard.get());
+            updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, updateGuard.get());
         }
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
         mPath.clear();
         mOut = std::back_inserter(mPath);
-        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mStart, mEnd, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
+        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mWorldspace, mStart, mEnd, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
             Status::Success);
 
         EXPECT_THAT(mPath,
@@ -268,10 +278,10 @@ namespace
         mNavigator->addHeightfield(mCellPosition, cellSize, surface, nullptr);
         mNavigator->addObject(
             ObjectId(&compound.shape()), ObjectShapes(compound.instance(), mObjectTransform), mTransform, nullptr);
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
-        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mStart, mEnd, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
+        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mWorldspace, mStart, mEnd, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
             Status::Success);
 
         EXPECT_THAT(mPath,
@@ -286,12 +296,12 @@ namespace
 
         mNavigator->updateObject(
             ObjectId(&compound.shape()), ObjectShapes(compound.instance(), mObjectTransform), mTransform, nullptr);
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
         mPath.clear();
         mOut = std::back_inserter(mPath);
-        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mStart, mEnd, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
+        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mWorldspace, mStart, mEnd, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
             Status::Success);
 
         EXPECT_THAT(mPath,
@@ -324,10 +334,10 @@ namespace
             transform, nullptr);
         mNavigator->addObject(ObjectId(&heightfield2.shape()), ObjectShapes(heightfield2.instance(), objectTransform),
             transform, nullptr);
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
-        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mStart, mEnd, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
+        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mWorldspace, mStart, mEnd, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
             Status::Success);
 
         EXPECT_THAT(mPath,
@@ -354,16 +364,16 @@ namespace
 
         ASSERT_TRUE(mNavigator->addAgent(mAgentBounds));
         mNavigator->addHeightfield(mCellPosition, cellSize1, surface1, nullptr);
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
-        const Version version = mNavigator->getNavMesh(mAgentBounds)->lockConst()->getVersion();
+        const Version version = mNavigator->getNavMesh(mAgentBounds, mWorldspace)->lockConst()->getVersion();
 
         mNavigator->addHeightfield(mCellPosition, cellSize2, surface2, nullptr);
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
-        EXPECT_EQ(mNavigator->getNavMesh(mAgentBounds)->lockConst()->getVersion(), version);
+        EXPECT_EQ(mNavigator->getNavMesh(mAgentBounds, mWorldspace)->lockConst()->getVersion(), version);
     }
 
     TEST_F(DetourNavigatorNavigatorTest, path_should_be_around_avoid_shape)
@@ -392,10 +402,10 @@ namespace
         ASSERT_TRUE(mNavigator->addAgent(mAgentBounds));
         mNavigator->addObject(
             ObjectId(instance->mCollisionShape.get()), ObjectShapes(instance, mObjectTransform), mTransform, nullptr);
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
-        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mStart, mEnd, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
+        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mWorldspace, mStart, mEnd, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
             Status::Success);
 
         EXPECT_THAT(mPath,
@@ -422,7 +432,7 @@ namespace
         ASSERT_TRUE(mNavigator->addAgent(mAgentBounds));
         mNavigator->addWater(mCellPosition, cellSize, 300, nullptr);
         mNavigator->addHeightfield(mCellPosition, cellSize, surface, nullptr);
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
         mStart.x() = 256;
@@ -430,7 +440,7 @@ namespace
         mEnd.x() = 256;
         mEnd.z() = 300;
 
-        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mStart, mEnd, Flag_swim, mAreaCosts, mEndTolerance, {}, mOut),
+        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mWorldspace, mStart, mEnd, Flag_swim, mAreaCosts, mEndTolerance, {}, mOut),
             Status::Success);
 
         EXPECT_THAT(mPath,
@@ -456,13 +466,13 @@ namespace
         ASSERT_TRUE(mNavigator->addAgent(mAgentBounds));
         mNavigator->addWater(mCellPosition, cellSize, -25, nullptr);
         mNavigator->addHeightfield(mCellPosition, cellSize, surface, nullptr);
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
         mStart.x() = 256;
         mEnd.x() = 256;
 
-        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mStart, mEnd, Flag_swim | Flag_walk, mAreaCosts, mEndTolerance,
+        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mWorldspace, mStart, mEnd, Flag_swim | Flag_walk, mAreaCosts, mEndTolerance,
                       {}, mOut),
             Status::Success);
 
@@ -490,13 +500,13 @@ namespace
         ASSERT_TRUE(mNavigator->addAgent(mAgentBounds));
         mNavigator->addHeightfield(mCellPosition, cellSize, surface, nullptr);
         mNavigator->addWater(mCellPosition, std::numeric_limits<int>::max(), -25, nullptr);
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
         mStart.x() = 256;
         mEnd.x() = 256;
 
-        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mStart, mEnd, Flag_swim | Flag_walk, mAreaCosts, mEndTolerance,
+        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mWorldspace, mStart, mEnd, Flag_swim | Flag_walk, mAreaCosts, mEndTolerance,
                       {}, mOut),
             Status::Success);
 
@@ -523,13 +533,13 @@ namespace
         ASSERT_TRUE(mNavigator->addAgent(mAgentBounds));
         mNavigator->addWater(mCellPosition, cellSize, -25, nullptr);
         mNavigator->addHeightfield(mCellPosition, cellSize, surface, nullptr);
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
         mStart.x() = 256;
         mEnd.x() = 256;
 
-        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mStart, mEnd, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
+        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mWorldspace, mStart, mEnd, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
             Status::Success);
 
         EXPECT_THAT(mPath,
@@ -549,19 +559,19 @@ namespace
         ASSERT_TRUE(mNavigator->addAgent(mAgentBounds));
         mNavigator->addObject(
             ObjectId(&heightfield.shape()), ObjectShapes(heightfield.instance(), objectTransform), transform, nullptr);
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
         mNavigator->removeObject(ObjectId(&heightfield.shape()), nullptr);
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
         mNavigator->addObject(
             ObjectId(&heightfield.shape()), ObjectShapes(heightfield.instance(), objectTransform), transform, nullptr);
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
-        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mStart, mEnd, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
+        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mWorldspace, mStart, mEnd, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
             Status::Success);
 
         EXPECT_THAT(mPath,
@@ -578,18 +588,18 @@ namespace
 
         ASSERT_TRUE(mNavigator->addAgent(mAgentBounds));
         mNavigator->addHeightfield(mCellPosition, cellSize, surface, nullptr);
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
         mNavigator->removeHeightfield(mCellPosition, nullptr);
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
         mNavigator->addHeightfield(mCellPosition, cellSize, surface, nullptr);
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
-        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mStart, mEnd, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
+        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mWorldspace, mStart, mEnd, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
             Status::Success);
 
         EXPECT_THAT(mPath,
@@ -614,13 +624,13 @@ namespace
 
         ASSERT_TRUE(mNavigator->addAgent(mAgentBounds));
         mNavigator->addHeightfield(mCellPosition, cellSize, surface, nullptr);
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
         Misc::Rng::init(42);
 
         const auto result = findRandomPointAroundCircle(
-            *mNavigator, mAgentBounds, mStart, 100.0, Flag_walk, []() { return Misc::Rng::rollClosedProbability(); });
+            *mNavigator, mAgentBounds, mWorldspace, mStart, 100.0, Flag_walk, []() { return Misc::Rng::rollClosedProbability(); });
 
         ASSERT_TRUE(result.has_value());
 
@@ -669,10 +679,10 @@ namespace
                 ObjectId(&boxes[i].shape()), ObjectShapes(boxes[i].instance(), mObjectTransform), transform, nullptr);
         }
 
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
-        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mStart, mEnd, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
+        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mWorldspace, mStart, mEnd, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
             Status::Success);
 
         EXPECT_THAT(mPath,
@@ -699,7 +709,7 @@ namespace
             mNavigator->addObject(
                 ObjectId(&shapes[i].shape()), ObjectShapes(shapes[i].instance(), mObjectTransform), transform, nullptr);
         }
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
         const auto start = std::chrono::steady_clock::now();
@@ -710,7 +720,7 @@ namespace
             mNavigator->updateObject(
                 ObjectId(&shapes[i].shape()), ObjectShapes(shapes[i].instance(), mObjectTransform), transform, nullptr);
         }
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
         for (std::size_t i = 0; i < shapes.size(); ++i)
@@ -720,7 +730,7 @@ namespace
             mNavigator->updateObject(
                 ObjectId(&shapes[i].shape()), ObjectShapes(shapes[i].instance(), mObjectTransform), transform, nullptr);
         }
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
         const auto duration = std::chrono::steady_clock::now() - start;
@@ -736,12 +746,12 @@ namespace
 
         ASSERT_TRUE(mNavigator->addAgent(mAgentBounds));
         mNavigator->addHeightfield(mCellPosition, cellSize, surface, nullptr);
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
         const osg::Vec3f start(57, 460, 1);
         const osg::Vec3f end(460, 57, 1);
-        const auto result = raycast(*mNavigator, mAgentBounds, start, end, Flag_walk);
+        const auto result = raycast(*mNavigator, mAgentBounds, mWorldspace, start, end, Flag_walk);
 
         ASSERT_THAT(result, Optional(Vec3fEq(end.x(), end.y(), 1.95257937908172607421875)))
             << (result ? *result : osg::Vec3f());
@@ -765,7 +775,7 @@ namespace
         // add this box to make navmesh bound box independent from oscillatingBoxShape rotations
         mNavigator->addObject(ObjectId(&borderBox.shape()), ObjectShapes(borderBox.instance(), mObjectTransform),
             btTransform(btMatrix3x3::getIdentity(), oscillatingBoxShapePosition + btVector3(0, 0, 200)), nullptr);
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
         const Version expectedVersion{ 1, 4 };
@@ -780,7 +790,7 @@ namespace
                 btQuaternion(btVector3(0, 0, 1), n * 2 * osg::PI / 10), oscillatingBoxShapePosition);
             mNavigator->updateObject(ObjectId(&oscillatingBox.shape()),
                 ObjectShapes(oscillatingBox.instance(), mObjectTransform), transform, nullptr);
-            mNavigator->update(mPlayerPosition, nullptr);
+            updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
             mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
         }
 
@@ -795,10 +805,10 @@ namespace
 
         ASSERT_TRUE(mNavigator->addAgent(mAgentBounds));
         mNavigator->addHeightfield(mCellPosition, cellSize, plane, nullptr);
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::requiredTilesPresent, &mListener);
 
-        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mStart, mEnd, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
+        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mWorldspace, mStart, mEnd, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
             Status::Success);
 
         EXPECT_THAT(mPath,
@@ -820,10 +830,10 @@ namespace
         mNavigator->addHeightfield(mCellPosition, cellSize, surface, nullptr);
         mNavigator->addObject(
             ObjectId(&compound.shape()), ObjectShapes(compound.instance(), mObjectTransform), mTransform, nullptr);
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
-        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mStart, mEnd, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
+        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mWorldspace, mStart, mEnd, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
             Status::PartialPath);
 
         EXPECT_THAT(mPath,
@@ -846,12 +856,12 @@ namespace
         mNavigator->addHeightfield(mCellPosition, cellSize, surface, nullptr);
         mNavigator->addObject(
             ObjectId(&compound.shape()), ObjectShapes(compound.instance(), mObjectTransform), mTransform, nullptr);
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
         const float endTolerance = 1000.0f;
 
-        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mStart, mEnd, Flag_walk, mAreaCosts, endTolerance, {}, mOut),
+        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mWorldspace, mStart, mEnd, Flag_walk, mAreaCosts, endTolerance, {}, mOut),
             Status::Success);
 
         EXPECT_THAT(mPath,
@@ -870,16 +880,16 @@ namespace
 
         ASSERT_TRUE(mNavigator->addAgent(mAgentBounds));
         mNavigator->addWater(mCellPosition, cellSize1, level1, nullptr);
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
-        const Version version = mNavigator->getNavMesh(mAgentBounds)->lockConst()->getVersion();
+        const Version version = mNavigator->getNavMesh(mAgentBounds, mWorldspace)->lockConst()->getVersion();
 
         mNavigator->addWater(mCellPosition, cellSize2, level2, nullptr);
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
-        EXPECT_EQ(mNavigator->getNavMesh(mAgentBounds)->lockConst()->getVersion(), version);
+        EXPECT_EQ(mNavigator->getNavMesh(mAgentBounds, mWorldspace)->lockConst()->getVersion(), version);
     }
 
     std::pair<TilePosition, TilePosition> getMinMax(const RecastMeshTiles& tiles)
@@ -915,7 +925,7 @@ namespace
 
         std::thread thread([&] {
             auto guard = mNavigator->makeUpdateGuard();
-            mNavigator->update(playerPosition, guard.get());
+            updatePlayer(*mNavigator, playerPosition, mWorldspace, guard.get());
             std::lock_guard lock(mutex);
             updated = true;
             updateFinished.notify_all();
@@ -935,7 +945,7 @@ namespace
         ASSERT_EQ(recastMeshTiles.size(), 1033);
         EXPECT_EQ(getMinMax(recastMeshTiles), std::pair(TilePosition(-18, -17), TilePosition(18, 19)));
 
-        const auto navMesh = mNavigator->getNavMesh(mAgentBounds);
+        const auto navMesh = mNavigator->getNavMesh(mAgentBounds, mWorldspace);
         ASSERT_NE(navMesh, nullptr);
 
         std::size_t usedNavMeshTiles = 0;
@@ -968,7 +978,7 @@ namespace
 
         std::thread thread([&] {
             auto guard = mNavigator->makeUpdateGuard();
-            mNavigator->update(playerPosition, guard.get());
+            updatePlayer(*mNavigator, playerPosition, mWorldspace, guard.get());
             std::lock_guard lock(mutex);
             updated = true;
             updateFinished.notify_all();
@@ -988,7 +998,7 @@ namespace
         ASSERT_EQ(recastMeshTiles.size(), 854);
         EXPECT_EQ(getMinMax(recastMeshTiles), std::pair(TilePosition(-12, -12), TilePosition(18, 19)));
 
-        const auto navMesh = mNavigator->getNavMesh(mAgentBounds);
+        const auto navMesh = mNavigator->getNavMesh(mAgentBounds, mWorldspace);
         ASSERT_NE(navMesh, nullptr);
 
         std::size_t usedNavMeshTiles = 0;
@@ -1010,13 +1020,13 @@ namespace
 
         ASSERT_TRUE(mNavigator->addAgent(mAgentBounds));
         mNavigator->addHeightfield(mCellPosition, cellSize, surface, nullptr);
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
         const osg::Vec3f start(56, 56, 12);
         const osg::Vec3f end(464, 464, 12);
 
-        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, start, end, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
+        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mWorldspace, start, end, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
             Status::Success);
 
         EXPECT_THAT(mPath,
@@ -1042,13 +1052,13 @@ namespace
 
         ASSERT_TRUE(mNavigator->addAgent(mAgentBounds));
         mNavigator->addHeightfield(mCellPosition, cellSize, surface, nullptr);
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
         const osg::Vec3f start(56, 56, 12);
         const osg::Vec3f end(464, 464, 12);
 
-        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, start, end, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
+        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mWorldspace, start, end, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
             Status::Success);
 
         EXPECT_THAT(mPath,
@@ -1074,7 +1084,7 @@ namespace
 
         ASSERT_TRUE(mNavigator->addAgent(mAgentBounds));
         mNavigator->addHeightfield(mCellPosition, cellSize, surface, nullptr);
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
         const std::vector<osg::Vec3f> checkpoints = {
@@ -1085,7 +1095,7 @@ namespace
         const osg::Vec3f end(464, 464, 12);
 
         EXPECT_EQ(
-            findPath(*mNavigator, mAgentBounds, start, end, Flag_walk, mAreaCosts, mEndTolerance, checkpoints, mOut),
+            findPath(*mNavigator, mAgentBounds, mWorldspace, start, end, Flag_walk, mAreaCosts, mEndTolerance, checkpoints, mOut),
             Status::Success);
 
         EXPECT_THAT(mPath,
@@ -1111,7 +1121,7 @@ namespace
 
         ASSERT_TRUE(mNavigator->addAgent(mAgentBounds));
         mNavigator->addHeightfield(mCellPosition, cellSize, surface, nullptr);
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
         const std::vector<osg::Vec3f> checkpoints = {
@@ -1124,7 +1134,7 @@ namespace
         const osg::Vec3f end(464, 464, 12);
 
         EXPECT_EQ(
-            findPath(*mNavigator, mAgentBounds, start, end, Flag_walk, mAreaCosts, mEndTolerance, checkpoints, mOut),
+            findPath(*mNavigator, mAgentBounds, mWorldspace, start, end, Flag_walk, mAreaCosts, mEndTolerance, checkpoints, mOut),
             Status::Success);
 
         EXPECT_THAT(mPath,
@@ -1176,13 +1186,13 @@ namespace
         ASSERT_TRUE(mNavigator->addAgent(mAgentBounds));
         auto updateGuard = mNavigator->makeUpdateGuard();
         mNavigator->addHeightfield(mCellPosition, cellSize, surface, updateGuard.get());
-        mNavigator->update(mPlayerPosition, updateGuard.get());
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, updateGuard.get());
         updateGuard.reset();
         mNavigator->wait(WaitConditionType::requiredTilesPresent, &mListener);
 
         const osg::Vec3f position(250, 250, 0);
         const osg::Vec3f searchAreaHalfExtents(1000, 1000, 1000);
-        EXPECT_THAT(findNearestNavMeshPosition(*mNavigator, mAgentBounds, position, searchAreaHalfExtents, Flag_walk),
+        EXPECT_THAT(findNearestNavMeshPosition(*mNavigator, mAgentBounds, mWorldspace, position, searchAreaHalfExtents, Flag_walk),
             Optional(Vec3fEq(250, 250, -62.5186)));
     }
 
@@ -1194,13 +1204,13 @@ namespace
         ASSERT_TRUE(mNavigator->addAgent(mAgentBounds));
         auto updateGuard = mNavigator->makeUpdateGuard();
         mNavigator->addHeightfield(mCellPosition, cellSize, surface, updateGuard.get());
-        mNavigator->update(mPlayerPosition, updateGuard.get());
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, updateGuard.get());
         updateGuard.reset();
         mNavigator->wait(WaitConditionType::requiredTilesPresent, &mListener);
 
         const osg::Vec3f position(250, 250, 250);
         const osg::Vec3f searchAreaHalfExtents(100, 100, 100);
-        EXPECT_EQ(findNearestNavMeshPosition(*mNavigator, mAgentBounds, position, searchAreaHalfExtents, Flag_walk),
+        EXPECT_EQ(findNearestNavMeshPosition(*mNavigator, mAgentBounds, mWorldspace, position, searchAreaHalfExtents, Flag_walk),
             std::nullopt);
     }
 
@@ -1212,13 +1222,13 @@ namespace
         ASSERT_TRUE(mNavigator->addAgent(mAgentBounds));
         auto updateGuard = mNavigator->makeUpdateGuard();
         mNavigator->addHeightfield(mCellPosition, cellSize, surface, updateGuard.get());
-        mNavigator->update(mPlayerPosition, updateGuard.get());
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, updateGuard.get());
         updateGuard.reset();
         mNavigator->wait(WaitConditionType::requiredTilesPresent, &mListener);
 
         const osg::Vec3f position(250, 250, 0);
         const osg::Vec3f searchAreaHalfExtents(1000, 1000, 1000);
-        EXPECT_EQ(findNearestNavMeshPosition(*mNavigator, mAgentBounds, position, searchAreaHalfExtents, Flag_swim),
+        EXPECT_EQ(findNearestNavMeshPosition(*mNavigator, mAgentBounds, mWorldspace, position, searchAreaHalfExtents, Flag_swim),
             std::nullopt);
     }
 
@@ -1233,7 +1243,7 @@ namespace
         ASSERT_TRUE(mNavigator->addAgent(mAgentBounds));
         mNavigator->addObject(
             ObjectId(&compound.shape()), ObjectShapes(compound.instance(), mObjectTransform), transform, nullptr);
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
         EXPECT_EQ(mNavigator->getStats().mUpdater.mPosted, 0);
@@ -1250,12 +1260,12 @@ namespace
         ASSERT_TRUE(mNavigator->addAgent(mAgentBounds));
         mNavigator->addObject(
             ObjectId(&compound.shape()), ObjectShapes(compound.instance(), mObjectTransform), transform, nullptr);
-        mNavigator->update(mPlayerPosition, nullptr);
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
         EXPECT_EQ(mNavigator->getStats().mUpdater.mPosted, 0);
 
-        mNavigator->update(osg::Vec3f(100512, 256, 0), nullptr);
+        updatePlayer(*mNavigator, osg::Vec3f(100512, 256, 0), mWorldspace, nullptr);
         mNavigator->wait(WaitConditionType::allJobsDone, &mListener);
 
         EXPECT_EQ(mNavigator->getStats().mUpdater.mPosted, 1);
@@ -1277,14 +1287,14 @@ namespace
         ASSERT_TRUE(mNavigator->addAgent(mAgentBounds));
         auto updateGuard = mNavigator->makeUpdateGuard();
         mNavigator->addHeightfield(mCellPosition, cellSize, surface, updateGuard.get());
-        mNavigator->update(mPlayerPosition, updateGuard.get());
+        updatePlayer(*mNavigator, mPlayerPosition, mWorldspace, updateGuard.get());
         updateGuard.reset();
         mNavigator->wait(WaitConditionType::requiredTilesPresent, &mListener);
 
         const osg::Vec3f start{ 52, 460, 1001 };
         const osg::Vec3f end{ 460, 52, 1001 };
 
-        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, start, end, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
+        EXPECT_EQ(findPath(*mNavigator, mAgentBounds, mWorldspace, start, end, Flag_walk, mAreaCosts, mEndTolerance, {}, mOut),
             Status::Success);
 
         EXPECT_THAT(mPath,
@@ -1318,13 +1328,13 @@ namespace
 
         {
             auto updateGuard = navigator.makeUpdateGuard();
-            navigator.update(osg::Vec3f(3000, 3000, 0), updateGuard.get());
+            updatePlayer(navigator, osg::Vec3f(3000, 3000, 0), ESM::RefId::stringRefId("sys::default"), updateGuard.get());
         }
 
         navigator.wait(WaitConditionType::allJobsDone, &listener);
 
         {
-            const auto navMesh = navigator.getNavMesh(agentBounds);
+            const auto navMesh = navigator.getNavMesh(agentBounds, ESM::RefId::stringRefId("sys::default"));
             ASSERT_NE(navMesh, nullptr);
 
             const TilePosition expectedTiles[] = { { 3, 4 }, { 4, 3 }, { 4, 4 }, { 4, 5 }, { 5, 4 } };
@@ -1334,13 +1344,13 @@ namespace
 
         {
             auto updateGuard = navigator.makeUpdateGuard();
-            navigator.update(osg::Vec3f(4000, 3000, 0), updateGuard.get());
+            updatePlayer(navigator, osg::Vec3f(4000, 3000, 0), ESM::RefId::stringRefId("sys::default"), updateGuard.get());
         }
 
         navigator.wait(WaitConditionType::allJobsDone, &listener);
 
         {
-            const auto navMesh = navigator.getNavMesh(agentBounds);
+            const auto navMesh = navigator.getNavMesh(agentBounds, ESM::RefId::stringRefId("sys::default"));
             ASSERT_NE(navMesh, nullptr);
 
             const TilePosition expectedTiles[] = { { 4, 4 }, { 5, 3 }, { 5, 4 }, { 5, 5 }, { 6, 4 } };
@@ -1363,13 +1373,13 @@ namespace
 
         {
             auto updateGuard = navigator.makeUpdateGuard();
-            navigator.update(osg::Vec3f(3000, 3000, 0), updateGuard.get());
+            updatePlayer(navigator, osg::Vec3f(3000, 3000, 0), ESM::RefId::stringRefId("sys::default"), updateGuard.get());
         }
 
         navigator.wait(WaitConditionType::requiredTilesPresent, &listener);
 
         {
-            const auto navMesh = navigator.getNavMesh(agentBounds);
+            const auto navMesh = navigator.getNavMesh(agentBounds, ESM::RefId::stringRefId("sys::default"));
             ASSERT_NE(navMesh, nullptr);
 
             const TilePosition expectedTile(4, 4);
@@ -1379,13 +1389,13 @@ namespace
 
         {
             auto updateGuard = navigator.makeUpdateGuard();
-            navigator.update(osg::Vec3f(6000, 3000, 0), updateGuard.get());
+            updatePlayer(navigator, osg::Vec3f(6000, 3000, 0), ESM::RefId::stringRefId("sys::default"), updateGuard.get());
         }
 
         navigator.wait(WaitConditionType::requiredTilesPresent, &listener);
 
         {
-            const auto navMesh = navigator.getNavMesh(agentBounds);
+            const auto navMesh = navigator.getNavMesh(agentBounds, ESM::RefId::stringRefId("sys::default"));
             ASSERT_NE(navMesh, nullptr);
 
             const TilePosition expectedTile(8, 4);
@@ -1408,13 +1418,13 @@ namespace
 
         {
             auto updateGuard = navigator.makeUpdateGuard();
-            navigator.update(osg::Vec3f(3000, 3000, 0), updateGuard.get());
+            updatePlayer(navigator, osg::Vec3f(3000, 3000, 0), ESM::RefId::stringRefId("sys::default"), updateGuard.get());
         }
 
         navigator.wait(WaitConditionType::requiredTilesPresent, &listener);
 
         {
-            const auto navMesh = navigator.getNavMesh(agentBounds);
+            const auto navMesh = navigator.getNavMesh(agentBounds, ESM::RefId::stringRefId("sys::default"));
             ASSERT_NE(navMesh, nullptr);
 
             const TilePosition expectedTile(4, 4);
@@ -1424,13 +1434,13 @@ namespace
 
         {
             auto updateGuard = navigator.makeUpdateGuard();
-            navigator.update(osg::Vec3f(6000, 3000, 0), updateGuard.get());
+            updatePlayer(navigator, osg::Vec3f(6000, 3000, 0), ESM::RefId::stringRefId("sys::default"), updateGuard.get());
         }
 
         navigator.wait(WaitConditionType::requiredTilesPresent, &listener);
 
         {
-            const auto navMesh = navigator.getNavMesh(agentBounds);
+            const auto navMesh = navigator.getNavMesh(agentBounds, ESM::RefId::stringRefId("sys::default"));
             ASSERT_NE(navMesh, nullptr);
 
             const TilePosition expectedTile(8, 4);

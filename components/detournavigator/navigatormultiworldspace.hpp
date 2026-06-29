@@ -1,27 +1,37 @@
-#ifndef OPENMW_COMPONENTS_DETOURNAVIGATOR_NAVIGATORIMPL_H
-#define OPENMW_COMPONENTS_DETOURNAVIGATOR_NAVIGATORIMPL_H
+#ifndef OPENMW_COMPONENTS_DETOURNAVIGATOR_NAVIGATORMULTIWORLDSPACE_H
+#define OPENMW_COMPONENTS_DETOURNAVIGATOR_NAVIGATORMULTIWORLDSPACE_H
 
+#include "agentbounds.hpp"
 #include "navigator.hpp"
-#include "navmeshmanager.hpp"
+#include "settings.hpp"
 #include "updateguard.hpp"
 
+#include <components/esm/refid.hpp>
+
+#include <osg/Vec2i>
+
+#include <filesystem>
 #include <map>
 #include <memory>
-#include <optional>
+#include <mutex>
+#include <set>
 #include <unordered_map>
 
 namespace DetourNavigator
 {
-    class NavigatorImpl final : public Navigator
+    // Routing facade holding one real NavigatorImpl per active worldspace, so a dedicated server can
+    // keep navmesh for several worldspaces (interiors + exterior) alive at once. Single-player only
+    // ever activates one worldspace, so it routes through a single sub-navigator and behaves identically.
+    //
+    // Geometry mutations are routed to mCurrentWorldspace (the scene always calls updateBounds before
+    // loading a cell's geometry). Each key (object id / water cell / heightfield cell / pathgrid) is
+    // recorded against the worldspace that owns it so later update/remove calls route correctly.
+    class NavigatorMultiWorldspace final : public Navigator
     {
     public:
-        /**
-         * @brief Navigator constructor initializes all internal data. Constructed object is ready to build a scene.
-         * @param settings allows to customize navigator work. Constructor is only place to set navigator settings.
-         */
-        explicit NavigatorImpl(const Settings& settings, std::unique_ptr<NavMeshDb>&& db);
+        explicit NavigatorMultiWorldspace(const Settings& settings, const std::filesystem::path& userDataPath);
 
-        ScopedUpdateGuard makeUpdateGuard() override { return mNavMeshManager.makeUpdateGuard(); }
+        ScopedUpdateGuard makeUpdateGuard() override;
 
         bool addAgent(const AgentBounds& agentBounds) override;
 
@@ -75,24 +85,29 @@ namespace DetourNavigator
 
     private:
         Settings mSettings;
-        NavMeshManager mNavMeshManager;
-        ESM::RefId mWorldspace; // this navigator's single worldspace, set from updateBounds
-        std::optional<TilePosition> mLastPlayerPosition;
-        std::map<AgentBounds, std::size_t> mAgents;
-        std::unordered_map<ObjectId, ObjectId> mAvoidIds;
-        std::unordered_map<ObjectId, ObjectId> mWaterIds;
+        std::filesystem::path mUserDataPath;
+        ESM::RefId mCurrentWorldspace;
+        std::map<ESM::RefId, std::unique_ptr<Navigator>> mNavigators;
+        std::set<AgentBounds> mAgents;
 
-        inline bool addObjectImpl(
-            const ObjectId id, const ObjectShapes& shapes, const btTransform& transform, const UpdateGuard* guard);
+        // Key -> worldspace mappings so update/remove route to the worldspace that owns the geometry.
+        std::unordered_map<ObjectId, ESM::RefId> mObjectWorldspace;
+        std::map<osg::Vec2i, ESM::RefId> mWaterWorldspace;
+        std::map<osg::Vec2i, ESM::RefId> mHeightfieldWorldspace;
+        std::unordered_map<const ESM::Pathgrid*, ESM::RefId> mPathgridWorldspace;
 
-        inline void updateAvoidShapeId(const ObjectId id, const ObjectId avoidId, const UpdateGuard* guard);
+        // Per-worldspace count of live geometry (objects + water + heightfields). When it drops to
+        // zero we destroy the sub-navigator to join its updater threads and avoid a thread leak.
+        std::map<ESM::RefId, std::size_t> mLiveGeometry;
 
-        inline void updateId(const ObjectId id, const ObjectId waterId, std::unordered_map<ObjectId, ObjectId>& ids,
-            const UpdateGuard* guard);
+        // makeUpdateGuard returns a no-op guard; the facade ignores it and lets each sub-call self-lock.
+        std::mutex mDummyMutex;
+        UpdateGuard mDummyGuard{ mDummyMutex };
 
-        inline void removeUnusedNavMeshes();
-
-        friend class UpdateGuard;
+        Navigator* getOrCreateNavigator(ESM::RefId worldspace);
+        Navigator* findNavigator(ESM::RefId worldspace) const;
+        void incrementLiveGeometry(ESM::RefId worldspace);
+        void decrementLiveGeometry(ESM::RefId worldspace);
     };
 }
 

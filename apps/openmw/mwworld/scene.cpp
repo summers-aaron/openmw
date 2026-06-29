@@ -3,6 +3,7 @@
 #include <atomic>
 #include <chrono>
 #include <limits>
+#include <span>
 
 #include <BulletCollision/CollisionDispatch/btCollisionObject.h>
 
@@ -596,7 +597,8 @@ namespace MWWorld
             if (mActiveCells.find(cell) == mActiveCells.end())
                 loadCell(*cell, nullptr, false, pos, navigatorUpdateGuard.get());
         }
-        mNavigator.update(pos, navigatorUpdateGuard.get());
+        const DetourNavigator::PlayerPosition playerPosition{ worldspace, pos };
+        mNavigator.update(std::span(&playerPosition, 1), navigatorUpdateGuard.get());
         navigatorUpdateGuard.reset();
     }
 
@@ -761,7 +763,8 @@ namespace MWWorld
             }
         }
 
-        mNavigator.update(pos, navigatorUpdateGuard.get());
+        const DetourNavigator::PlayerPosition playerPosition{ playerCellIndex.mWorldspace, pos };
+        mNavigator.update(std::span(&playerPosition, 1), navigatorUpdateGuard.get());
 
         navigatorUpdateGuard.reset();
 
@@ -834,7 +837,8 @@ namespace MWWorld
 
             loadCell(cell, nullptr, false, position, navigatorUpdateGuard.get());
 
-            mNavigator.update(position, navigatorUpdateGuard.get());
+            const DetourNavigator::PlayerPosition playerPosition{ ESM::Cell::sDefaultWorldspaceId, position };
+            mNavigator.update(std::span(&playerPosition, 1), navigatorUpdateGuard.get());
             navigatorUpdateGuard.reset();
             mNavigator.wait(DetourNavigator::WaitConditionType::requiredTilesPresent, nullptr);
             navigatorUpdateGuard = mNavigator.makeUpdateGuard();
@@ -891,7 +895,8 @@ namespace MWWorld
                 cell.getCell()->getWorldSpace(), std::nullopt, position.asVec3(), navigatorUpdateGuard.get());
             loadCell(cell, nullptr, false, position.asVec3(), navigatorUpdateGuard.get());
 
-            mNavigator.update(position.asVec3(), navigatorUpdateGuard.get());
+            const DetourNavigator::PlayerPosition playerPosition{ cell.getCell()->getWorldSpace(), position.asVec3() };
+            mNavigator.update(std::span(&playerPosition, 1), navigatorUpdateGuard.get());
             navigatorUpdateGuard.reset();
             mNavigator.wait(DetourNavigator::WaitConditionType::requiredTilesPresent, nullptr);
             navigatorUpdateGuard = mNavigator.makeUpdateGuard();
