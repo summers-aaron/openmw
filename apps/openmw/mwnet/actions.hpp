@@ -6,6 +6,11 @@
 #include <span>
 #include <vector>
 
+#include <cstdint>
+#include <string>
+
+#include <osg/Vec3f>
+
 #include <components/esm3/refnum.hpp>
 
 namespace MWNet
@@ -40,15 +45,39 @@ namespace MWNet
         friend bool operator==(const PlayerDamage&, const PlayerDamage&) = default;
     };
 
+    /// A client's request to drop an item into the shared world. Clients don't own the world, so
+    /// they don't place the dropped reference themselves — they ask the host, which places it
+    /// authoritatively (assigning a world RefNum) and replicates it back to everyone, the dropper
+    /// included. mRefId is the item record to instantiate, mCount the stack size, mPosition where
+    /// to drop it, and mCellId the cell to drop it in.
+    struct ItemDrop
+    {
+        std::string mRefId;
+        std::int32_t mCount = 1;
+        osg::Vec3f mPosition;
+        std::string mCellId;
+
+        friend bool operator==(const ItemDrop&, const ItemDrop&) = default;
+    };
+
     /// One frame's worth of reported actions crossing the transport (Reliable channel).
-    /// mHits flow client -> host (resolve my hit); mPlayerDamages flow host -> client (you
-    /// were hit). A given batch is populated by one side and consumed by the other.
+    /// mHits / mDrops / mItemsTaken flow client -> host (resolve my action); mPlayerDamages flow
+    /// host -> client (you were hit). A given batch is populated by one side and consumed by the
+    /// other.
     struct ActionBatch
     {
         std::vector<CombatHit> mHits;
         std::vector<PlayerDamage> mPlayerDamages;
+        // client -> host: items the peer dropped on the floor, for the host to place authoritatively.
+        std::vector<ItemDrop> mDrops;
+        // client -> host: RefNums of host-owned loose items the peer picked up, for the host to
+        // delete from the shared world (it then replicates the removal to every other peer).
+        std::vector<ESM::RefNum> mItemsTaken;
 
-        bool empty() const { return mHits.empty() && mPlayerDamages.empty(); }
+        bool empty() const
+        {
+            return mHits.empty() && mPlayerDamages.empty() && mDrops.empty() && mItemsTaken.empty();
+        }
 
         friend bool operator==(const ActionBatch&, const ActionBatch&) = default;
     };

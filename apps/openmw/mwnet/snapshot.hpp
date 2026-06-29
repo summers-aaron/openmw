@@ -101,6 +101,19 @@ namespace MWNet
         friend bool operator==(const SwingState&, const SwingState&) = default;
     };
 
+    /// A loose item lying in the world (dropped on the floor, or otherwise a host-owned item
+    /// reference in an active cell). Carried so a receiver that has never seen this item can
+    /// SPAWN it: the record id to instantiate and how many are in the stack. The where (position +
+    /// cell) rides on the same EntityState's transform and cell id. Sent only when the item is
+    /// (re-)advertised — it never changes for a static dropped item — exactly like appearance.
+    struct ItemState
+    {
+        std::string mRefId;
+        std::int32_t mCount = 1;
+
+        friend bool operator==(const ItemState&, const ItemState&) = default;
+    };
+
     /// One entity's contribution to a delta. mId is the persistent global
     /// reference identity (the same RefNum used for save games and the cell
     /// graph). A field is present iff it changed since the last sent snapshot.
@@ -141,7 +154,13 @@ namespace MWNet
         // and move the avatar in the SAME cell its owner is in (a raw position is ambiguous
         // across interiors, which share coordinate spaces), and the host needs it to load
         // that cell so the NPCs there are simulated and replicated back to every peer.
+        // Also present on a loose-item entity (see mItem) to place it in the right cell.
         std::optional<std::string> mCellId;
+        // Present iff this entity is a loose item lying in the world rather than an actor.
+        // Lets a receiver instantiate the item the first time it sees it (then track it by its
+        // RefNum like any other entity). Re-advertised on full-refresh ticks; the high-frequency
+        // actor fields (stats/draw/swing/...) are never set on an item.
+        std::optional<ItemState> mItem;
 
         friend bool operator==(const EntityState&, const EntityState&) = default;
     };
@@ -152,6 +171,11 @@ namespace MWNet
     {
         std::uint32_t mTick = 0;
         std::vector<EntityState> mEntities;
+        // RefNums of host-owned loose items that have left the world since they were last
+        // advertised (picked up, or otherwise deleted on the authority). A receiver deletes its
+        // copy. Deltas alone can't express a deletion — an absent entity just means "unchanged" —
+        // so removals are listed explicitly.
+        std::vector<ESM::RefNum> mRemovedItems;
 
         friend bool operator==(const SnapshotDelta&, const SnapshotDelta&) = default;
     };

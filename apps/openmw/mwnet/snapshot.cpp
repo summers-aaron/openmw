@@ -7,7 +7,7 @@ namespace MWNet
     namespace
     {
         // Wire format version. Bumped if the layout below changes incompatibly.
-        constexpr std::uint8_t sVersion = 5;
+        constexpr std::uint8_t sVersion = 6;
 
         // EntityState field bits (mFieldMask, a uint16 to leave room for more states).
         constexpr std::uint16_t sFieldTransform = 1 << 0;
@@ -19,8 +19,9 @@ namespace MWNet
         constexpr std::uint16_t sFieldSwing = 1 << 6;
         constexpr std::uint16_t sFieldSpeed = 1 << 7;
         constexpr std::uint16_t sFieldCell = 1 << 8;
+        constexpr std::uint16_t sFieldItem = 1 << 9;
         constexpr std::uint16_t sKnownFields = sFieldTransform | sFieldStats | sFieldDrawState | sFieldAppearance
-            | sFieldEquipment | sFieldMoveFlags | sFieldSwing | sFieldSpeed | sFieldCell;
+            | sFieldEquipment | sFieldMoveFlags | sFieldSwing | sFieldSpeed | sFieldCell | sFieldItem;
 
         // Smallest possible encoded equipment entry: slot (1) + a zero-length item string (4).
         constexpr std::uint32_t sMinEquipmentBytes = 5;
@@ -62,6 +63,8 @@ namespace MWNet
                 fieldMask |= sFieldSpeed;
             if (entity.mCellId)
                 fieldMask |= sFieldCell;
+            if (entity.mItem)
+                fieldMask |= sFieldItem;
             writer.write(fieldMask);
 
             if (entity.mTransform)
@@ -109,6 +112,18 @@ namespace MWNet
             }
             if (entity.mCellId)
                 writer.writeString(*entity.mCellId);
+            if (entity.mItem)
+            {
+                writer.writeString(entity.mItem->mRefId);
+                writer.write(entity.mItem->mCount);
+            }
+        }
+
+        writer.write(static_cast<std::uint32_t>(delta.mRemovedItems.size()));
+        for (const ESM::RefNum& removed : delta.mRemovedItems)
+        {
+            writer.write(removed.mIndex);
+            writer.write(removed.mContentFile);
         }
 
         return out;
@@ -232,8 +247,30 @@ namespace MWNet
                     return std::nullopt;
                 entity.mCellId = std::move(cellId);
             }
+            if (fieldMask & sFieldItem)
+            {
+                ItemState item;
+                if (!reader.readString(item.mRefId) || !reader.read(item.mCount))
+                    return std::nullopt;
+                entity.mItem = std::move(item);
+            }
 
             delta.mEntities.push_back(entity);
+        }
+
+        std::uint32_t removedCount = 0;
+        if (!reader.read(removedCount))
+            return std::nullopt;
+        // Each removed entry is a RefNum (4 + 4); bound the loop/allocation against the buffer.
+        if (removedCount > reader.remaining() / 8)
+            return std::nullopt;
+        delta.mRemovedItems.reserve(removedCount);
+        for (std::uint32_t i = 0; i < removedCount; ++i)
+        {
+            ESM::RefNum removed;
+            if (!reader.read(removed.mIndex) || !reader.read(removed.mContentFile))
+                return std::nullopt;
+            delta.mRemovedItems.push_back(removed);
         }
 
         return delta;

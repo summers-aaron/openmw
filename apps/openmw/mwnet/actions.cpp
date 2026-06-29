@@ -6,12 +6,17 @@ namespace MWNet
 {
     namespace
     {
-        constexpr std::uint8_t sVersion = 1;
+        constexpr std::uint8_t sVersion = 2;
         // Smallest encoded CombatHit: attacker RefNum (4+4) + victim RefNum (4+4) + damage
         // (float, 4) + health-damage flag (1).
         constexpr std::uint32_t sMinHitBytes = 21;
         // Smallest encoded PlayerDamage: target RefNum (4+4) + damage (4) + flag (1).
         constexpr std::uint32_t sMinPlayerDamageBytes = 13;
+        // Smallest encoded ItemDrop: zero-length RefId (4) + count (4) + position (3*4) + zero-length
+        // cell id (4).
+        constexpr std::uint32_t sMinDropBytes = 24;
+        // Smallest encoded items-taken entry: a RefNum (4 + 4).
+        constexpr std::uint32_t sMinTakenBytes = 8;
     }
 
     std::vector<std::byte> serializeActions(const ActionBatch& batch)
@@ -37,6 +42,21 @@ namespace MWNet
             writer.write(pd.mTarget.mContentFile);
             writer.write(pd.mDamage);
             writer.write(static_cast<std::uint8_t>(pd.mHealthDamage ? 1 : 0));
+        }
+        writer.write(static_cast<std::uint32_t>(batch.mDrops.size()));
+        for (const ItemDrop& drop : batch.mDrops)
+        {
+            writer.writeString(drop.mRefId);
+            writer.write(drop.mCount);
+            for (int i = 0; i < 3; ++i)
+                writer.write(drop.mPosition[i]);
+            writer.writeString(drop.mCellId);
+        }
+        writer.write(static_cast<std::uint32_t>(batch.mItemsTaken.size()));
+        for (const ESM::RefNum& taken : batch.mItemsTaken)
+        {
+            writer.write(taken.mIndex);
+            writer.write(taken.mContentFile);
         }
         return out;
     }
@@ -83,6 +103,39 @@ namespace MWNet
                 return std::nullopt;
             pd.mHealthDamage = healthDamage != 0;
             batch.mPlayerDamages.push_back(pd);
+        }
+
+        std::uint32_t dropCount = 0;
+        if (!reader.read(dropCount))
+            return std::nullopt;
+        if (dropCount > reader.remaining() / sMinDropBytes)
+            return std::nullopt;
+        batch.mDrops.reserve(dropCount);
+        for (std::uint32_t i = 0; i < dropCount; ++i)
+        {
+            ItemDrop drop;
+            if (!reader.readString(drop.mRefId) || !reader.read(drop.mCount))
+                return std::nullopt;
+            for (int axis = 0; axis < 3; ++axis)
+                if (!reader.read(drop.mPosition[axis]))
+                    return std::nullopt;
+            if (!reader.readString(drop.mCellId))
+                return std::nullopt;
+            batch.mDrops.push_back(std::move(drop));
+        }
+
+        std::uint32_t takenCount = 0;
+        if (!reader.read(takenCount))
+            return std::nullopt;
+        if (takenCount > reader.remaining() / sMinTakenBytes)
+            return std::nullopt;
+        batch.mItemsTaken.reserve(takenCount);
+        for (std::uint32_t i = 0; i < takenCount; ++i)
+        {
+            ESM::RefNum taken;
+            if (!reader.read(taken.mIndex) || !reader.read(taken.mContentFile))
+                return std::nullopt;
+            batch.mItemsTaken.push_back(taken);
         }
         return batch;
     }

@@ -164,6 +164,26 @@ namespace MWNet
             EXPECT_FALSE(parsed->mEntities[1].mCellId.has_value());
         }
 
+        TEST(MWNetSnapshotTest, itemAndRemovalRoundTrip)
+        {
+            SnapshotDelta delta;
+            EntityState floorItem = makeEntity(60, 0, makeTransform(5.f));
+            floorItem.mItem = ItemState{ "iron_cuirass", 1 };
+            floorItem.mCellId = "Seyda Neen, Arrille's Tradehouse";
+            delta.mEntities.push_back(floorItem);
+            delta.mRemovedItems.push_back(ESM::RefNum{ 7, -2 });
+            delta.mRemovedItems.push_back(ESM::RefNum{ 8, -2 });
+
+            const std::optional<SnapshotDelta> parsed = deserializeSnapshot(serializeSnapshot(delta));
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(*parsed, delta);
+            ASSERT_EQ(parsed->mEntities.size(), 1u);
+            ASSERT_TRUE(parsed->mEntities[0].mItem.has_value());
+            EXPECT_EQ(parsed->mEntities[0].mItem->mRefId, "iron_cuirass");
+            ASSERT_EQ(parsed->mRemovedItems.size(), 2u);
+            EXPECT_EQ(parsed->mRemovedItems[1].mIndex, 8u);
+        }
+
         TEST(MWNetSnapshotTest, swingAndSpeedRoundTrip)
         {
             SnapshotDelta delta;
@@ -212,8 +232,9 @@ namespace MWNet
         {
             // version + tick + count(0xffffffff) but no entity bytes follow.
             std::vector<std::byte> bytes = serializeSnapshot(SnapshotDelta{});
-            // bytes = [version][tick:4][count:4 == 0]; overwrite the count with a huge value.
-            ASSERT_EQ(bytes.size(), 9u);
+            // bytes = [version][tick:4][count:4 == 0][removedItemCount:4 == 0]; overwrite the
+            // entity count with a huge value.
+            ASSERT_EQ(bytes.size(), 13u);
             for (std::size_t i = 0; i < 4; ++i)
                 bytes[5 + i] = std::byte{ 0xff };
             EXPECT_FALSE(deserializeSnapshot(bytes).has_value());
