@@ -3619,6 +3619,13 @@ namespace MWWorld
             mWorldScene->addExtraPlayer(player->getPlayer());
             mWorldScene->addObjectToScene(player->getPlayer());
         }
+        // Teleport the avatar's PHYSICS body to the authoritative position too — not just its ref
+        // data. Without this, the very next physics/mechanics step reads the body's stale (drifted)
+        // position, re-applies the replicated control input on top of it, and overwrites our
+        // correction: the avatar would track its owner's INPUT but not its POSITION, drifting out of
+        // sync. updatePosition snaps the body here and skips its next simulation, so the snapshot
+        // position is what holds while the control input only drives the walk animation.
+        mPhysics->updatePosition(player->getPlayer());
         return player->getPlayer();
     }
 
