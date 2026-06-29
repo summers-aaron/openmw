@@ -22,6 +22,25 @@ namespace MWNet
         // Smallest encoded ContainerItem: zero-length RefId (4) + count (4) + charge (4) +
         // enchant charge (4) + zero-length soul (4).
         constexpr std::uint32_t sMinContainerItemBytes = 20;
+        // Smallest encoded ContainerChange: actor RefNum (8) + container RefNum (8) + item (20) + flag (1).
+        constexpr std::uint32_t sMinContainerChangeBytes = 37;
+        // Smallest encoded ContainerRevoke: target RefNum (8) + item (20).
+        constexpr std::uint32_t sMinContainerRevokeBytes = 28;
+
+        void writeContainerItem(ByteWriter& writer, const ContainerItem& item)
+        {
+            writer.writeString(item.mRefId);
+            writer.write(item.mCount);
+            writer.write(item.mCharge);
+            writer.write(item.mEnchantCharge);
+            writer.writeString(item.mSoul);
+        }
+
+        bool readContainerItem(ByteReader& reader, ContainerItem& item)
+        {
+            return reader.readString(item.mRefId) && reader.read(item.mCount) && reader.read(item.mCharge)
+                && reader.read(item.mEnchantCharge) && reader.readString(item.mSoul);
+        }
     }
 
     std::vector<std::byte> serializeActions(const ActionBatch& batch)
@@ -70,13 +89,24 @@ namespace MWNet
             writer.write(container.mId.mContentFile);
             writer.write(static_cast<std::uint32_t>(container.mItems.size()));
             for (const ContainerItem& item : container.mItems)
-            {
-                writer.writeString(item.mRefId);
-                writer.write(item.mCount);
-                writer.write(item.mCharge);
-                writer.write(item.mEnchantCharge);
-                writer.writeString(item.mSoul);
-            }
+                writeContainerItem(writer, item);
+        }
+        writer.write(static_cast<std::uint32_t>(batch.mContainerChanges.size()));
+        for (const ContainerChange& change : batch.mContainerChanges)
+        {
+            writer.write(change.mActor.mIndex);
+            writer.write(change.mActor.mContentFile);
+            writer.write(change.mContainer.mIndex);
+            writer.write(change.mContainer.mContentFile);
+            writer.write(static_cast<std::uint8_t>(change.mTake ? 1 : 0));
+            writeContainerItem(writer, change.mItem);
+        }
+        writer.write(static_cast<std::uint32_t>(batch.mContainerRevokes.size()));
+        for (const ContainerRevoke& revoke : batch.mContainerRevokes)
+        {
+            writer.write(revoke.mTarget.mIndex);
+            writer.write(revoke.mTarget.mContentFile);
+            writeContainerItem(writer, revoke.mItem);
         }
         return out;
     }
@@ -177,12 +207,44 @@ namespace MWNet
             for (std::uint32_t j = 0; j < itemCount; ++j)
             {
                 ContainerItem item;
-                if (!reader.readString(item.mRefId) || !reader.read(item.mCount) || !reader.read(item.mCharge)
-                    || !reader.read(item.mEnchantCharge) || !reader.readString(item.mSoul))
+                if (!readContainerItem(reader, item))
                     return std::nullopt;
                 container.mItems.push_back(std::move(item));
             }
             batch.mContainers.push_back(std::move(container));
+        }
+
+        std::uint32_t changeCount = 0;
+        if (!reader.read(changeCount))
+            return std::nullopt;
+        if (changeCount > reader.remaining() / sMinContainerChangeBytes)
+            return std::nullopt;
+        batch.mContainerChanges.reserve(changeCount);
+        for (std::uint32_t i = 0; i < changeCount; ++i)
+        {
+            ContainerChange change;
+            std::uint8_t take = 0;
+            if (!reader.read(change.mActor.mIndex) || !reader.read(change.mActor.mContentFile)
+                || !reader.read(change.mContainer.mIndex) || !reader.read(change.mContainer.mContentFile)
+                || !reader.read(take) || !readContainerItem(reader, change.mItem))
+                return std::nullopt;
+            change.mTake = take != 0;
+            batch.mContainerChanges.push_back(std::move(change));
+        }
+
+        std::uint32_t revokeCount = 0;
+        if (!reader.read(revokeCount))
+            return std::nullopt;
+        if (revokeCount > reader.remaining() / sMinContainerRevokeBytes)
+            return std::nullopt;
+        batch.mContainerRevokes.reserve(revokeCount);
+        for (std::uint32_t i = 0; i < revokeCount; ++i)
+        {
+            ContainerRevoke revoke;
+            if (!reader.read(revoke.mTarget.mIndex) || !reader.read(revoke.mTarget.mContentFile)
+                || !readContainerItem(reader, revoke.mItem))
+                return std::nullopt;
+            batch.mContainerRevokes.push_back(std::move(revoke));
         }
         return batch;
     }

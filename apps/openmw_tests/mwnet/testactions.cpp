@@ -81,6 +81,25 @@ namespace MWNet
             EXPECT_TRUE(parsed->mContainers[1].mItems.empty());
         }
 
+        TEST(MWNetActionsTest, containerChangesAndRevokesRoundTrip)
+        {
+            ActionBatch batch;
+            batch.mContainerChanges.push_back(
+                { ESM::RefNum{ 3, -1000 }, ESM::RefNum{ 50, 0 }, { "gold_001", 40 }, /*take=*/true });
+            batch.mContainerChanges.push_back(
+                { ESM::RefNum{ 3, -1000 }, ESM::RefNum{ 50, 0 }, { "iron_dagger", 1, 200, -1.f, "" }, false });
+            batch.mContainerRevokes.push_back({ ESM::RefNum{ 7, -1000 }, { "gold_001", 15 } });
+            const std::optional<ActionBatch> parsed = deserializeActions(serializeActions(batch));
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(*parsed, batch);
+            ASSERT_EQ(parsed->mContainerChanges.size(), 2u);
+            EXPECT_TRUE(parsed->mContainerChanges[0].mTake);
+            EXPECT_FALSE(parsed->mContainerChanges[1].mTake);
+            EXPECT_EQ(parsed->mContainerChanges[1].mItem.mCharge, 200);
+            ASSERT_EQ(parsed->mContainerRevokes.size(), 1u);
+            EXPECT_EQ(parsed->mContainerRevokes[0].mItem.mCount, 15);
+        }
+
         TEST(MWNetActionsTest, rejectsEmptyBuffer)
         {
             EXPECT_FALSE(deserializeActions(std::span<const std::byte>{}).has_value());
@@ -96,8 +115,8 @@ namespace MWNet
         TEST(MWNetActionsTest, rejectsImplausibleCount)
         {
             std::vector<std::byte> bytes = serializeActions(ActionBatch{});
-            // [version][hitCount][playerDamageCount][dropCount][takenCount][containerCount], all 4-byte 0s
-            ASSERT_EQ(bytes.size(), 21u);
+            // version + 7 4-byte 0 counts (hits, playerDamages, drops, taken, containers, changes, revokes)
+            ASSERT_EQ(bytes.size(), 29u);
             for (std::size_t i = 0; i < 4; ++i)
                 bytes[1 + i] = std::byte{ 0xff }; // implausible hit count
             EXPECT_FALSE(deserializeActions(bytes).has_value());

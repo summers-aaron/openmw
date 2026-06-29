@@ -87,6 +87,31 @@ namespace MWNet
         friend bool operator==(const ContainerState&, const ContainerState&) = default;
     };
 
+    /// A client's request to move an item between a lootable inventory and its own inventory, for
+    /// the host to resolve authoritatively. mActor is the requesting player's network id (so an
+    /// over-take can be corrected back to it); mContainer the lootable; mItem the stack moved (id +
+    /// count + condition/charge/soul). mTake true = take (container -> player, granted only up to
+    /// what's actually there); false = put (player -> container, always applied).
+    struct ContainerChange
+    {
+        ESM::RefNum mActor;
+        ESM::RefNum mContainer;
+        ContainerItem mItem;
+        bool mTake = true;
+
+        friend bool operator==(const ContainerChange&, const ContainerChange&) = default;
+    };
+
+    /// Host -> the over-taking client: it claimed mItem.mCount more than the container actually held
+    /// (another peer beat it to those items), so it must remove that many from its own inventory.
+    struct ContainerRevoke
+    {
+        ESM::RefNum mTarget;
+        ContainerItem mItem;
+
+        friend bool operator==(const ContainerRevoke&, const ContainerRevoke&) = default;
+    };
+
     /// One frame's worth of reported actions crossing the transport (Reliable channel).
     /// mHits / mDrops / mItemsTaken flow client -> host (resolve my action); mPlayerDamages flow
     /// host -> client (you were hit). mContainers flow BOTH ways (a changed lootable inventory). A
@@ -100,13 +125,17 @@ namespace MWNet
         // client -> host: RefNums of host-owned loose items the peer picked up, for the host to
         // delete from the shared world (it then replicates the removal to every other peer).
         std::vector<ESM::RefNum> mItemsTaken;
-        // both ways: lootable inventories whose contents changed and must be synced.
+        // host -> clients: the authoritative full contents of a lootable that changed.
         std::vector<ContainerState> mContainers;
+        // client -> host: take/put requests for the host to resolve against its authoritative record.
+        std::vector<ContainerChange> mContainerChanges;
+        // host -> the over-taking client: items it must drop from its inventory (lost a take race).
+        std::vector<ContainerRevoke> mContainerRevokes;
 
         bool empty() const
         {
             return mHits.empty() && mPlayerDamages.empty() && mDrops.empty() && mItemsTaken.empty()
-                && mContainers.empty();
+                && mContainers.empty() && mContainerChanges.empty() && mContainerRevokes.empty();
         }
 
         friend bool operator==(const ActionBatch&, const ActionBatch&) = default;
