@@ -62,6 +62,22 @@ namespace MWNet
             EXPECT_EQ(parsed->mItemsTaken[1].mIndex, 99u);
         }
 
+        TEST(MWNetActionsTest, containersRoundTrip)
+        {
+            ActionBatch batch;
+            batch.mContainers.push_back({ ESM::RefNum{ 12, 0 },
+                { { "gold_001", 137 }, { "iron_dagger", 1 }, { "potion_cyrodilic_brandy_01", 3 } } });
+            batch.mContainers.push_back({ ESM::RefNum{ 99, -2 }, {} }); // emptied container
+            const std::optional<ActionBatch> parsed = deserializeActions(serializeActions(batch));
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(*parsed, batch);
+            ASSERT_EQ(parsed->mContainers.size(), 2u);
+            ASSERT_EQ(parsed->mContainers[0].mItems.size(), 3u);
+            EXPECT_EQ(parsed->mContainers[0].mItems[0].mRefId, "gold_001");
+            EXPECT_EQ(parsed->mContainers[0].mItems[0].mCount, 137);
+            EXPECT_TRUE(parsed->mContainers[1].mItems.empty());
+        }
+
         TEST(MWNetActionsTest, rejectsEmptyBuffer)
         {
             EXPECT_FALSE(deserializeActions(std::span<const std::byte>{}).has_value());
@@ -77,8 +93,8 @@ namespace MWNet
         TEST(MWNetActionsTest, rejectsImplausibleCount)
         {
             std::vector<std::byte> bytes = serializeActions(ActionBatch{});
-            // [version][hitCount:4 == 0][playerDamageCount:4 == 0][dropCount:4 == 0][takenCount:4 == 0]
-            ASSERT_EQ(bytes.size(), 17u);
+            // [version][hitCount][playerDamageCount][dropCount][takenCount][containerCount], all 4-byte 0s
+            ASSERT_EQ(bytes.size(), 21u);
             for (std::size_t i = 0; i < 4; ++i)
                 bytes[1 + i] = std::byte{ 0xff }; // implausible hit count
             EXPECT_FALSE(deserializeActions(bytes).has_value());

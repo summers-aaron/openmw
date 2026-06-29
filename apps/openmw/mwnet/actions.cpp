@@ -17,6 +17,10 @@ namespace MWNet
         constexpr std::uint32_t sMinDropBytes = 24;
         // Smallest encoded items-taken entry: a RefNum (4 + 4).
         constexpr std::uint32_t sMinTakenBytes = 8;
+        // Smallest encoded ContainerState: RefNum (4 + 4) + item count (4).
+        constexpr std::uint32_t sMinContainerBytes = 12;
+        // Smallest encoded ContainerItem: zero-length RefId (4) + count (4).
+        constexpr std::uint32_t sMinContainerItemBytes = 8;
     }
 
     std::vector<std::byte> serializeActions(const ActionBatch& batch)
@@ -57,6 +61,18 @@ namespace MWNet
         {
             writer.write(taken.mIndex);
             writer.write(taken.mContentFile);
+        }
+        writer.write(static_cast<std::uint32_t>(batch.mContainers.size()));
+        for (const ContainerState& container : batch.mContainers)
+        {
+            writer.write(container.mId.mIndex);
+            writer.write(container.mId.mContentFile);
+            writer.write(static_cast<std::uint32_t>(container.mItems.size()));
+            for (const ContainerItem& item : container.mItems)
+            {
+                writer.writeString(item.mRefId);
+                writer.write(item.mCount);
+            }
         }
         return out;
     }
@@ -136,6 +152,32 @@ namespace MWNet
             if (!reader.read(taken.mIndex) || !reader.read(taken.mContentFile))
                 return std::nullopt;
             batch.mItemsTaken.push_back(taken);
+        }
+
+        std::uint32_t containerCount = 0;
+        if (!reader.read(containerCount))
+            return std::nullopt;
+        if (containerCount > reader.remaining() / sMinContainerBytes)
+            return std::nullopt;
+        batch.mContainers.reserve(containerCount);
+        for (std::uint32_t i = 0; i < containerCount; ++i)
+        {
+            ContainerState container;
+            std::uint32_t itemCount = 0;
+            if (!reader.read(container.mId.mIndex) || !reader.read(container.mId.mContentFile)
+                || !reader.read(itemCount))
+                return std::nullopt;
+            if (itemCount > reader.remaining() / sMinContainerItemBytes)
+                return std::nullopt;
+            container.mItems.reserve(itemCount);
+            for (std::uint32_t j = 0; j < itemCount; ++j)
+            {
+                ContainerItem item;
+                if (!reader.readString(item.mRefId) || !reader.read(item.mCount))
+                    return std::nullopt;
+                container.mItems.push_back(std::move(item));
+            }
+            batch.mContainers.push_back(std::move(container));
         }
         return batch;
     }

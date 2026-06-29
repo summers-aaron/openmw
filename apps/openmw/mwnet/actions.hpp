@@ -60,10 +60,34 @@ namespace MWNet
         friend bool operator==(const ItemDrop&, const ItemDrop&) = default;
     };
 
+    /// One item stack inside a container/corpse: the record to instantiate and the stack size.
+    /// (First slice: per-instance state — condition, enchant charge, soul — is not carried, so a
+    /// synced container's items reset to default condition. Fine for the common loot; a later pass
+    /// can carry full ObjectState.)
+    struct ContainerItem
+    {
+        std::string mRefId;
+        std::int32_t mCount = 1;
+
+        friend bool operator==(const ContainerItem&, const ContainerItem&) = default;
+    };
+
+    /// The full contents of one shared lootable inventory (a world container, or a corpse's
+    /// inventory), keyed by the object's world RefNum. Sent whenever the contents change: a client
+    /// reports the change to the host, the host applies it to the authoritative store and relays the
+    /// new contents to every other peer, so all peers loot from the same shelves.
+    struct ContainerState
+    {
+        ESM::RefNum mId;
+        std::vector<ContainerItem> mItems;
+
+        friend bool operator==(const ContainerState&, const ContainerState&) = default;
+    };
+
     /// One frame's worth of reported actions crossing the transport (Reliable channel).
     /// mHits / mDrops / mItemsTaken flow client -> host (resolve my action); mPlayerDamages flow
-    /// host -> client (you were hit). A given batch is populated by one side and consumed by the
-    /// other.
+    /// host -> client (you were hit). mContainers flow BOTH ways (a changed lootable inventory). A
+    /// given batch is populated by one side and consumed by the other.
     struct ActionBatch
     {
         std::vector<CombatHit> mHits;
@@ -73,10 +97,13 @@ namespace MWNet
         // client -> host: RefNums of host-owned loose items the peer picked up, for the host to
         // delete from the shared world (it then replicates the removal to every other peer).
         std::vector<ESM::RefNum> mItemsTaken;
+        // both ways: lootable inventories whose contents changed and must be synced.
+        std::vector<ContainerState> mContainers;
 
         bool empty() const
         {
-            return mHits.empty() && mPlayerDamages.empty() && mDrops.empty() && mItemsTaken.empty();
+            return mHits.empty() && mPlayerDamages.empty() && mDrops.empty() && mItemsTaken.empty()
+                && mContainers.empty();
         }
 
         friend bool operator==(const ActionBatch&, const ActionBatch&) = default;
