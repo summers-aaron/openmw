@@ -533,18 +533,53 @@ namespace MWWorld
     bool Scene::isCellOccupiedByNonPrimaryPlayer(const CellStore* cell) const
     {
         for (std::size_t i = 1; i < mWorld.getPlayerCount(); ++i)
-            if (mWorld.getPlayerPtr(i).getCell() == cell)
+        {
+            const CellStore* playerCell = mWorld.getPlayerPtr(i).getCell();
+            if (playerCell == cell)
                 return true;
+            // Keep the whole exterior grid around an extra player loaded (matching the grid the
+            // primary player keeps and what addExtraPlayer loads), so neighbouring cells the peer
+            // interacts with are not unloaded out from under it.
+            if (playerCell != nullptr && playerCell->getCell()->isExterior() && cell->getCell()->isExterior()
+                && playerCell->getCell()->getWorldSpace() == cell->getCell()->getWorldSpace())
+            {
+                const int halfGridSize = isEsm4Ext(playerCell->getCell()->getWorldSpace())
+                    ? Constants::ESM4CellGridRadius
+                    : Constants::CellGridRadius;
+                const ESM::ExteriorCellLocation a = playerCell->getCell()->getExteriorCellLocation();
+                const ESM::ExteriorCellLocation b = cell->getCell()->getExteriorCellLocation();
+                if (std::abs(a.mX - b.mX) <= halfGridSize && std::abs(a.mY - b.mY) <= halfGridSize)
+                    return true;
+            }
+        }
         return false;
     }
 
     void Scene::addExtraPlayer(const MWWorld::Ptr& player)
     {
         CellStore* cell = player.getCell();
-        if (cell == nullptr || mActiveCells.find(cell) != mActiveCells.end())
-            return; // no cell, or the cell is already active (e.g. shared with the primary player)
+        if (cell == nullptr)
+            return;
         auto navigatorUpdateGuard = mNavigator.makeUpdateGuard();
-        loadCell(*cell, nullptr, false, player.getRefData().getPosition().asVec3(), navigatorUpdateGuard.get());
+        const osg::Vec3f pos = player.getRefData().getPosition().asVec3();
+        if (cell->getCell()->isExterior())
+        {
+            // Load the whole grid of exterior cells around this player, not just the single cell it
+            // stands in, so a network peer's avatar has the same surroundings simulated as the local
+            // player keeps. Otherwise actors in neighbouring cells the peer can see and interact with
+            // (e.g. a town NPC it punches) are never loaded here, so the authority can't react to them.
+            const ESM::RefId worldspace = cell->getCell()->getWorldSpace();
+            const int halfGridSize
+                = isEsm4Ext(worldspace) ? Constants::ESM4CellGridRadius : Constants::CellGridRadius;
+            const ESM::ExteriorCellLocation center = cell->getCell()->getExteriorCellLocation();
+            iterateOverCellsAround(center.mX, center.mY, halfGridSize, [&](int x, int y) {
+                CellStore& grid = mWorld.getWorldModel().getExterior(ESM::ExteriorCellLocation(x, y, worldspace));
+                if (mActiveCells.find(&grid) == mActiveCells.end())
+                    loadCell(grid, nullptr, false, pos, navigatorUpdateGuard.get());
+            });
+        }
+        else if (mActiveCells.find(cell) == mActiveCells.end())
+            loadCell(*cell, nullptr, false, pos, navigatorUpdateGuard.get());
         navigatorUpdateGuard.reset();
     }
 

@@ -164,8 +164,20 @@ namespace MWBase
         /// yet wired into rendering/physics/input; it exists as a model actor only.
         virtual MWWorld::Ptr addPlayer() = 0;
         /// As above, but place the new player in the given cell at the given position. The cell is
-        /// loaded and kept active so the player's surroundings are simulated.
-        virtual MWWorld::Ptr addPlayer(MWWorld::CellStore& cell, const ESM::Position& position) = 0;
+        /// loaded and kept active so the player's surroundings are simulated. When \a record is
+        /// given the new player is built from it (its appearance) instead of the generic "Player"
+        /// record — used to spawn a network peer's avatar with that peer's race/sex/head/hair.
+        virtual MWWorld::Ptr addPlayer(
+            MWWorld::CellStore& cell, const ESM::Position& position, const ESM::NPC* record = nullptr)
+            = 0;
+        /// Move an existing non-primary player to the given cell/position, loading and keeping that
+        /// cell active (so its surroundings stay simulated) and updating the player's cell so the
+        /// indexed accessors track it. Handles crossing from one cell to another. Returns the
+        /// updated Ptr (a cell change rebuilds the reference). Used to follow a network peer's
+        /// avatar as its owner walks between cells.
+        virtual MWWorld::Ptr placeNetworkPlayer(
+            const MWWorld::Ptr& ptr, MWWorld::CellStore& cell, const osg::Vec3f& position)
+            = 0;
         /// Remove a non-primary player by index (index 0, the primary player, cannot be removed).
         virtual void removePlayer(std::size_t index) = 0;
 

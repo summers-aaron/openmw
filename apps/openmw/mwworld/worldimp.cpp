@@ -3503,20 +3503,69 @@ namespace MWWorld
         return addPlayer(*primary.getCell(), primary.getRefData().getPosition());
     }
 
-    MWWorld::Ptr World::addPlayer(MWWorld::CellStore& cell, const ESM::Position& position)
+    MWWorld::Ptr World::addPlayer(MWWorld::CellStore& cell, const ESM::Position& position, const ESM::NPC* record)
     {
-        const ESM::NPC* record = mStore.get<ESM::NPC>().find(ESM::RefId::stringRefId("Player"));
+        if (record == nullptr)
+            record = mStore.get<ESM::NPC>().find(ESM::RefId::stringRefId("Player"));
         MWWorld::Player& player = mPlayers.addPlayer(record);
         player.setCell(&cell);
 
         MWWorld::Ptr ptr = player.getPlayer();
         ptr.getRefData().setPosition(position);
+        // Give this non-primary player a stable, unique RefNum BEFORE registering it. A player ref
+        // is born blank (Player::makePlayerCellRef calls blank()); left to the registry's lazy
+        // getOrAssignRefNum it could resolve to a blank/colliding identity, so an NPC's AiCombat —
+        // which stores and resolves its target purely by RefNum — could not aim its retaliation at
+        // the right avatar (every avatar looked like the same player). A dedicated negative content
+        // file keeps these clear of real content (>= 0), generated refs (count down from -1) and the
+        // net-player wire id (-1000); the index is monotonic so it is never reused.
+        constexpr std::int32_t sNetworkPlayerRefNumContentFile = -2000;
+        ptr.getCellRef().setRefNum(ESM::RefNum{ mNextNetworkPlayerRefNum++, sNetworkPlayerRefNumContentFile });
         mWorldModel.registerPtr(ptr);
 
         // Load and keep the player's cell active so the cell that this player occupies is simulated.
         mWorldScene->addExtraPlayer(ptr);
+        // Give the avatar a real presence in the world — a collision body and a mechanics slot — so
+        // NPCs can perceive, target and melee it. Without this it is an invisible ghost: combat code
+        // (AiCombat's LOS/reach checks, hit detection) has nothing to act on, so a struck NPC takes
+        // the damage but can never actually fight back.
+        mWorldScene->addObjectToScene(ptr);
         MWBase::Environment::get().getLuaManager()->addPlayer(ptr);
         return ptr;
+    }
+
+    MWWorld::Ptr World::placeNetworkPlayer(const MWWorld::Ptr& ptr, MWWorld::CellStore& cell, const osg::Vec3f& position)
+    {
+        MWWorld::Player* player = mPlayers.findPlayer(ptr);
+        if (player == nullptr)
+            throw std::runtime_error("World::placeNetworkPlayer: Ptr is not one of the players");
+
+        ESM::Position pos = ptr.getRefData().getPosition();
+        pos.pos[0] = position.x();
+        pos.pos[1] = position.y();
+        pos.pos[2] = position.z();
+        ptr.getRefData().setPosition(pos);
+
+        if (ptr.getCell() != &cell)
+        {
+            // A network avatar lives only in its Player wrapper and the world-model registry — never
+            // in a CellStore's reference list. So cross cells by re-pointing the wrapper and re-keying
+            // the registry to the new-cell Ptr, NOT through moveObject: moveObject's moved-ref
+            // bookkeeping is built for placed refs and, on an avatar's SECOND move, tries to send it
+            // "back to its original cell" first — stranding it in its previous cell. That left every
+            // migrated avatar un-findable where it actually was, so an NPC could only be made to fight
+            // an avatar still sitting in the cell it was first placed in (the "first player in the
+            // cell" symptom). Re-pointing directly keeps getPtr(refNum) resolving to the right place.
+            // Carry the avatar's scene presence (collision body + mechanics slot) to the new cell:
+            // drop it from the old cell, re-point the wrapper, load/keep the destination, then re-add
+            // it there. Keeps NPCs able to perceive and fight it wherever its owner walks.
+            mWorldScene->removeObjectFromScene(ptr, false);
+            player->setCell(&cell);
+            mWorldModel.registerPtr(player->getPlayer());
+            mWorldScene->addExtraPlayer(player->getPlayer());
+            mWorldScene->addObjectToScene(player->getPlayer());
+        }
+        return player->getPlayer();
     }
 
     void World::removePlayer(std::size_t index)

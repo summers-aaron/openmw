@@ -101,6 +101,10 @@ namespace MWWorld
         std::string mCurrentWorldSpace;
 
         MWWorld::Players mPlayers;
+        // Monotonic source of unique RefNum indices for non-primary (network) players. A new index
+        // every time, never reused, so a freshly added avatar can never collide with one still
+        // referenced by an in-flight AiCombat target (which tracks its quarry purely by RefNum).
+        std::uint32_t mNextNetworkPlayerRefNum = 1;
         std::unique_ptr<MWPhysics::PhysicsSystem> mPhysics;
         std::unique_ptr<DetourNavigator::Navigator> mNavigator;
         std::unique_ptr<MWRender::RenderingManager> mRendering;
@@ -246,7 +250,10 @@ namespace MWWorld
         MWWorld::Ptr getPlayerPtr(std::size_t index) override;
         MWWorld::Player& getPlayer(const MWWorld::ConstPtr& ptr) override;
         MWWorld::Ptr addPlayer() override;
-        MWWorld::Ptr addPlayer(MWWorld::CellStore& cell, const ESM::Position& position) override;
+        MWWorld::Ptr addPlayer(
+            MWWorld::CellStore& cell, const ESM::Position& position, const ESM::NPC* record = nullptr) override;
+        MWWorld::Ptr placeNetworkPlayer(
+            const MWWorld::Ptr& ptr, MWWorld::CellStore& cell, const osg::Vec3f& position) override;
         void removePlayer(std::size_t index) override;
 
         MWWorld::ESMStore& getStore() override { return mStore; }
