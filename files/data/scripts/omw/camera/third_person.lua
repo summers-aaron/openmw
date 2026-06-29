@@ -29,11 +29,15 @@ local combatOffset = util.vector2(0, 15)
 local noThirdPersonLastFrame = true
 
 local function updateSettings()
-    viewOverShoulder = settings:get('viewOverShoulder')
-    autoSwitchShoulder = settings:get('autoSwitchShoulder')
-    shoulderOffset = util.vector2(settings:get('shoulderOffsetX'),
-        settings:get('shoulderOffsetY'))
-    zoomOutWhenMoveCoef = settings:get('zoomOutWhenMoveCoef')
+    -- Fall back to the registered defaults: the third-person settings group (registered in the
+    -- menu context) may not be seeded into this player's storage yet when this script first loads
+    -- (notably on a --skip-menu load), so settings:get can transiently return nil. The
+    -- settings:subscribe below re-runs this with the real values once the group is available.
+    viewOverShoulder = settings:get('viewOverShoulder') or false
+    autoSwitchShoulder = settings:get('autoSwitchShoulder') or false
+    shoulderOffset = util.vector2(settings:get('shoulderOffsetX') or 30,
+        settings:get('shoulderOffsetY') or -10)
+    zoomOutWhenMoveCoef = settings:get('zoomOutWhenMoveCoef') or 20
 
     defaultShoulder = (shoulderOffset.x > 0 and STATE.RightShoulder) or STATE.LeftShoulder
     rightShoulderOffset = util.vector2(math.abs(shoulderOffset.x), shoulderOffset.y)
