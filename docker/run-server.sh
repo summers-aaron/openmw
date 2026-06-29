@@ -24,7 +24,6 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=docker/_mp-common.sh
 source "$REPO/docker/_mp-common.sh"
 
-NAME="${NAME:-openmw-server}"
 LISTEN="${PORT:-25565}"
 
 # Pull --listen out of the args (so we can echo it); leave everything else as pass-through.
@@ -37,6 +36,7 @@ while [ $# -gt 0 ]; do
 done
 
 mp_common_preflight
+mp_common_pick_name openmw-server   # -> NAME (auto-numbered so multiple servers coexist)
 mp_common_config_copy "$NAME"   # -> $MP_CFG
 mp_common_userdata "$NAME"      # -> $MP_USERDATA
 
@@ -46,7 +46,6 @@ for a in ${passthrough[@]+"${passthrough[@]}"}; do
     case "$a" in --new-game|--load-savegame|--skip-menu) game=() ;; esac
 done
 
-"$MP_RUNTIME" rm -f "$NAME" >/dev/null 2>&1 || true
 echo "Starting dedicated server '$NAME' on port $LISTEN (Ctrl+C to stop)..."
 exec "$MP_RUNTIME" run --rm --name "$NAME" --network host --security-opt label=disable \
     -e LIBGL_ALWAYS_SOFTWARE=1 -e GALLIUM_DRIVER=llvmpipe -e SDL_VIDEODRIVER=offscreen -e EGL_PLATFORM=surfaceless \

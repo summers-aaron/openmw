@@ -19,12 +19,16 @@ docker/run-server.sh                 # terminal A: a headless dedicated server o
 docker/run-client.sh 127.0.0.1       # terminal B: a rendering client that joins it
 ```
 
-Use a LAN IP instead of `127.0.0.1` to join a server on another machine. Two players on one box:
+Use a LAN IP instead of `127.0.0.1` to join a server on another machine. Two players on one box —
+just run it twice; each gets its own container name (`openmw-client`, `openmw-client-2`) and coexists:
 
 ```sh
-NAME=c1 docker/run-client.sh <IP>
-NAME=c2 docker/run-client.sh <IP>
+docker/run-client.sh <IP>     # first client
+docker/run-client.sh <IP>     # second client (auto-named, runs alongside the first)
 ```
+
+Set `NAME=…` only if you want a specific, fixed container name (re-running with the same `NAME`
+replaces that one).
 
 Host a specific save instead of a new game:
 

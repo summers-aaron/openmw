@@ -52,6 +52,22 @@ mp_common_userdata() {
     fi
 }
 
+# Resolve the container name. If NAME is set explicitly, keep it and remove any same-named (stale)
+# container so it can be reused. Otherwise auto-pick the first free "<base>", "<base>-2", "<base>-3", …
+# so running a launcher repeatedly starts COEXISTING instances instead of the new one evicting the
+# previous same-named container. $1 = base name -> sets NAME.
+mp_common_pick_name() {
+    if [ -n "${NAME:-}" ]; then
+        "$MP_RUNTIME" rm -f "$NAME" >/dev/null 2>&1 || true
+        return
+    fi
+    NAME="$1"
+    local i=1
+    while "$MP_RUNTIME" ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$NAME"; do
+        i=$((i + 1)); NAME="$1-$i"
+    done
+}
+
 # Build the run flags for a RENDERING client (a real window): GPU + X11 display + audio.
 # GPU is auto-detected (nvidia if /dev/nvidia0 exists, else mesa); override with GPU=mesa|nvidia.
 # Sets MP_RENDER (array of run flags) and MP_GPU (the chosen mode).

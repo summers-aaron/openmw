@@ -28,7 +28,6 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=docker/_mp-common.sh
 source "$REPO/docker/_mp-common.sh"
 
-NAME="${NAME:-openmw-client}"
 DEFAULT_PORT="${PORT:-25565}"
 
 [ $# -ge 1 ] || { echo "usage: $(basename "$0") <SERVER_IP[:PORT]> [extra openmw args...]" >&2; exit 1; }
@@ -36,6 +35,7 @@ SERVER="$1"; shift
 case "$SERVER" in *:*) ;; *) SERVER="$SERVER:$DEFAULT_PORT" ;; esac
 
 mp_common_preflight
+mp_common_pick_name openmw-client   # -> NAME (auto-numbered so two clients coexist)
 mp_common_config_copy "$NAME"   # -> MP_CFG
 mp_common_userdata "$NAME"      # -> MP_USERDATA
 mp_common_gpu_render            # -> MP_RENDER, MP_GPU
@@ -46,7 +46,6 @@ for a in "$@"; do
     case "$a" in --new-game|--load-savegame|--skip-menu) game=() ;; esac
 done
 
-"$MP_RUNTIME" rm -f "$NAME" >/dev/null 2>&1 || true
 echo "Connecting client '$NAME' to $SERVER (gpu=$MP_GPU) — a window will open, ~20-40s to load..."
 exec "$MP_RUNTIME" run --rm --name "$NAME" --network host --security-opt label=disable \
     "${MP_RENDER[@]}" \
