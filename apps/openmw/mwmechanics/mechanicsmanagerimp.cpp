@@ -1933,6 +1933,11 @@ namespace MWMechanics
         return mActors.isAttackingOrSpell(ptr);
     }
 
+    std::string_view MechanicsManager::getActiveAttackType(const MWWorld::Ptr& ptr) const
+    {
+        return mActors.getActiveAttackType(ptr);
+    }
+
     void MechanicsManager::setWerewolf(const MWWorld::Ptr& actor, bool werewolf)
     {
         MWMechanics::NpcStats& npcStats = actor.getClass().getNpcStats(actor);

@@ -7,7 +7,7 @@ namespace MWNet
     namespace
     {
         // Wire format version. Bumped if the layout below changes incompatibly.
-        constexpr std::uint8_t sVersion = 3;
+        constexpr std::uint8_t sVersion = 4;
 
         // EntityState field bits (mFieldMask, a uint16 to leave room for more states).
         constexpr std::uint16_t sFieldTransform = 1 << 0;
@@ -16,10 +16,10 @@ namespace MWNet
         constexpr std::uint16_t sFieldAppearance = 1 << 3;
         constexpr std::uint16_t sFieldEquipment = 1 << 4;
         constexpr std::uint16_t sFieldMoveFlags = 1 << 5;
-        constexpr std::uint16_t sFieldAttack = 1 << 6;
+        constexpr std::uint16_t sFieldSwing = 1 << 6;
         constexpr std::uint16_t sFieldSpeed = 1 << 7;
         constexpr std::uint16_t sKnownFields = sFieldTransform | sFieldStats | sFieldDrawState | sFieldAppearance
-            | sFieldEquipment | sFieldMoveFlags | sFieldAttack | sFieldSpeed;
+            | sFieldEquipment | sFieldMoveFlags | sFieldSwing | sFieldSpeed;
 
         // Smallest possible encoded equipment entry: slot (1) + a zero-length item string (4).
         constexpr std::uint32_t sMinEquipmentBytes = 5;
@@ -55,8 +55,8 @@ namespace MWNet
                 fieldMask |= sFieldEquipment;
             if (entity.mMoveFlags)
                 fieldMask |= sFieldMoveFlags;
-            if (entity.mAttack)
-                fieldMask |= sFieldAttack;
+            if (entity.mSwing)
+                fieldMask |= sFieldSwing;
             if (entity.mSpeed)
                 fieldMask |= sFieldSpeed;
             writer.write(fieldMask);
@@ -78,8 +78,12 @@ namespace MWNet
                 writer.write(*entity.mDrawState);
             if (entity.mMoveFlags)
                 writer.write(*entity.mMoveFlags);
-            if (entity.mAttack)
-                writer.write(*entity.mAttack);
+            if (entity.mSwing)
+            {
+                writer.writeString(entity.mSwing->mGroup);
+                writer.writeString(entity.mSwing->mType);
+                writer.write(entity.mSwing->mSeq);
+            }
             if (entity.mSpeed)
                 writer.write(*entity.mSpeed);
             if (entity.mAppearance)
@@ -171,12 +175,13 @@ namespace MWNet
                     return std::nullopt;
                 entity.mMoveFlags = moveFlags;
             }
-            if (fieldMask & sFieldAttack)
+            if (fieldMask & sFieldSwing)
             {
-                std::uint8_t attack = 0;
-                if (!reader.read(attack))
+                SwingState swing;
+                if (!reader.readString(swing.mGroup) || !reader.readString(swing.mType)
+                    || !reader.read(swing.mSeq))
                     return std::nullopt;
-                entity.mAttack = attack;
+                entity.mSwing = std::move(swing);
             }
             if (fieldMask & sFieldSpeed)
             {

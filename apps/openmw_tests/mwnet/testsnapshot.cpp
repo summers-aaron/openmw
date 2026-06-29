@@ -146,15 +146,14 @@ namespace MWNet
             EXPECT_EQ(parsed->mEntities[1].mMoveFlags, std::uint8_t{ 0b10 });
         }
 
-        TEST(MWNetSnapshotTest, attackAndSpeedRoundTrip)
+        TEST(MWNetSnapshotTest, swingAndSpeedRoundTrip)
         {
             SnapshotDelta delta;
             EntityState swinging = makeEntity(40, -1000, makeTransform(1.f));
-            swinging.mAttack = std::uint8_t{ 2 }; // slash
+            swinging.mSwing = SwingState{ "weapononehand", "thrust", 7u };
             swinging.mSpeed = 123.5f;
             delta.mEntities.push_back(swinging);
-            EntityState idle = makeEntity(41, -1000, makeTransform(2.f));
-            idle.mAttack = std::uint8_t{ 0 }; // not attacking
+            EntityState idle = makeEntity(41, -1000, makeTransform(2.f)); // no swing
             idle.mSpeed = 0.f;
             delta.mEntities.push_back(idle);
 
@@ -162,9 +161,12 @@ namespace MWNet
             ASSERT_TRUE(parsed.has_value());
             EXPECT_EQ(*parsed, delta);
             ASSERT_EQ(parsed->mEntities.size(), 2u);
-            EXPECT_EQ(parsed->mEntities[0].mAttack, std::uint8_t{ 2 });
+            ASSERT_TRUE(parsed->mEntities[0].mSwing.has_value());
+            EXPECT_EQ(parsed->mEntities[0].mSwing->mGroup, "weapononehand");
+            EXPECT_EQ(parsed->mEntities[0].mSwing->mType, "thrust");
+            EXPECT_EQ(parsed->mEntities[0].mSwing->mSeq, 7u);
             EXPECT_EQ(parsed->mEntities[0].mSpeed, 123.5f);
-            EXPECT_EQ(parsed->mEntities[1].mAttack, std::uint8_t{ 0 });
+            EXPECT_FALSE(parsed->mEntities[1].mSwing.has_value());
         }
 
         TEST(MWNetSnapshotTest, rejectsEmptyBuffer)

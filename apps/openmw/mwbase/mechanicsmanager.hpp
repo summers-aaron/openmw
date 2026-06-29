@@ -261,6 +261,9 @@ namespace MWBase
         virtual bool isCastingSpell(const MWWorld::Ptr& ptr) const = 0;
         virtual bool isReadyToBlock(const MWWorld::Ptr& ptr) const = 0;
         virtual bool isAttackingOrSpell(const MWWorld::Ptr& ptr) const = 0;
+        /// The attack segment the actor's controller actually chose for its current swing
+        /// (slash/chop/thrust, or shoot/self/touch/target); empty if not mid-swing.
+        virtual std::string_view getActiveAttackType(const MWWorld::Ptr& ptr) const = 0;
 
         virtual void castSpell(const MWWorld::Ptr& ptr, const ESM::RefId& spellId, bool scriptedSpell) = 0;
 

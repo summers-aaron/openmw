@@ -160,6 +160,7 @@ namespace MWMechanics
         bool isCastingSpell(const MWWorld::Ptr& ptr) const;
         bool isReadyToBlock(const MWWorld::Ptr& ptr) const;
         bool isAttackingOrSpell(const MWWorld::Ptr& ptr) const;
+        std::string_view getActiveAttackType(const MWWorld::Ptr& ptr) const;
 
         int getGreetingTimer(const MWWorld::Ptr& ptr) const;
         float getAngleToPlayer(const MWWorld::Ptr& ptr) const;

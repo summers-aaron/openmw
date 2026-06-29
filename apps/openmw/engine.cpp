@@ -287,6 +287,12 @@ void OMW::Engine::pumpTransport()
         }
     }
 
+    // Re-assert every remote-owned actor's locomotion intent for this frame, before the mechanics
+    // pass (which zeroes the movement vector each frame) runs. applyDelta only records the intent on
+    // snapshot-receipt frames; driving it here every frame keeps remote avatars' walk cycles
+    // continuous and lets them dead-reckon between snapshots instead of sliding under an idle pose.
+    mReplicator->driveRemoteActors();
+
     // Verbose-only replication throughput (off by default), throttled to ~once per 300 ticks
     // but always logged on any tick that carried Lua events or with peers connected.
     if (delta.mTick % 300 == 0 || !outgoingEvents.empty() || mSession->peerCount() > 0)

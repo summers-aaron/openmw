@@ -80,6 +80,27 @@ namespace MWNet
         friend bool operator==(const EquipmentSlot&, const EquipmentSlot&) = default;
     };
 
+    /// A discrete melee swing / spell cast, replicated as an EDGE rather than a streamed
+    /// playhead. mSeq is a per-actor counter that increments once each time the actor begins
+    /// a new swing (the rising edge of its attacking-or-spell state on the authority); the
+    /// receiver plays the segment exactly once whenever mSeq changes. mGroup is the weapon/spell
+    /// animation group to play it on and mType the attack segment ("chop"/"slash"/"thrust"/
+    /// "shoot"; empty = play the whole group, e.g. a spell cast).
+    ///
+    /// An earlier design streamed the playhead time and inferred the segment from which window
+    /// it fell in. That broke for AI NPCs, whose weapon group plays continuously in sustained
+    /// combat: the ever-advancing playhead swept through the slash/chop/thrust windows in turn,
+    /// firing three phantom attacks per real one. An explicit per-swing counter can't be fooled
+    /// by a free-running playhead.
+    struct SwingState
+    {
+        std::string mGroup;
+        std::string mType;
+        std::uint32_t mSeq = 0;
+
+        friend bool operator==(const SwingState&, const SwingState&) = default;
+    };
+
     /// One entity's contribution to a delta. mId is the persistent global
     /// reference identity (the same RefNum used for save games and the cell
     /// graph). A field is present iff it changed since the last sent snapshot.
@@ -96,10 +117,11 @@ namespace MWNet
         // high-frequency field like the transform: it selects the run/sneak vs walk
         // animation variants, so a remote avatar moves in the gait its owner chose.
         std::optional<std::uint8_t> mMoveFlags;
-        // The actor's melee attack state: 0 = not attacking, else the swing type
-        // (1 chop, 2 slash, 3 thrust). Drives the attack wind-up/release animation on
-        // the avatar (it casts instead when in the spell stance). High-frequency.
-        std::optional<std::uint8_t> mAttack;
+        // The actor's latest discrete swing/cast (group + attack type + a per-swing counter).
+        // Present once the actor has swung at least once; the receiver plays the segment each
+        // time the counter changes, so a free-running NPC weapon animation can't spawn phantom
+        // swings the way an inferred-from-playhead scheme did.
+        std::optional<SwingState> mSwing;
         // The actor's current world movement speed (units/sec). Used to set the avatar's
         // animation playback rate so its feet match its replicated translation instead of
         // sliding (it always animated at full speed before). High-frequency.
