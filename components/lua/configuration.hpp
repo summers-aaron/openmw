@@ -34,6 +34,9 @@ namespace LuaUtil
         ScriptIdsWithInitializationData getMenuConf() const { return getConfByFlag(ESM::LuaScriptCfg::sMenu); }
         ScriptIdsWithInitializationData getGlobalConf() const { return getConfByFlag(ESM::LuaScriptCfg::sGlobal); }
         ScriptIdsWithInitializationData getPlayerConf() const { return getConfByFlag(ESM::LuaScriptCfg::sPlayer); }
+        // Player scripts for an additional (non-local) player: the player set minus the
+        // sLocalPlayer scripts, which must run only on this client's own local player.
+        ScriptIdsWithInitializationData getExtraPlayerConf() const;
         ScriptIdsWithInitializationData getLoadConf() const { return getConfByFlag(ESM::LuaScriptCfg::sLoad); }
         ScriptIdsWithInitializationData getLocalConf(
             uint32_t type, const ESM::RefId& recordId, ESM::RefNum refnum) const;

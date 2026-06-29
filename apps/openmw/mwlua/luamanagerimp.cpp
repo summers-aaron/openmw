@@ -480,12 +480,15 @@ namespace MWLua
             storage->clearTemporaryAndRemoveCallbacks();
     }
 
-    LocalScripts* LuaManager::setupPlayerScripts(const MWWorld::Ptr& ptr)
+    LocalScripts* LuaManager::setupPlayerScripts(const MWWorld::Ptr& ptr, bool extraPlayer)
     {
         LocalScripts* localScripts = ptr.getRefData().getLuaScripts();
         if (!localScripts)
         {
-            localScripts = createLocalScripts(ptr);
+            // Additional players get the player set without the local-only (input/UI/camera)
+            // scripts; the local player (extraPlayer == false) gets the full set.
+            localScripts = extraPlayer ? createLocalScripts(ptr, mConfiguration.getExtraPlayerConf())
+                                       : createLocalScripts(ptr);
             mQueuedAutoStartedScripts.push_back(localScripts->getWeakPointer());
         }
         mActiveLocalScripts.insert(localScripts->getWeakPointer());
@@ -510,7 +513,7 @@ namespace MWLua
             const MWWorld::Ptr extra = world->getPlayerPtr(i);
             mObjectLists.objectAddedToScene(extra);
             mObjectLists.addPlayer(extra);
-            setupPlayerScripts(extra);
+            setupPlayerScripts(extra, /*extraPlayer=*/true);
             const auto storageIt = mLoadedExtraPlayerStorage.find(i);
             if (storageIt != mLoadedExtraPlayerStorage.end())
             {
@@ -528,7 +531,7 @@ namespace MWLua
             return;
         mObjectLists.objectAddedToScene(ptr);
         mObjectLists.addPlayer(ptr);
-        setupPlayerScripts(ptr);
+        setupPlayerScripts(ptr, /*extraPlayer=*/true);
     }
 
     void LuaManager::removePlayer(const MWWorld::Ptr& ptr)
@@ -826,7 +829,11 @@ namespace MWLua
         else if (type == ESM::REC_INTERNAL_PLAYER)
         {
             scripts = std::make_shared<PlayerScripts>(&mLua, LObject(getId(ptr)));
-            scripts->setAutoStartConf(mConfiguration.getPlayerConf());
+            // Default to the full player set (the local player drives this client's input/UI/
+            // camera). An explicit conf is passed only when setting up an additional player —
+            // it omits the local-only scripts so extra players never run, and fight over, them.
+            scripts->setAutoStartConf(autoStartConf.has_value() ? std::move(*autoStartConf)
+                                                                : mConfiguration.getPlayerConf());
             for (const auto& [name, package] : mPlayerPackages)
                 scripts->addPackage(name, package);
             // Bind openmw.storage to this player's own player-section storage so players do not

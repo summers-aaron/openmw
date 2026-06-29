@@ -213,7 +213,9 @@ namespace MWLua
         LocalScripts* createLocalScripts(const MWWorld::Ptr& ptr,
             std::optional<LuaUtil::ScriptIdsWithInitializationData> autoStartConf = std::nullopt);
         // Create (if needed), auto-start and activate the player scripts for the given player.
-        LocalScripts* setupPlayerScripts(const MWWorld::Ptr& ptr);
+        // extraPlayer selects the reduced set (no local-only input/UI/camera scripts) for
+        // additional players; the local player gets the full set.
+        LocalScripts* setupPlayerScripts(const MWWorld::Ptr& ptr, bool extraPlayer = false);
         PlayerScripts* getPlayerScripts(const MWWorld::Ptr& ptr) const;
         // Per-player player-section storage. The local player uses mPlayerStorage (persisted to
         // disk); additional players get their own in-memory storage so they do not collide.
