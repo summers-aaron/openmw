@@ -146,6 +146,27 @@ namespace MWNet
             EXPECT_EQ(parsed->mEntities[1].mMoveFlags, std::uint8_t{ 0b10 });
         }
 
+        TEST(MWNetSnapshotTest, attackAndSpeedRoundTrip)
+        {
+            SnapshotDelta delta;
+            EntityState swinging = makeEntity(40, -1000, makeTransform(1.f));
+            swinging.mAttack = std::uint8_t{ 2 }; // slash
+            swinging.mSpeed = 123.5f;
+            delta.mEntities.push_back(swinging);
+            EntityState idle = makeEntity(41, -1000, makeTransform(2.f));
+            idle.mAttack = std::uint8_t{ 0 }; // not attacking
+            idle.mSpeed = 0.f;
+            delta.mEntities.push_back(idle);
+
+            const std::optional<SnapshotDelta> parsed = deserializeSnapshot(serializeSnapshot(delta));
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(*parsed, delta);
+            ASSERT_EQ(parsed->mEntities.size(), 2u);
+            EXPECT_EQ(parsed->mEntities[0].mAttack, std::uint8_t{ 2 });
+            EXPECT_EQ(parsed->mEntities[0].mSpeed, 123.5f);
+            EXPECT_EQ(parsed->mEntities[1].mAttack, std::uint8_t{ 0 });
+        }
+
         TEST(MWNetSnapshotTest, rejectsEmptyBuffer)
         {
             EXPECT_FALSE(deserializeSnapshot(std::span<const std::byte>{}).has_value());
@@ -183,7 +204,8 @@ namespace MWNet
             SnapshotDelta delta;
             delta.mEntities.push_back(makeEntity(1, 0, std::nullopt));
             std::vector<std::byte> bytes = serializeSnapshot(delta);
-            // Layout: [version][tick:4][count:4][index:4][file:4][mask:1]; flip an unknown bit in the mask.
+            // Layout: [version][tick:4][count:4][index:4][file:4][mask:2]; flip an unknown bit in
+            // the mask's high byte (only bits 0-7 are known fields).
             bytes.back() = std::byte{ 0x80 };
             EXPECT_FALSE(deserializeSnapshot(bytes).has_value());
         }

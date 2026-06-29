@@ -96,6 +96,14 @@ namespace MWNet
         // high-frequency field like the transform: it selects the run/sneak vs walk
         // animation variants, so a remote avatar moves in the gait its owner chose.
         std::optional<std::uint8_t> mMoveFlags;
+        // The actor's melee attack state: 0 = not attacking, else the swing type
+        // (1 chop, 2 slash, 3 thrust). Drives the attack wind-up/release animation on
+        // the avatar (it casts instead when in the spell stance). High-frequency.
+        std::optional<std::uint8_t> mAttack;
+        // The actor's current world movement speed (units/sec). Used to set the avatar's
+        // animation playback rate so its feet match its replicated translation instead of
+        // sliding (it always animated at full speed before). High-frequency.
+        std::optional<float> mSpeed;
         // The avatar's body identity (race/sex/head/hair/class/name). Present only on
         // the occasional ticks that re-advertise it (it rarely changes), and only for
         // a peer's own player entity — a receiver needs it once to build the avatar.

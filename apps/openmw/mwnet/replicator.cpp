@@ -1,5 +1,6 @@
 #include "replicator.hpp"
 
+#include <algorithm>
 #include <array>
 #include <limits>
 #include <vector>
@@ -140,8 +141,8 @@ namespace MWNet
         // right directional cycle (forward/back/strafe) rather than always "forward". Call BEFORE
         // moveObject, so the actor's current position is still the previous one. The run/sneak
         // stance is set separately from the replicated movement flags (applyMoveFlags).
-        void driveLocomotionAnimation(
-            const MWWorld::Ptr& actor, const osg::Vec3f& newPosition, const osg::Vec3f& newRotation)
+        void driveLocomotionAnimation(const MWWorld::Ptr& actor, const osg::Vec3f& newPosition,
+            const osg::Vec3f& newRotation, std::optional<float> speed)
         {
             if (!actor.getClass().isActor())
                 return;
@@ -155,13 +156,67 @@ namespace MWNet
             }
             // Rotate the world-space step into the actor's local frame — the inverse of the
             // engine's on-ground local->world movement rotation Quat(yaw, -Z) (movementsolver).
-            // Local +Y is forward, +X is right, matching Movement::mPosition[1]/[0]; the unit
-            // direction is enough for animation selection, the slide is matched by moveObject.
+            // Local +Y is forward, +X is right, matching Movement::mPosition[1]/[0].
             const osg::Vec3f local = osg::Quat(newRotation.z(), osg::Vec3f(0.f, 0.f, 1.f)) * step;
             osg::Vec3f direction(local.x(), local.y(), 0.f);
             direction.normalize();
-            movement.mPosition[0] = direction.x();
-            movement.mPosition[1] = direction.y();
+            // Scale the vector by the owner's speed fraction so the controller plays the cycle at
+            // the matching rate (CharacterController sets mSpeedFactor = min(length, 1), and the
+            // animation playback is speed/animVelocity) — feet keep pace with the replicated
+            // translation instead of always running at full speed and sliding. maxSpeed reflects
+            // this actor's own run/sneak/swim/encumbrance, so the fraction is correct for its body.
+            float fraction = 1.f;
+            if (speed)
+            {
+                const float maxSpeed = actor.getClass().getMaxSpeed(actor);
+                fraction = maxSpeed > 0.f ? std::clamp(*speed / maxSpeed, 0.f, 1.f) : 1.f;
+            }
+            movement.mPosition[0] = direction.x() * fraction;
+            movement.mPosition[1] = direction.y() * fraction;
+        }
+
+        // Read an actor's melee swing state for replication: 0 = not attacking, else the swing
+        // type (1 chop, 2 slash, 3 thrust). In the spell stance the avatar casts regardless of
+        // type, so any non-zero value drives the cast.
+        std::optional<std::uint8_t> sampleAttack(const MWWorld::Ptr& actor)
+        {
+            if (!actor.getClass().isActor())
+                return std::nullopt;
+            const MWMechanics::CreatureStats& stats = actor.getClass().getCreatureStats(actor);
+            if (!stats.getAttackingOrSpell())
+                return std::uint8_t{ 0 };
+            const std::string_view type = stats.getAttackType();
+            if (type == "slash")
+                return std::uint8_t{ 2 };
+            if (type == "thrust")
+                return std::uint8_t{ 3 };
+            return std::uint8_t{ 1 }; // chop, and the default for hand-to-hand / spell
+        }
+
+        // Apply a replicated attack state so the avatar plays the wind-up while held and the
+        // release when it clears (the swing/cast its owner performed).
+        void applyAttack(const MWWorld::Ptr& actor, std::uint8_t value)
+        {
+            if (!actor.getClass().isActor())
+                return;
+            MWMechanics::CreatureStats& stats = actor.getClass().getCreatureStats(actor);
+            stats.setAttackingOrSpell(value != 0);
+            if (value == 2)
+                stats.setAttackType("slash");
+            else if (value == 3)
+                stats.setAttackType("thrust");
+            else if (value != 0)
+                stats.setAttackType("chop");
+        }
+
+        // This actor's current world movement speed (units/sec), used to set the avatar's
+        // animation playback rate so its feet match its replicated translation (see
+        // driveLocomotionAnimation).
+        std::optional<float> sampleSpeed(const MWWorld::Ptr& actor)
+        {
+            if (!actor.getClass().isActor())
+                return std::nullopt;
+            return actor.getClass().getCurrentSpeed(actor);
         }
 
         // Read an actor's run/sneak stance as a compact bit set for replication (bit 0 run,
@@ -258,14 +313,16 @@ namespace MWNet
 
         const auto include = [&](const ESM::RefNum& id, const TransformState& transform,
                                  std::optional<DynamicStats> stats, std::optional<std::uint8_t> drawState,
-                                 std::optional<std::uint8_t> moveFlags,
+                                 std::optional<std::uint8_t> moveFlags, std::optional<std::uint8_t> attack,
+                                 std::optional<float> speed,
                                  std::optional<AppearanceState> appearance = std::nullopt,
                                  std::optional<std::vector<EquipmentSlot>> equipment = std::nullopt) {
             // Appearance and equipment are deliberately outside the dedup key: they are only
             // ever passed on full-refresh ticks (which always resend anyway), so they never
             // perturb the change detection that decides whether to emit transform/stats at all.
-            // Move flags are in the key (high-frequency: a gait change must resend at once).
-            SentState current{ transform, stats, drawState, moveFlags };
+            // Move flags, attack and speed are in the key (high-frequency: a gait/attack/speed
+            // change must resend at once).
+            SentState current{ transform, stats, drawState, moveFlags, attack, speed };
             const auto [it, inserted] = mLastSent.try_emplace(id, current);
             if (!inserted)
             {
@@ -279,6 +336,8 @@ namespace MWNet
             entity.mStats = stats;
             entity.mDrawState = drawState;
             entity.mMoveFlags = moveFlags;
+            entity.mAttack = attack;
+            entity.mSpeed = speed;
             entity.mAppearance = appearance;
             entity.mEquipment = std::move(equipment);
             delta.mEntities.push_back(entity);
@@ -302,6 +361,8 @@ namespace MWNet
             self.mStats = sampleStats(player);
             self.mDrawState = sampleDrawState(player);
             self.mMoveFlags = sampleMoveFlags(player);
+            self.mAttack = sampleAttack(player);
+            self.mSpeed = sampleSpeed(player);
             // Re-advertise our body identity and worn items occasionally so late-joining peers
             // can build/dress our avatar; they barely change, so once per full-refresh interval
             // is plenty (equip changes show within that interval).
@@ -337,7 +398,8 @@ namespace MWNet
             const ESM::Position& position = actor.getRefData().getPosition();
             include(id,
                 TransformState{ position.asVec3(), osg::Vec3f(position.rot[0], position.rot[1], position.rot[2]) },
-                sampleStats(actor), sampleDrawState(actor), sampleMoveFlags(actor));
+                sampleStats(actor), sampleDrawState(actor), sampleMoveFlags(actor), sampleAttack(actor),
+                sampleSpeed(actor));
         }
 
         // Host relay: re-broadcast each connected client's player (the avatar we hold) under its
@@ -352,8 +414,8 @@ namespace MWNet
                 const ESM::Position& pos = avatar.getRefData().getPosition();
                 include(netId,
                     TransformState{ pos.asVec3(), osg::Vec3f(pos.rot[0], pos.rot[1], pos.rot[2]) },
-                    sampleStats(avatar), sampleDrawState(avatar), sampleMoveFlags(avatar),
-                    fullSnapshot ? sampleAppearance(avatar) : std::nullopt,
+                    sampleStats(avatar), sampleDrawState(avatar), sampleMoveFlags(avatar), sampleAttack(avatar),
+                    sampleSpeed(avatar), fullSnapshot ? sampleAppearance(avatar) : std::nullopt,
                     fullSnapshot ? sampleEquipment(avatar) : std::nullopt);
             }
         }
@@ -415,14 +477,17 @@ namespace MWNet
                 if (avatar.isEmpty() || !avatar.isInCell())
                     continue;
                 if (entity.mMoveFlags)
-                    applyMoveFlags(avatar, *entity.mMoveFlags);
-                driveLocomotionAnimation(avatar, entity.mTransform->mPosition, entity.mTransform->mRotation);
+                    applyMoveFlags(avatar, *entity.mMoveFlags); // before drive: maxSpeed depends on stance
+                driveLocomotionAnimation(avatar, entity.mTransform->mPosition, entity.mTransform->mRotation,
+                    entity.mSpeed);
                 world.moveObject(avatar, entity.mTransform->mPosition);
                 world.rotateObject(avatar, entity.mTransform->mRotation, MWBase::RotationFlag_none);
                 if (entity.mStats)
                     applyStats(avatar, *entity.mStats);
                 if (entity.mDrawState)
                     applyDrawState(avatar, *entity.mDrawState);
+                if (entity.mAttack)
+                    applyAttack(avatar, *entity.mAttack);
                 if (entity.mEquipment)
                     applyEquipment(avatar, *entity.mEquipment);
                 ++applied;
@@ -440,14 +505,16 @@ namespace MWNet
             // local simulation from fighting the applied pose (cease-remote-sim).
             ptr.getRefData().setRemoteOwned(true);
             if (entity.mMoveFlags)
-                applyMoveFlags(ptr, *entity.mMoveFlags);
-            driveLocomotionAnimation(ptr, entity.mTransform->mPosition, entity.mTransform->mRotation);
+                applyMoveFlags(ptr, *entity.mMoveFlags); // before drive: maxSpeed depends on stance
+            driveLocomotionAnimation(ptr, entity.mTransform->mPosition, entity.mTransform->mRotation, entity.mSpeed);
             world.moveObject(ptr, entity.mTransform->mPosition);
             world.rotateObject(ptr, entity.mTransform->mRotation, MWBase::RotationFlag_none);
             if (entity.mStats)
                 applyStats(ptr, *entity.mStats);
             if (entity.mDrawState)
                 applyDrawState(ptr, *entity.mDrawState);
+            if (entity.mAttack)
+                applyAttack(ptr, *entity.mAttack);
             ++applied;
         }
         return applied;
