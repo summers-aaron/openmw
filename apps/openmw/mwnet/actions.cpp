@@ -6,7 +6,7 @@ namespace MWNet
 {
     namespace
     {
-        constexpr std::uint8_t sVersion = 5;
+        constexpr std::uint8_t sVersion = 6;
         // Smallest encoded CombatHit: attacker RefNum (4+4) + victim RefNum (4+4) + damage
         // (float, 4) + health-damage flag (1).
         constexpr std::uint32_t sMinHitBytes = 21;
@@ -30,8 +30,9 @@ namespace MWNet
         constexpr std::uint32_t sMinSummonBytes = 13;
         // Smallest encoded PlayerBounty: target RefNum (4 + 4) + bounty (int32, 4).
         constexpr std::uint32_t sMinBountyBytes = 12;
-        // Smallest encoded NpcSpeech: actor RefNum (4 + 4) + zero-length sound path (4).
-        constexpr std::uint32_t sMinSpeechBytes = 12;
+        // Smallest encoded NpcSpeech: actor RefNum (4 + 4) + zero-length sound path (4) + zero-length
+        // subtitle (4).
+        constexpr std::uint32_t sMinSpeechBytes = 16;
 
         void writeContainerItem(ByteWriter& writer, const ContainerItem& item)
         {
@@ -135,6 +136,7 @@ namespace MWNet
             writer.write(speech.mActor.mIndex);
             writer.write(speech.mActor.mContentFile);
             writer.writeString(speech.mSound);
+            writer.writeString(speech.mText);
         }
         return out;
     }
@@ -317,7 +319,7 @@ namespace MWNet
         {
             NpcSpeech speech;
             if (!reader.read(speech.mActor.mIndex) || !reader.read(speech.mActor.mContentFile)
-                || !reader.readString(speech.mSound))
+                || !reader.readString(speech.mSound) || !reader.readString(speech.mText))
                 return std::nullopt;
             batch.mSpeech.push_back(std::move(speech));
         }

@@ -130,15 +130,17 @@ namespace MWNet
         TEST(MWNetActionsTest, speechRoundTrips)
         {
             ActionBatch batch;
-            batch.mSpeech.push_back({ ESM::RefNum{ 42, 0 }, "Vo\\Misc\\hello.mp3" });
-            batch.mSpeech.push_back({ ESM::RefNum{ 0xffffff, 3 }, "" });
+            batch.mSpeech.push_back({ ESM::RefNum{ 42, 0 }, "Vo\\Misc\\hello.mp3", "Greetings, outlander." });
+            batch.mSpeech.push_back({ ESM::RefNum{ 0xffffff, 3 }, "", "" });
             const std::optional<ActionBatch> parsed = deserializeActions(serializeActions(batch));
             ASSERT_TRUE(parsed.has_value());
             EXPECT_EQ(*parsed, batch);
             ASSERT_EQ(parsed->mSpeech.size(), 2u);
             EXPECT_EQ(parsed->mSpeech[0].mActor.mIndex, 42u);
             EXPECT_EQ(parsed->mSpeech[0].mSound, "Vo\\Misc\\hello.mp3");
+            EXPECT_EQ(parsed->mSpeech[0].mText, "Greetings, outlander.");
             EXPECT_TRUE(parsed->mSpeech[1].mSound.empty());
+            EXPECT_TRUE(parsed->mSpeech[1].mText.empty());
         }
 
         TEST(MWNetActionsTest, rejectsEmptyBuffer)

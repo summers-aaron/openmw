@@ -12,6 +12,8 @@
 #include "../mwbase/soundmanager.hpp"
 #include "../mwbase/world.hpp"
 
+#include "../mwnet/replicator.hpp"
+
 #include "../mwworld/class.hpp"
 #include "../mwworld/inventorystore.hpp"
 
@@ -38,6 +40,11 @@ namespace MWScript
 
                 std::string_view text = runtime.getStringLiteral(runtime[0].mInteger);
                 runtime.pop();
+
+                // Multiplayer: stage the subtitle so the host replicates it with the voice (say()
+                // carries only the sound file); each client decides whether to show it. No-op off net.
+                if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+                    replicator->setPendingSpeechSubtitle(text);
 
                 MWBase::Environment::get().getSoundManager()->say(ptr, Misc::ResourceHelpers::correctSoundPath(file));
 

@@ -144,12 +144,15 @@ namespace MWNet
     /// calls happen host-side; clients run no AI for those actors and would otherwise stay silent.
     /// mActor is the speaking actor's world RefNum; mSound is the already-corrected voice file path
     /// the host resolved (replicating the resolved file, not the dialogue topic, keeps it
-    /// deterministic — the client just plays it, no re-filtering). Cosmetic only: the audio plays on
-    /// whichever peers have that actor's cell loaded; gameplay stays authoritative on the host.
+    /// deterministic — the client just plays it, no re-filtering). mText is the line's subtitle (empty
+    /// if the speech carried none); it is sent regardless of the host's subtitle setting, and each
+    /// client decides whether to show it from its OWN setting. Cosmetic only: the audio/subtitle play
+    /// on whichever peers have that actor's cell loaded; gameplay stays authoritative on the host.
     struct NpcSpeech
     {
         ESM::RefNum mActor;
         std::string mSound;
+        std::string mText;
 
         friend bool operator==(const NpcSpeech&, const NpcSpeech&) = default;
     };

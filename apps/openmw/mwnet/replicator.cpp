@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <utility>
 #include <vector>
 
 #include <osg/Quat>
@@ -18,6 +19,7 @@
 #include <components/esm3/loadstat.hpp>
 #include <components/misc/resourcehelpers.hpp>
 #include <components/misc/rng.hpp>
+#include <components/settings/values.hpp>
 #include <components/vfs/pathutil.hpp>
 
 #include "../mwbase/environment.hpp"
@@ -1912,6 +1914,9 @@ namespace MWNet
 
     void Replicator::reportNpcSpeech(const MWWorld::ConstPtr& actor, std::string_view sound)
     {
+        // Consume the subtitle the caller staged for this line (if any), whatever happens next, so it
+        // can never leak onto an unrelated later say().
+        const std::optional<std::string> subtitle = std::exchange(mPendingSpeechSubtitle, std::nullopt);
         // Only the host replicates speech: it owns and simulates the world's NPCs, so every NPC say()
         // happens here. Off the authority (a client, or single-player/loopback) this is a no-op, so SP
         // stays unchanged and a client never echoes its own local audio.
@@ -1922,7 +1927,7 @@ namespace MWNet
         // whose voice its own client plays) and the host's anchor player; only genuine world actors cross.
         if (!id.isSet() || isNetPlayer(id) || actor.mRef == MWBase::Environment::get().getWorld()->getPlayerPtr().mRef)
             return;
-        mOutgoingSpeech.push_back({ id, std::string(sound) });
+        mOutgoingSpeech.push_back({ id, std::string(sound), subtitle.value_or(std::string()) });
     }
 
     void Replicator::applyNpcSpeech(const ActionBatch& batch)
@@ -1938,6 +1943,10 @@ namespace MWNet
             if (actor.isEmpty() || !actor.isInCell() || !actor.getClass().isActor())
                 continue;
             soundMgr.say(actor, VFS::Path::Normalized(speech.mSound));
+            // Show the subtitle the host sent, gated on THIS peer's own preference (the host always
+            // sends it; each client decides whether to display it).
+            if (!speech.mText.empty() && Settings::gui().mSubtitles)
+                MWBase::Environment::get().getWindowManager()->messageBox(speech.mText);
         }
     }
 

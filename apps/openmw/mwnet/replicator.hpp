@@ -149,6 +149,10 @@ namespace MWNet
         std::vector<PlayerBounty> mOutgoingBounties;
         // Host only: voiced lines host-owned actors spoke this tick, awaiting broadcast to clients.
         std::vector<NpcSpeech> mOutgoingSpeech;
+        // Host only: the subtitle for the very next say() — set by the caller that knows the line's
+        // text (dialogue/script/Lua) immediately before it speaks, since say() itself carries only the
+        // sound file. Consumed (and cleared) by the next reportNpcSpeech, so it never crosses lines.
+        std::optional<std::string> mPendingSpeechSubtitle;
         // Host only: a deferred assault on a host-owned actor, awaiting that actor's cell to finish
         // loading so its retaliation and the crime/witness reaction can take hold (see
         // driveRemoteActors). An avatar can act in a cell the host is still loading in the background,
@@ -263,6 +267,15 @@ namespace MWNet
         /// so the owning client can apply it to its real player. A no-op off the authority or if
         /// the struck Ptr isn't one of our avatars.
         void reportRemotePlayerHit(const MWWorld::Ptr& avatar, float damage, bool healthDamage);
+
+        /// Attach a subtitle to the very next reported speech. Called (host only) by the dialogue /
+        /// script / Lua say sites that know the line's text, right before they speak — say() itself only
+        /// carries the sound file. No-op off the authority. The next reportNpcSpeech consumes it.
+        void setPendingSpeechSubtitle(std::string_view text)
+        {
+            if (mIsAuthority)
+                mPendingSpeechSubtitle = std::string(text);
+        }
 
         /// Report (host only) that a host-owned actor spoke a voiced line, so every client replays it
         /// on that actor. sound is the already-corrected voice file path the host resolved. A no-op off
