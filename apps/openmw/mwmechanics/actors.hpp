@@ -84,6 +84,13 @@ namespace MWMechanics
         /// Removes an actor from combat and makes all of their allies stop fighting the actor's targets
         void stopCombat(const MWWorld::Ptr& ptr) const;
 
+        /// Calm every actor currently reacting to a crime against the given player and still set against
+        /// it (in combat with it, or pinned to attack it): stop their combat/pursuit and reset their
+        /// aggression, mirroring single-player's "bounty paid -> witnesses forgiven" reset. The crime
+        /// forgiveness in updateCrimePursuit is keyed on the primary player; this targets a given one
+        /// (a network avatar) directly, for the host to call when that player resolves an arrest.
+        void forgiveCrimesAgainst(const MWWorld::Ptr& player) const;
+
         void playIdleDialogue(const MWWorld::Ptr& actor) const;
         void updateMovementSpeed(const MWWorld::Ptr& actor) const;
         void updateGreetingState(const MWWorld::Ptr& actor, Actor& actorState, bool turnOnly);

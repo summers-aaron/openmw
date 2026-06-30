@@ -122,6 +122,8 @@ namespace MWMechanics
         /// @return false if the attack was considered a "friendly hit" and forgiven
         bool actorAttacked(const MWWorld::Ptr& victim, const MWWorld::Ptr& attacker) override;
 
+        void forgiveCrimesAgainst(const MWWorld::Ptr& player) override;
+
         /// Notify that actor was killed, add a murder bounty if applicable
         /// @note No-op for non-player attackers
         void actorKilled(const MWWorld::Ptr& victim, const MWWorld::Ptr& attacker) override;

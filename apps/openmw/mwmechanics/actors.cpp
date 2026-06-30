@@ -1197,6 +1197,37 @@ namespace MWMechanics
         }
     }
 
+    void Actors::forgiveCrimesAgainst(const MWWorld::Ptr& player) const
+    {
+        const ESM::RefNum playerRef = player.getCellRef().getRefNum();
+        for (const Actor& actor : mActors)
+        {
+            const MWWorld::Ptr ptr = actor.getPtr();
+            if (ptr == player || !ptr.getClass().isNpc())
+                continue;
+            CreatureStats& creatureStats = ptr.getClass().getCreatureStats(ptr);
+            NpcStats& npcStats = ptr.getClass().getNpcStats(ptr);
+            // Only NPCs reacting to a crime (a victim or witness gets a crime id) and still set against
+            // THIS player — fighting it, or with it pinned as the actor it tried to hit (sustainCombat).
+            // This scopes the forgiveness to the player who resolved its arrest, not unrelated combat.
+            if (npcStats.getCrimeId() == -1)
+                continue;
+            if (!creatureStats.getAiSequence().isInCombat(player) && creatureStats.getHitAttemptActor() != playerRef)
+                continue;
+
+            // Same reset as the single-player forgiveness in updateCrimePursuit.
+            if (ptr.getClass().isClass(ptr, "Guard"))
+                creatureStats.getAiSequence().stopPursuit();
+            stopCombat(ptr);
+            creatureStats.setAttacked(false);
+            creatureStats.setAlarmed(false);
+            creatureStats.setAiSetting(AiSetting::Fight, ptr.getClass().getBaseFightRating(ptr));
+            npcStats.setCrimeDispositionModifier(0);
+            npcStats.setCrimeId(-1);
+            creatureStats.setHitAttemptActor(ESM::RefNum());
+        }
+    }
+
     void Actors::addActor(const MWWorld::Ptr& ptr, bool updateImmediately)
     {
         removeActor(ptr, true);

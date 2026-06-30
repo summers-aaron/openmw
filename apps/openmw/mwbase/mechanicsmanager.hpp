@@ -137,6 +137,12 @@ namespace MWBase
         /// @return false if the attack was considered a "friendly hit" and forgiven
         virtual bool actorAttacked(const MWWorld::Ptr& victim, const MWWorld::Ptr& attacker) = 0;
 
+        /// Forgive every actor currently reacting to a crime committed against the given player (the
+        /// victim it assaulted, witnesses, guards): stop their combat/pursuit and reset their aggression,
+        /// the same way single-player calms witnesses once their bounty is paid. Used when a (networked)
+        /// player resolves an arrest — its bounty is cleared, so the actors angry at it should stand down.
+        virtual void forgiveCrimesAgainst(const MWWorld::Ptr& player) = 0;
+
         /// Notify that actor was killed, add a murder bounty if applicable
         /// @note No-op for non-player attackers
         virtual void actorKilled(const MWWorld::Ptr& victim, const MWWorld::Ptr& attacker) = 0;

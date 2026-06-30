@@ -1575,6 +1575,11 @@ namespace MWMechanics
         return true;
     }
 
+    void MechanicsManager::forgiveCrimesAgainst(const MWWorld::Ptr& player)
+    {
+        mActors.forgiveCrimesAgainst(player);
+    }
+
     bool MechanicsManager::canCommitCrimeAgainst(const MWWorld::Ptr& target, const MWWorld::Ptr& attacker)
     {
         const MWWorld::Class& cls = target.getClass();

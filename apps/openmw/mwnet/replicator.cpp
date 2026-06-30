@@ -2088,6 +2088,16 @@ namespace MWNet
                 Log(Debug::Verbose) << "Avatar bounty from player " << b.mTarget.mIndex << " -> " << b.mBounty
                                     << " (guards stop pursuing once it hits 0)";
             }
+            // Bounty cleared = the client resolved its arrest (paid a fine / went to jail). Mirror
+            // single-player's "crime forgiven" reset: the victim it assaulted and any witnesses/guards
+            // still angry at this avatar stand down. Also drop any in-flight assault re-assert for it so
+            // it isn't immediately re-aggroed within the settle window.
+            if (b.mBounty == 0)
+            {
+                MWBase::Environment::get().getMechanicsManager()->forgiveCrimesAgainst(avatar);
+                for (auto a = mPendingAggro.begin(); a != mPendingAggro.end();)
+                    a = (a->second.mAggressor == b.mTarget) ? mPendingAggro.erase(a) : std::next(a);
+            }
         }
     }
 }
