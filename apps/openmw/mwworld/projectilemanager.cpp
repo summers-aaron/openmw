@@ -363,10 +363,11 @@ namespace MWWorld
     }
 
     void ProjectileManager::launchProjectile(const Ptr& actor, const ConstPtr& projectile, const osg::Vec3f& pos,
-        const osg::Quat& orient, const Ptr& bow, float speed, float attackStrength)
+        const osg::Quat& orient, const Ptr& bow, float speed, float attackStrength, bool cosmetic)
     {
         ProjectileState state;
         state.mCaster = actor.getCellRef().getRefNum();
+        state.mCosmetic = cosmetic;
         state.mBowId = bow.getCellRef().getRefId();
         state.mVelocity = orient * osg::Vec3f(0, 1, 0) * speed;
         state.mIdArrow = projectile.getCellRef().getRefId();
@@ -567,6 +568,14 @@ namespace MWWorld
             if (projectile->getHitWater())
                 mRendering->emitWaterRipple(hitPosition);
 
+            // A cosmetic arrow (mirror of a networked shooter) lands visually but resolves no hit — the
+            // real shot stays authoritative on the peer that owns the shooter.
+            if (projectileState.mCosmetic)
+            {
+                projectileState.mToDelete = true;
+                continue;
+            }
+
             MWMechanics::projectileHit(
                 caster, target, bow, projectileRef.getPtr(), hitPosition, projectileState.mAttackStrength);
             projectileState.mToDelete = true;
@@ -684,6 +693,9 @@ namespace MWWorld
     {
         for (const ProjectileState& projectile : mProjectiles)
         {
+            if (projectile.mCosmetic)
+                continue; // visual-only mirror of a networked shot — not part of this peer's world state
+
             writer.startRecord(ESM::REC_PROJ);
 
             ESM::ProjectileState state;
@@ -828,10 +840,11 @@ namespace MWWorld
 
     size_t ProjectileManager::countSavedGameRecords() const
     {
-        // Cosmetic bolts are excluded from write(), so they must not be counted here either.
+        // Cosmetic projectiles/bolts are excluded from write(), so they must not be counted here either.
         return static_cast<size_t>(std::count_if(mMagicBolts.begin(), mMagicBolts.end(),
                    [](const MagicBoltState& bolt) { return !bolt.mCosmetic; }))
-            + mProjectiles.size();
+            + static_cast<size_t>(std::count_if(mProjectiles.begin(), mProjectiles.end(),
+                [](const ProjectileState& projectile) { return !projectile.mCosmetic; }));
     }
 
     void ProjectileManager::saveLoaded(const ESM::ESMReader& reader)

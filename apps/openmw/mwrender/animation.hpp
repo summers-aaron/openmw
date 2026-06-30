@@ -470,7 +470,9 @@ namespace MWRender
         virtual void setPitchFactor(float factor) {}
         virtual void attachArrow() {}
         virtual void detachArrow() {}
-        virtual void releaseArrow(float attackStrength) {}
+        /// \param cosmetic launch the projectile visual-only (no hit resolution, no ammo consumed) — used
+        /// to mirror a networked shooter's arrow on a peer that does not own the shooter.
+        virtual void releaseArrow(float attackStrength, bool cosmetic = false) {}
         virtual void enableHeadAnimation(bool enable) {}
         // TODO: move outside of this class
         /// Makes this object glow, by placing a Light in its center.

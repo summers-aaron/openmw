@@ -100,7 +100,7 @@ namespace MWRender
         mAmmunition.reset();
     }
 
-    void WeaponAnimation::releaseArrow(MWWorld::Ptr actor, float attackStrength)
+    void WeaponAnimation::releaseArrow(MWWorld::Ptr actor, float attackStrength, bool cosmetic)
     {
         MWWorld::InventoryStore& inv = actor.getClass().getInventoryStore(actor);
         MWWorld::ContainerStoreIterator weapon = inv.getSlot(MWWorld::InventoryStore::Slot_CarriedRight);
@@ -155,7 +155,10 @@ namespace MWRender
 
             MWWorld::Ptr weaponPtr = *weapon;
             MWBase::Environment::get().getWorld()->launchProjectile(
-                actor, weaponPtr, launchPos, orient, weaponPtr, speed, attackStrength);
+                actor, weaponPtr, launchPos, orient, weaponPtr, speed, attackStrength, cosmetic);
+
+            if (cosmetic)
+                return; // a mirrored shot launches the visual only; never detach/consume the real weapon
 
             showWeapon(false);
 
@@ -190,7 +193,10 @@ namespace MWRender
             MWWorld::Ptr weaponPtr = *weapon;
             MWWorld::Ptr ammoPtr = *ammo;
             MWBase::Environment::get().getWorld()->launchProjectile(
-                actor, ammoPtr, launchPos, orient, weaponPtr, speed, attackStrength);
+                actor, ammoPtr, launchPos, orient, weaponPtr, speed, attackStrength, cosmetic);
+
+            if (cosmetic)
+                return; // a mirrored shot launches the visual only; never consume the avatar's ammo
 
             inv.remove(ammoPtr, 1);
             mAmmunition.reset();

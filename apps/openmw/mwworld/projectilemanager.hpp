@@ -55,8 +55,10 @@ namespace MWWorld
         void launchMagicBolt(const ESM::RefId& spellId, const MWWorld::Ptr& caster, const osg::Vec3f& fallbackDirection,
             ESM::RefNum item, bool cosmetic = false);
 
+        /// A cosmetic projectile flies and renders like a normal one but resolves no hit on impact — used
+        /// to mirror a remote (networked) shooter's arrow/bolt without re-running its gameplay on this peer.
         void launchProjectile(const MWWorld::Ptr& actor, const MWWorld::ConstPtr& projectile, const osg::Vec3f& pos,
-            const osg::Quat& orient, const MWWorld::Ptr& bow, float speed, float attackStrength);
+            const osg::Quat& orient, const MWWorld::Ptr& bow, float speed, float attackStrength, bool cosmetic = false);
 
         void updateCasters();
 
@@ -127,6 +129,10 @@ namespace MWWorld
 
             osg::Vec3f mVelocity;
             float mAttackStrength;
+
+            // Visual-only arrow/bolt mirroring a networked shooter: no on-impact hit, and never persisted
+            // to a save (the shooter is a transient remote avatar).
+            bool mCosmetic = false;
         };
 
         std::vector<MagicBoltState> mMagicBolts;

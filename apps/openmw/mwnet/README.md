@@ -102,6 +102,10 @@ second move).
     network id and applied to their real player (with flinch / hit overlay).
   - **AI retaliation** — striking a host-owned NPC makes it fight back, for **any**
     client, in **any** cell (interior or exterior).
+  - **Melee and ranged** — bow/crossbow/thrown hits route through the same host-authoritative
+    path as melee (`projectileHit` mirrors `Npc::hit`), and witnesses see the arrow/bolt fly: at
+    the shooter's release the avatar looses a **cosmetic** projectile from its own replicated bow +
+    ammo (no hit resolved, no ammo consumed — the real shot stays authoritative on the shooter).
 - **Loose-item world persistence (floor items)** — a player's dropped item is placed
   authoritatively by the host and replicated to every peer under one shared RefNum; a
   pickup (of a dropped *or* a save item) deletes it for everyone. Host-authoritative,

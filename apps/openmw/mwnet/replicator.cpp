@@ -696,6 +696,11 @@ namespace MWNet
                         = type == "shoot" ? "shoot follow start" : type + ' ' + std::string(tier) + " follow start";
                     const std::string followStop
                         = type == "shoot" ? "shoot follow stop" : type + ' ' + std::string(tier) + " follow stop";
+                    // A ranged strike looses its arrow/bolt at this same release point. Launch a cosmetic
+                    // copy from the avatar's own equipped bow + ammo (replicated), so witnesses see the
+                    // shot fly without consuming ammo or resolving a hit (the shooter's peer owns that).
+                    if (type == "shoot")
+                        anim->releaseArrow(strength, /*cosmetic=*/true);
                     anim->disable(group); // clear the held strike so play() restarts the group
                     anim->play(group, MWRender::Animation::AnimPriority(MWMechanics::Priority_Weapon),
                         MWRender::BlendMask_UpperBody, /*autodisable=*/true, /*speedmult=*/1.f, followStart, followStop,

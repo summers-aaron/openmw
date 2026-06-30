@@ -508,7 +508,7 @@ namespace MWBase
             const osg::Vec3f& fallbackDirection, ESM::RefNum item, bool cosmetic = false)
             = 0;
         virtual void launchProjectile(MWWorld::Ptr& actor, MWWorld::Ptr& projectile, const osg::Vec3f& worldPos,
-            const osg::Quat& orient, MWWorld::Ptr& bow, float speed, float attackStrength)
+            const osg::Quat& orient, MWWorld::Ptr& bow, float speed, float attackStrength, bool cosmetic = false)
             = 0;
         virtual void updateProjectilesCasters() = 0;
 
