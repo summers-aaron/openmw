@@ -1149,8 +1149,11 @@ namespace MWMechanics
     {
         // NOTE: victim may be empty
 
-        // Only player can commit crime
-        if (player != getPlayer())
+        // Only a player can commit crime. In multiplayer the criminal may be a network avatar (a
+        // remote player) rather than the primary local player, so test player membership rather than
+        // identity against getPlayer(). In single-player isPlayer() is true only for the primary, so
+        // this is unchanged there.
+        if (!MWBase::Environment::get().getWorld()->isPlayer(player))
             return false;
 
         if (type == OT_Assault)
@@ -1214,7 +1217,10 @@ namespace MWMechanics
     bool MechanicsManager::canReportCrime(
         const MWWorld::Ptr& actor, const MWWorld::Ptr& victim, std::set<MWWorld::Ptr>& playerFollowers)
     {
-        if (actor == getPlayer() || !actor.getClass().isNpc() || actor.getClass().getCreatureStats(actor).isDead())
+        // No player reports a crime — not the primary local player, and in multiplayer not a network
+        // avatar either (the criminal itself, or a bystanding peer). isPlayer() covers all of them.
+        if (MWBase::Environment::get().getWorld()->isPlayer(actor) || !actor.getClass().isNpc()
+            || actor.getClass().getCreatureStats(actor).isDead())
             return false;
 
         if (actor.getClass().getCreatureStats(actor).getAiSequence().isInCombat(victim))
@@ -1293,7 +1299,9 @@ namespace MWMechanics
         if (!victim.isEmpty() && (from - victim.getRefData().getPosition().asVec3()).length2() > radius * radius)
             neighbors.push_back(victim);
 
-        int id = MWBase::Environment::get().getWorld()->getPlayer().getNewCrimeId();
+        // Crime ids are per-player; draw from the committing player so an avatar's crimes don't share
+        // (and collide with) the primary player's id sequence.
+        int id = MWBase::Environment::get().getWorld()->getPlayer(player).getNewCrimeId();
 
         // What amount of provocation did this crime generate?
         // Controls whether witnesses will engage combat with the criminal.
@@ -1529,7 +1537,8 @@ namespace MWMechanics
         AiSequence& seq = statsTarget.getAiSequence();
 
         if (!attacker.isEmpty()
-            && (attacker.getClass().getCreatureStats(attacker).getAiSequence().isInCombat(target) || attacker == player)
+            && (attacker.getClass().getCreatureStats(attacker).getAiSequence().isInCombat(target)
+                || MWBase::Environment::get().getWorld()->isPlayer(attacker))
             && !seq.isInCombat(attacker))
         {
             // Attacker is in combat with us, but we are not in combat with the attacker yet. Time to fight back.

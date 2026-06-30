@@ -45,6 +45,18 @@ namespace MWNet
         friend bool operator==(const PlayerDamage&, const PlayerDamage&) = default;
     };
 
+    /// Host -> the owning client: the player's new total crime bounty, the result of the host
+    /// resolving a crime for that player's avatar (e.g. assaulting an NPC). mTarget is the player's
+    /// network id; mBounty is the absolute new bounty (not a delta) so it is idempotent and a late
+    /// joiner / resync converges to the right value rather than accumulating.
+    struct PlayerBounty
+    {
+        ESM::RefNum mTarget;
+        std::int32_t mBounty = 0;
+
+        friend bool operator==(const PlayerBounty&, const PlayerBounty&) = default;
+    };
+
     /// A client's request to drop an item into the shared world. Clients don't own the world, so
     /// they don't place the dropped reference themselves — they ask the host, which places it
     /// authoritatively (assigning a world RefNum) and replicates it back to everyone, the dropper
@@ -148,12 +160,14 @@ namespace MWNet
         std::vector<ContainerRevoke> mContainerRevokes;
         // client -> host: spawn/despawn a host-authoritative summoned creature for the casting player.
         std::vector<SummonAction> mSummons;
+        // host -> clients: a player's new total crime bounty after the host resolved a crime for it.
+        std::vector<PlayerBounty> mBounties;
 
         bool empty() const
         {
             return mHits.empty() && mPlayerDamages.empty() && mDrops.empty() && mItemsTaken.empty()
                 && mContainers.empty() && mContainerChanges.empty() && mContainerRevokes.empty()
-                && mSummons.empty();
+                && mSummons.empty() && mBounties.empty();
         }
 
         friend bool operator==(const ActionBatch&, const ActionBatch&) = default;

@@ -144,6 +144,23 @@ namespace MWNet
         std::vector<CombatHit> mOutgoingHits;
         // Host only: damage dealt to remote players' avatars, awaiting send to their owners.
         std::vector<PlayerDamage> mOutgoingPlayerDamages;
+        // Host only: new total bounties for players whose avatar committed a crime, awaiting send.
+        std::vector<PlayerBounty> mOutgoingBounties;
+        // Host only: a deferred assault on a host-owned actor, awaiting that actor's cell to finish
+        // loading so its retaliation and the crime/witness reaction can take hold (see
+        // driveRemoteActors). An avatar can act in a cell the host is still loading in the background,
+        // when reacting would be discarded; we re-run the witness reaction every frame across the
+        // settle window (it is idempotent — already-recruited witnesses are skipped) so bystanders are
+        // pulled in as they load, and bound the avatar's bounty to a single crime's worth. Keyed by
+        // the struck actor's world RefNum.
+        struct PendingAggro
+        {
+            ESM::RefNum mAggressor; // the attacking avatar's network id
+            std::uint32_t mExpireTick = 0; // stop re-asserting once mTick reaches this
+            bool mDelivered = false; // has the avatar's bounty for this crime been applied + sent?
+            std::int32_t mBounty = 0; // avatar's bounty after that one crime — re-pinned each frame
+        };
+        std::map<ESM::RefNum, PendingAggro> mPendingAggro;
         // Client only: items this peer dropped / picked up, awaiting send to the host to resolve.
         std::vector<ItemDrop> mOutgoingDrops;
         std::vector<ESM::RefNum> mOutgoingTakes;
@@ -303,9 +320,19 @@ namespace MWNet
         /// onto the reporting peer's avatar and take the reported damage.
         void applyActions(const ActionBatch& batch);
 
+        /// Put a struck host-owned actor (and the allies siding with it) into combat with a peer's
+        /// avatar, recording the avatar as their hit-attempt actor so the retaliation persists the
+        /// way it does against the primary local player. Combat only — no crime is committed, so it
+        /// is safe to call repeatedly (the per-frame re-assert for mPendingAggro does).
+        void sustainCombat(const MWWorld::Ptr& victim, const MWWorld::Ptr& aggressor);
+
         /// Apply received player-damage reports (client only): subtract from this peer's real
         /// player whatever the host says host-owned actors dealt to its avatar.
         void applyIncomingPlayerDamage(const ActionBatch& batch);
+
+        /// Apply received bounty reports (client only): set this peer's real player's crime bounty
+        /// to whatever the host computed when its avatar committed a crime in the shared world.
+        void applyIncomingPlayerBounty(const ActionBatch& batch);
 
         /// Read the world's active actors (and this peer's player) and build the delta.
         SnapshotDelta sampleDelta();

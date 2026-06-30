@@ -6,7 +6,7 @@ namespace MWNet
 {
     namespace
     {
-        constexpr std::uint8_t sVersion = 3;
+        constexpr std::uint8_t sVersion = 4;
         // Smallest encoded CombatHit: attacker RefNum (4+4) + victim RefNum (4+4) + damage
         // (float, 4) + health-damage flag (1).
         constexpr std::uint32_t sMinHitBytes = 21;
@@ -28,6 +28,8 @@ namespace MWNet
         constexpr std::uint32_t sMinContainerRevokeBytes = 28;
         // Smallest encoded SummonAction: summoner RefNum (8) + zero-length effect id (4) + flag (1).
         constexpr std::uint32_t sMinSummonBytes = 13;
+        // Smallest encoded PlayerBounty: target RefNum (4 + 4) + bounty (int32, 4).
+        constexpr std::uint32_t sMinBountyBytes = 12;
 
         void writeContainerItem(ByteWriter& writer, const ContainerItem& item)
         {
@@ -117,6 +119,13 @@ namespace MWNet
             writer.write(summon.mSummoner.mContentFile);
             writer.writeString(summon.mEffectId);
             writer.write(static_cast<std::uint8_t>(summon.mEnd ? 1 : 0));
+        }
+        writer.write(static_cast<std::uint32_t>(batch.mBounties.size()));
+        for (const PlayerBounty& bounty : batch.mBounties)
+        {
+            writer.write(bounty.mTarget.mIndex);
+            writer.write(bounty.mTarget.mContentFile);
+            writer.write(bounty.mBounty);
         }
         return out;
     }
@@ -272,6 +281,21 @@ namespace MWNet
                 return std::nullopt;
             summon.mEnd = end != 0;
             batch.mSummons.push_back(std::move(summon));
+        }
+
+        std::uint32_t bountyCount = 0;
+        if (!reader.read(bountyCount))
+            return std::nullopt;
+        if (bountyCount > reader.remaining() / sMinBountyBytes)
+            return std::nullopt;
+        batch.mBounties.reserve(bountyCount);
+        for (std::uint32_t i = 0; i < bountyCount; ++i)
+        {
+            PlayerBounty bounty;
+            if (!reader.read(bounty.mTarget.mIndex) || !reader.read(bounty.mTarget.mContentFile)
+                || !reader.read(bounty.mBounty))
+                return std::nullopt;
+            batch.mBounties.push_back(bounty);
         }
         return batch;
     }

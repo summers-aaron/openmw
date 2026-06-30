@@ -30,6 +30,7 @@
 #include "../mwmechanics/aisequence.hpp"
 #include "../mwmechanics/character.hpp"
 #include "../mwmechanics/creaturestats.hpp"
+#include "../mwmechanics/npcstats.hpp"
 #include "../mwmechanics/drawstate.hpp"
 #include "../mwmechanics/movement.hpp"
 #include "../mwmechanics/spellcasting.hpp"
@@ -787,6 +788,73 @@ namespace MWNet
             }
             ++it;
         }
+
+        // Host: drive deferred assaults on host-owned actors. A struck actor's cell can still be loading
+        // when its client attacks (the client has the cell; the host loads it in the background once an
+        // avatar enters), so reacting on the hit frame is discarded. Here we deliver the crime + witness
+        // reaction EXACTLY ONCE — drawing in bystanders (guards, faction-mates) the way single-player
+        // does — the instant the victim's cell is live, and re-assert the victim's own retaliation every
+        // frame so it persists across the load. Cheap: the map is empty outside the brief window after
+        // an avatar strikes someone.
+        if (mIsAuthority && !mPendingAggro.empty())
+        {
+            MWWorld::WorldModel& worldModel = *MWBase::Environment::get().getWorldModel();
+            MWBase::MechanicsManager& mechanics = *MWBase::Environment::get().getMechanicsManager();
+            for (auto it = mPendingAggro.begin(); it != mPendingAggro.end();)
+            {
+                PendingAggro& e = it->second;
+                const MWWorld::Ptr victim = worldModel.getPtr(it->first);
+                const bool victimDead = !victim.isEmpty() && victim.getClass().isActor()
+                    && victim.getClass().getCreatureStats(victim).isDead();
+                const auto av = mAvatars.find(e.mAggressor);
+                const bool avGone = av == mAvatars.end() || av->second.isEmpty() || !av->second.isInCell();
+                if (mTick >= e.mExpireTick || victimDead || avGone)
+                {
+                    it = mPendingAggro.erase(it); // window elapsed, target dead, or avatar gone
+                    continue;
+                }
+                if (victim.isEmpty() || !victim.isInCell() || !victim.getClass().isActor())
+                {
+                    ++it; // not resolvable yet (cell still loading) — try again next frame
+                    continue;
+                }
+                const MWWorld::Ptr aggressor = av->second;
+                // Re-run the crime/witness reaction every frame until the victim's retaliation has taken
+                // hold (combat with the avatar survives a frame == the cell is fully live). A struck
+                // actor's cell loads in the background on the host, populating over several frames, so a
+                // single delivery at the first resolvable frame misses bystanders that are not yet
+                // simulated or in alarm range — the player had to keep striking to re-arm it. reportCrime
+                // is idempotent here (canReportCrime skips witnesses already fighting the victim and
+                // re-gathers neighbours fresh each call), so re-running it simply pulls in patrons,
+                // guards and faction-mates as they come online. commitCrime is called directly (not via
+                // actorAttacked) so the soon-to-be-engaged victim doesn't gate it.
+                const bool engaged
+                    = victim.getClass().getCreatureStats(victim).getAiSequence().isInCombat(aggressor);
+                if (!engaged)
+                {
+                    const bool aggressorIsNpc = aggressor.getClass().isNpc();
+                    mechanics.commitCrime(aggressor, victim, MWBase::MechanicsManager::OT_Assault);
+                    if (!e.mDelivered)
+                    {
+                        // First commit: this is the avatar's real bounty for the assault; record + send it.
+                        e.mBounty = aggressorIsNpc ? aggressor.getClass().getNpcStats(aggressor).getBounty() : 0;
+                        mOutgoingBounties.push_back({ e.mAggressor, e.mBounty });
+                        e.mDelivered = true;
+                    }
+                    else if (aggressorIsNpc)
+                    {
+                        // Later commits only exist to recruit late-loading witnesses; undo their extra
+                        // bounty so the avatar is charged for one crime, not one per settle frame.
+                        aggressor.getClass().getNpcStats(aggressor).setBounty(e.mBounty);
+                    }
+                }
+                // Engage the victim (and its siding allies) and pin the avatar as their attacker, so the
+                // retaliation both takes hold across the load and persists like it does against the
+                // primary player. No-ops once combat is established.
+                sustainCombat(victim, aggressor);
+                ++it;
+            }
+        }
     }
 
     std::optional<SwingState> Replicator::sampleSwing(const MWWorld::Ptr& actor, const ESM::RefNum& id)
@@ -1389,11 +1457,49 @@ namespace MWNet
         return applied;
     }
 
+    void Replicator::sustainCombat(const MWWorld::Ptr& victim, const MWWorld::Ptr& aggressor)
+    {
+        if (victim.isEmpty() || aggressor.isEmpty() || !victim.getClass().isActor())
+            return;
+        MWBase::MechanicsManager& mechanics = *MWBase::Environment::get().getMechanicsManager();
+        const ESM::RefNum agRef = aggressor.getCellRef().getRefNum();
+
+        // Put the struck actor in combat with the avatar and mirror the hit-attempt bookkeeping
+        // Npc::onHit does in single-player. The host applies an avatar's damage directly (bypassing
+        // onHit), so without this the actor never records the avatar as its attacker — and
+        // AiCombat::attack only keeps pursuing a player target it momentarily can't reach (canFight
+        // false) when hitAttemptMatchesTarget holds. Setting it gives an avatar the same combat
+        // persistence the primary local player gets for free.
+        const auto pin = [&](const MWWorld::Ptr& actor, ESM::RefNum target) {
+            MWMechanics::CreatureStats& stats = actor.getClass().getCreatureStats(actor);
+            if (!stats.getHitAttemptActor().isSet())
+                stats.setHitAttemptActor(target);
+        };
+        mechanics.startCombat(victim, aggressor, nullptr);
+        pin(victim, agRef);
+        pin(aggressor, victim.getCellRef().getRefNum());
+
+        // The victim's allies (faction-mates, followers, sworn guards) join the fight and need the
+        // same pin so their retaliation persists too.
+        for (const MWWorld::Ptr& ally : mechanics.getActorsSidingWith(victim))
+        {
+            if (ally == aggressor || ally == victim || ally.getClass().getCreatureStats(ally).isDead())
+                continue;
+            mechanics.startCombat(ally, aggressor, nullptr);
+            pin(ally, agRef);
+        }
+    }
+
     void Replicator::applyActions(const ActionBatch& batch)
     {
         MWBase::World& world = *MWBase::Environment::get().getWorld();
         MWWorld::WorldModel& worldModel = *MWBase::Environment::get().getWorldModel();
         MWBase::MechanicsManager& mechanics = *MWBase::Environment::get().getMechanicsManager();
+
+        // How long to keep re-asserting a deferred assault (driveRemoteActors) while waiting for the
+        // host's background cell load to finish. At the ~10 Hz replication tick this is ~10 s —
+        // comfortably longer than a cell load, and harmless once the reaction has been delivered.
+        constexpr std::uint32_t sAggroReassertTicks = 100;
 
         for (const CombatHit& hit : batch.mHits)
         {
@@ -1438,23 +1544,26 @@ namespace MWNet
                              << " avatar refId=" << aggressor.getCellRef().getRefId() << " refNum=(" << agRef.mIndex
                              << "," << agRef.mContentFile << ") in cell " << aggressor.getCell()->getCell()->getId();
 
-            // Authoritative reaction: the struck actor aggros onto the reporting peer's avatar
-            // and takes the real damage the client computed (health for weapons, fatigue for a
-            // non-knockout hand-to-hand hit). The host owns this actor and runs full mechanics,
-            // so death (health <= 0) and its consequences play out here and replicate back via
-            // CreatureStats. (Trusting the client's number; host-side re-validation is later.)
-            mechanics.startCombat(victim, aggressor, nullptr);
-            // Did the guard actually acquire a resolvable target? If AiCombat stored a target it
-            // can't resolve back to a Ptr (e.g. a blank/colliding avatar refNum), it has no one to
-            // fight — this is the line that proves whether the identity is the problem.
-            {
-                MWMechanics::AiSequence& seq = victim.getClass().getCreatureStats(victim).getAiSequence();
-                const MWWorld::Ptr tgt = seq.isInCombat() ? seq.getActivePackage().getTarget() : MWWorld::Ptr();
-                Log(Debug::Info) << "applyActions: after startCombat " << victim.getCellRef().getRefId()
-                                 << " inCombat=" << seq.isInCombat() << " resolvedTarget="
-                                 << (tgt.isEmpty() ? std::string("<none>") : tgt.getCellRef().getRefId().toDebugString());
-            }
+            // Authoritative reaction: run the same path single-player runs when an actor is struck.
+            // actorAttacked makes the victim fight back, pulls in its allies (faction-mates, followers,
+            // guards sworn to it), and — because its player-gate now accepts network avatars (see
+            // World::isPlayer) — reports the assault as a crime against the attacking peer, landing a
+            // bounty on the avatar's NpcStats and sending guards after it. The host owns the victim and
+            // runs full mechanics, so death and its consequences play out here and replicate back via
+            // CreatureStats. (Trusting the client's damage number; host-side re-validation is later.)
             MWMechanics::CreatureStats& victimStats = victim.getClass().getCreatureStats(victim);
+            // Defer the assault reaction to driveRemoteActors rather than reacting now. The struck
+            // actor's cell may still be loading on the host: an avatar can enter a cell — and its
+            // client act in it — seconds before the host finishes loading that cell in the background
+            // ("Loading cell ... idle priority"). Until the load completes the actor isn't simulated,
+            // so reacting now (combat + the crime's witness wave) is silently discarded, and the
+            // bystanders never join. Recording the assault lets driveRemoteActors run the crime/witness
+            // reaction across the settle window, charging the avatar one crime's bounty while pulling in
+            // bystanders as they load. Refresh the window each hit; keep mDelivered/mBounty sticky so a
+            // re-hit doesn't re-charge the bounty (matching single-player's "no new crime while engaged").
+            PendingAggro& pending = mPendingAggro[hit.mVictim];
+            pending.mAggressor = hit.mAttacker;
+            pending.mExpireTick = mTick + sAggroReassertTicks;
             const int index = hit.mHealthDamage ? 0 : 2; // 0 = health, 2 = fatigue
             MWMechanics::DynamicStat<float> stat = victimStats.getDynamic(index);
             stat.setCurrent(stat.getCurrent() - hit.mDamage, true);
@@ -1545,6 +1654,7 @@ namespace MWNet
         ActionBatch batch;
         batch.mHits = std::move(mOutgoingHits);
         batch.mPlayerDamages = std::move(mOutgoingPlayerDamages);
+        batch.mBounties = std::move(mOutgoingBounties); // host -> client new total bounties
         batch.mDrops = std::move(mOutgoingDrops);
         batch.mItemsTaken = std::move(mOutgoingTakes);
         batch.mContainerChanges = std::move(mOutgoingContainerChanges); // client -> host take/put requests
@@ -1552,6 +1662,7 @@ namespace MWNet
         batch.mSummons = std::move(mOutgoingSummons); // client -> host summon spawn/despawn requests
         mOutgoingHits.clear();
         mOutgoingPlayerDamages.clear();
+        mOutgoingBounties.clear();
         mOutgoingDrops.clear();
         mOutgoingTakes.clear();
         mOutgoingContainerChanges.clear();
@@ -1825,6 +1936,27 @@ namespace MWNet
             // Our own mechanics run normally for our player, so health <= 0 triggers death here.
             Log(Debug::Verbose) << "Took " << pd.mDamage << (pd.mHealthDamage ? " hp" : " fatigue")
                                 << " from the shared world -> " << stat.getCurrent();
+        }
+    }
+
+    void Replicator::applyIncomingPlayerBounty(const ActionBatch& batch)
+    {
+        if (!mLocalPlayerNetId.isSet() || batch.mBounties.empty())
+            return;
+        const MWWorld::Ptr player = MWBase::Environment::get().getWorld()->getPlayerPtr();
+        if (player.isEmpty() || !player.getClass().isNpc())
+            return;
+        for (const PlayerBounty& b : batch.mBounties)
+        {
+            if (b.mTarget != mLocalPlayerNetId)
+                continue; // addressed to another player
+            // Absolute new total (not a delta), so this is idempotent on re-send / resync.
+            MWMechanics::NpcStats& stats = player.getClass().getNpcStats(player);
+            if (stats.getBounty() != b.mBounty)
+            {
+                stats.setBounty(b.mBounty);
+                Log(Debug::Verbose) << "Crime bounty from the shared world -> " << b.mBounty;
+            }
         }
     }
 }
