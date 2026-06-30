@@ -1541,26 +1541,11 @@ namespace MWNet
                              << " avatar refId=" << aggressor.getCellRef().getRefId() << " refNum=(" << agRef.mIndex
                              << "," << agRef.mContentFile << ") in cell " << aggressor.getCell()->getCell()->getId();
 
-            // Authoritative reaction: run the same path single-player runs when an actor is struck.
-            // actorAttacked makes the victim fight back, pulls in its allies (faction-mates, followers,
-            // guards sworn to it), and — because its player-gate now accepts network avatars (see
-            // World::isPlayer) — reports the assault as a crime against the attacking peer, landing a
-            // bounty on the avatar's NpcStats and sending guards after it. The host owns the victim and
-            // runs full mechanics, so death and its consequences play out here and replicate back via
+            // The host owns the victim and runs full mechanics, so we apply the avatar's damage and let
+            // the consequences (crime, retaliation, death) play out here and replicate back via
             // CreatureStats. (Trusting the client's damage number; host-side re-validation is later.)
             MWMechanics::CreatureStats& victimStats = victim.getClass().getCreatureStats(victim);
-            // Defer the assault reaction to driveRemoteActors rather than reacting now. The struck
-            // actor's cell may still be loading on the host: an avatar can enter a cell — and its
-            // client act in it — seconds before the host finishes loading that cell in the background
-            // ("Loading cell ... idle priority"). Until the load completes the actor isn't simulated,
-            // so reacting now (combat + the crime's witness wave) is silently discarded, and the
-            // bystanders never join. Recording the assault lets driveRemoteActors run the crime/witness
-            // reaction across the settle window, charging the avatar one crime's bounty while pulling in
-            // bystanders as they load. Refresh the window each hit; keep mDelivered/mBounty sticky so a
-            // re-hit doesn't re-charge the bounty (matching single-player's "no new crime while engaged").
-            PendingAggro& pending = mPendingAggro[hit.mVictim];
-            pending.mAggressor = hit.mAttacker;
-            pending.mExpireTick = mTick + sAggroReassertTicks;
+            const bool wasDead = victimStats.isDead();
             const int index = hit.mHealthDamage ? 0 : 2; // 0 = health, 2 = fatigue
             MWMechanics::DynamicStat<float> stat = victimStats.getDynamic(index);
             stat.setCurrent(stat.getCurrent() - hit.mDamage, true);
@@ -1568,6 +1553,34 @@ namespace MWNet
             Log(Debug::Verbose) << "Applied combat hit: " << victim.getCellRef().getRefId() << " -"
                                 << hit.mDamage << (hit.mHealthDamage ? " hp -> " : " fatigue -> ") << stat.getCurrent()
                                 << ", aggroes onto remote player " << hit.mAttacker.mIndex;
+
+            if (!wasDead && victimStats.isDead())
+            {
+                // The avatar's blow was fatal. Single-player attributes the kill in Npc::onHit, which we
+                // bypass by applying damage directly, so do it here: actorKilled charges the murder to the
+                // avatar (a big bounty) and rallies witnesses. Broadcast the avatar's new total bounty. A
+                // dead victim won't retaliate, so there is no deferred assault reaction to run.
+                mechanics.actorKilled(victim, aggressor);
+                if (aggressor.getClass().isNpc())
+                    mOutgoingBounties.push_back(
+                        { hit.mAttacker, aggressor.getClass().getNpcStats(aggressor).getBounty() });
+                mPendingAggro.erase(hit.mVictim);
+            }
+            else
+            {
+                // Defer the assault reaction to driveRemoteActors rather than reacting now. The struck
+                // actor's cell may still be loading on the host: an avatar can enter a cell — and its
+                // client act in it — seconds before the host finishes loading that cell in the background
+                // ("Loading cell ... idle priority"). Until the load completes the actor isn't simulated,
+                // so reacting now (combat + the crime's witness wave) is silently discarded, and the
+                // bystanders never join. Recording the assault lets driveRemoteActors run the crime/witness
+                // reaction across the settle window, charging the avatar one crime's bounty while pulling
+                // in bystanders as they load. Refresh the window each hit; keep mDelivered/mBounty sticky
+                // so a re-hit doesn't re-charge the bounty (single-player's "no new crime while engaged").
+                PendingAggro& pending = mPendingAggro[hit.mVictim];
+                pending.mAggressor = hit.mAttacker;
+                pending.mExpireTick = mTick + sAggroReassertTicks;
+            }
         }
 
         // A peer dropped an item: place it in the shared world authoritatively. It becomes a cell

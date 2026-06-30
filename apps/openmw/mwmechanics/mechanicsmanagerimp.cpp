@@ -1587,8 +1587,13 @@ namespace MWMechanics
         const MWWorld::Class& cls = target.getClass();
         const MWMechanics::CreatureStats& stats = cls.getCreatureStats(target);
         const MWMechanics::AiSequence& seq = stats.getAiSequence();
-        return cls.isNpc() && !attacker.isEmpty() && !isAggressive(target, attacker) && !seq.isEngagedWithActor()
-            && !stats.getAiSequence().isInPursuit() && !cls.getNpcStats(target).isWerewolf()
+        // isAggressive already covers self-defence (the target is hostile to / in combat with the
+        // attacker), so the old broad "engaged/pursuing ANYONE" gates only wrongly exempted assaulting an
+        // NPC busy with someone else — a guard chasing another peer, an NPC mid-brawl. Gate on the
+        // attacker specifically: still no crime to fight an NPC fighting you, or to be the one a guard
+        // is already pursuing, but striking a third party the target is occupied with is a crime.
+        return cls.isNpc() && !attacker.isEmpty() && !isAggressive(target, attacker) && !seq.isInPursuit(attacker)
+            && !cls.getNpcStats(target).isWerewolf()
             && stats.getMagicEffects().getOrDefault(ESM::MagicEffect::Vampirism).getMagnitude() <= 0;
     }
 
@@ -1605,15 +1610,21 @@ namespace MWMechanics
 
         const MWMechanics::NpcStats& victimStats = victim.getClass().getNpcStats(victim);
         const MWWorld::Ptr& player = getPlayer();
-        bool canCommit = attacker == player && canCommitCrimeAgainst(victim, attacker);
+        // The killer may be the primary local player or — in multiplayer — a network peer's avatar,
+        // which is also a player. Charge the murder to whoever struck the fatal blow; only a non-player
+        // killer (a follower acting for the player) is attributed to the primary player, as before.
+        const bool attackerIsPlayer = MWBase::Environment::get().getWorld()->isPlayer(attacker);
+        MWWorld::Ptr criminal = attacker;
+        bool canCommit = attackerIsPlayer && canCommitCrimeAgainst(victim, attacker);
 
-        // For now we report only about crimes of player and player's followers
-        if (attacker != player)
+        // For now we report only about crimes of a player and a player's followers
+        if (!attackerIsPlayer)
         {
             std::set<MWWorld::Ptr> playerFollowers;
             getActorsSidingWith(player, playerFollowers);
             if (playerFollowers.find(attacker) == playerFollowers.end())
                 return;
+            criminal = player;
         }
 
         if (!canCommit && victimStats.getCrimeId() == -1)
@@ -1622,7 +1633,7 @@ namespace MWMechanics
         // Simple check for who attacked first: if the player attacked first, a crimeId should be set
         // Doesn't handle possible edge case where no one reported the assault, but in such a case,
         // for bystanders it is not possible to tell who attacked first, anyway.
-        commitCrime(player, victim, MWBase::MechanicsManager::OT_Murder);
+        commitCrime(criminal, victim, MWBase::MechanicsManager::OT_Murder);
     }
 
     bool MechanicsManager::awarenessCheck(const MWWorld::Ptr& ptr, const MWWorld::Ptr& observer, bool useCache)

@@ -118,6 +118,9 @@ namespace MWMechanics
         /// Is there any pursuit package.
         bool isInPursuit() const;
 
+        /// Is there a pursuit package targeting this specific actor (e.g. a guard arresting it)?
+        bool isInPursuit(const MWWorld::Ptr& actor) const;
+
         /// Is the actor fleeing?
         bool isFleeing() const;
 
