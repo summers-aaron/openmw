@@ -822,39 +822,41 @@ namespace MWNet
                     continue;
                 }
                 const MWWorld::Ptr aggressor = av->second;
-                // Re-run the crime/witness reaction every frame until the victim's retaliation has taken
-                // hold (combat with the avatar survives a frame == the cell is fully live). A struck
-                // actor's cell loads in the background on the host, populating over several frames, so a
-                // single delivery at the first resolvable frame misses bystanders that are not yet
-                // simulated or in alarm range — the player had to keep striking to re-arm it. reportCrime
-                // is idempotent here (canReportCrime skips witnesses already fighting the victim and
-                // re-gathers neighbours fresh each call), so re-running it simply pulls in patrons,
-                // guards and faction-mates as they come online. commitCrime is called directly (not via
-                // actorAttacked) so the soon-to-be-engaged victim doesn't gate it.
+                // Deliver the assault through the SAME path single-player runs when an actor is struck:
+                // actorAttacked commits the crime (so witnesses/guards react — a struck guard ARRESTS via
+                // the crime AI rather than being forced to fight) and lets the victim react NORMALLY (it
+                // fights back only if it isn't already arresting or OnPCHitMe-peaceful). We don't hard-code
+                // the retaliation; we replicate the hit and let the normal consequences play out. A struck
+                // actor's cell loads in the background on the host over several frames, so re-running this
+                // until the victim is engaged recruits bystanders (guards, faction-mates) as they come
+                // online; it is idempotent (once the victim is engaged/pursuing, canCommitCrimeAgainst is
+                // false and the fight-back is gated, so a re-run only pulls in late witnesses).
                 const bool engaged
                     = victim.getClass().getCreatureStats(victim).getAiSequence().isInCombat(aggressor);
                 if (!engaged)
                 {
                     const bool aggressorIsNpc = aggressor.getClass().isNpc();
-                    mechanics.commitCrime(aggressor, victim, MWBase::MechanicsManager::OT_Assault);
+                    mechanics.actorAttacked(victim, aggressor);
                     if (!e.mDelivered)
                     {
-                        // First commit: this is the avatar's real bounty for the assault; record + send it.
+                        // First delivery: this is the avatar's real bounty for the assault; record + send it.
                         e.mBounty = aggressorIsNpc ? aggressor.getClass().getNpcStats(aggressor).getBounty() : 0;
                         mOutgoingBounties.push_back({ e.mAggressor, e.mBounty });
                         e.mDelivered = true;
                     }
                     else if (aggressorIsNpc)
                     {
-                        // Later commits only exist to recruit late-loading witnesses; undo their extra
-                        // bounty so the avatar is charged for one crime, not one per settle frame.
+                        // Later runs only recruit late-loading witnesses; undo any extra bounty so the
+                        // avatar is charged for one crime, not one per settle frame.
                         aggressor.getClass().getNpcStats(aggressor).setBounty(e.mBounty);
                     }
                 }
-                // Engage the victim (and its siding allies) and pin the avatar as their attacker, so the
-                // retaliation both takes hold across the load and persists like it does against the
-                // primary player. No-ops once combat is established.
-                sustainCombat(victim, aggressor);
+                // An avatar's damage is applied host-side bypassing Npc::onHit, so a victim never records
+                // the avatar as its hit-attempt actor — without which AiCombat drops a momentarily-
+                // unreachable player target. Pin it on everyone now FIGHTING the avatar so their
+                // retaliation persists, as the primary player gets for free. Pin only — it never starts
+                // combat, so an actor that chose to arrest or stay peaceful is untouched.
+                pinAvatarAttacker(aggressor);
                 ++it;
             }
         }
@@ -1460,36 +1462,28 @@ namespace MWNet
         return applied;
     }
 
-    void Replicator::sustainCombat(const MWWorld::Ptr& victim, const MWWorld::Ptr& aggressor)
+    void Replicator::pinAvatarAttacker(const MWWorld::Ptr& aggressor)
     {
-        if (victim.isEmpty() || aggressor.isEmpty() || !victim.getClass().isActor())
+        if (aggressor.isEmpty())
             return;
         MWBase::MechanicsManager& mechanics = *MWBase::Environment::get().getMechanicsManager();
         const ESM::RefNum agRef = aggressor.getCellRef().getRefNum();
+        if (!agRef.isSet())
+            return;
 
-        // Put the struck actor in combat with the avatar and mirror the hit-attempt bookkeeping
-        // Npc::onHit does in single-player. The host applies an avatar's damage directly (bypassing
-        // onHit), so without this the actor never records the avatar as its attacker — and
-        // AiCombat::attack only keeps pursuing a player target it momentarily can't reach (canFight
-        // false) when hitAttemptMatchesTarget holds. Setting it gives an avatar the same combat
-        // persistence the primary local player gets for free.
-        const auto pin = [&](const MWWorld::Ptr& actor, ESM::RefNum target) {
-            MWMechanics::CreatureStats& stats = actor.getClass().getCreatureStats(actor);
-            if (!stats.getHitAttemptActor().isSet())
-                stats.setHitAttemptActor(target);
-        };
-        mechanics.startCombat(victim, aggressor, nullptr);
-        pin(victim, agRef);
-        pin(aggressor, victim.getCellRef().getRefNum());
-
-        // The victim's allies (faction-mates, followers, sworn guards) join the fight and need the
-        // same pin so their retaliation persists too.
-        for (const MWWorld::Ptr& ally : mechanics.getActorsSidingWith(victim))
+        // The host applies an avatar's damage directly, bypassing Npc::onHit, so a victim never records
+        // the avatar as its hit-attempt actor — and AiCombat::attack only keeps pursuing a player target
+        // it momentarily can't reach (canFight false) when hitAttemptMatchesTarget holds. Pin it on every
+        // actor already FIGHTING the avatar so their retaliation persists, exactly as the primary local
+        // player gets for free. This only pins actors that are already in combat with the avatar — it
+        // never starts combat, so an actor that chose to arrest (a guard) or stay peaceful is untouched.
+        for (const MWWorld::Ptr& fighter : mechanics.getActorsFighting(aggressor))
         {
-            if (ally == aggressor || ally == victim || ally.getClass().getCreatureStats(ally).isDead())
+            if (fighter.isEmpty() || fighter == aggressor || !fighter.getClass().isActor())
                 continue;
-            mechanics.startCombat(ally, aggressor, nullptr);
-            pin(ally, agRef);
+            MWMechanics::CreatureStats& stats = fighter.getClass().getCreatureStats(fighter);
+            if (!stats.getHitAttemptActor().isSet())
+                stats.setHitAttemptActor(agRef);
         }
     }
 

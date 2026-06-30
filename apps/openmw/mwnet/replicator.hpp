@@ -374,11 +374,12 @@ namespace MWNet
         /// onto the reporting peer's avatar and take the reported damage.
         void applyActions(const ActionBatch& batch);
 
-        /// Put a struck host-owned actor (and the allies siding with it) into combat with a peer's
-        /// avatar, recording the avatar as their hit-attempt actor so the retaliation persists the
-        /// way it does against the primary local player. Combat only — no crime is committed, so it
-        /// is safe to call repeatedly (the per-frame re-assert for mPendingAggro does).
-        void sustainCombat(const MWWorld::Ptr& victim, const MWWorld::Ptr& aggressor);
+        /// Record the avatar as the hit-attempt actor of every host-owned actor already FIGHTING it, so
+        /// their retaliation persists the way it does against the primary local player (an avatar's
+        /// damage is applied host-side bypassing onHit, so they never record it otherwise). Pin only —
+        /// it never starts combat, so an actor that reacted by arresting or staying peaceful is left
+        /// alone. Safe to call repeatedly (the per-frame re-assert for mPendingAggro does).
+        void pinAvatarAttacker(const MWWorld::Ptr& aggressor);
 
         /// Apply received player-damage reports (client only): subtract from this peer's real
         /// player whatever the host says host-owned actors dealt to its avatar.

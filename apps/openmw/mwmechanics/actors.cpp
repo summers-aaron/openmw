@@ -1208,7 +1208,7 @@ namespace MWMechanics
             CreatureStats& creatureStats = ptr.getClass().getCreatureStats(ptr);
             NpcStats& npcStats = ptr.getClass().getNpcStats(ptr);
             // Only NPCs reacting to a crime (a victim or witness gets a crime id) and still set against
-            // THIS player — fighting it, or with it pinned as the actor it tried to hit (sustainCombat).
+            // THIS player — fighting it, or with it pinned as the actor it tried to hit (pinAvatarAttacker).
             // This scopes the forgiveness to the player who resolved its arrest, not unrelated combat.
             if (npcStats.getCrimeId() == -1)
                 continue;
