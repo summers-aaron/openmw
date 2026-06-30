@@ -1280,6 +1280,13 @@ namespace MWNet
                     worldModel.deregisterLiveCellRef(*placed.getBase()); // adopt the host's RefNum
                     placed.getCellRef().setRefNum(entity.mId);
                     worldModel.registerPtr(placed);
+                    mInstantiatedSummons.insert(entity.mId); // so its despawn plays the end VFX
+                    // Play the summon-start VFX where the host attaches it on spawn, so the creature
+                    // appears with a puff rather than popping into existence.
+                    if (const ESM::Static* fx
+                        = world.getStore().get<ESM::Static>().search(ESM::RefId::stringRefId("VFX_Summon_Start")))
+                        world.spawnEffect(Misc::ResourceHelpers::correctMeshPath(VFS::Path::Normalized(fx->mModel)), "",
+                            entity.mTransform->mPosition);
                 }
                 catch (const std::exception&)
                 {
@@ -1362,10 +1369,21 @@ namespace MWNet
         // deleted its copy, so the echo is then a no-op (count already 0).
         for (const ESM::RefNum& removed : delta.mRemovedItems)
         {
-            mReplicatedItems.erase(removed); // cleanup if it was one we spawned
+            mReplicatedItems.erase(removed); // cleanup if it was a floor item we spawned
+            // Was this one a summon WE instantiated? (Distinguishes a summon despawn from any other
+            // removed actor, e.g. a disposed corpse, which must not play the summon VFX.)
+            const bool wasSummon = mInstantiatedSummons.erase(removed) != 0;
             const MWWorld::Ptr item = worldModel.getPtr(removed);
-            if (!item.isEmpty() && item.getCellRef().getCount() > 0)
-                world.deleteObject(item);
+            if (item.isEmpty() || item.getCellRef().getCount() <= 0)
+                continue;
+            // A summoned creature despawning (its effect ended, or it died): play the end VFX where the
+            // host does before deleting it, so it vanishes with a puff instead of blinking out.
+            if (wasSummon)
+                if (const ESM::Static* fx
+                    = world.getStore().get<ESM::Static>().search(ESM::RefId::stringRefId("VFX_Summon_End")))
+                    world.spawnEffect(Misc::ResourceHelpers::correctMeshPath(VFS::Path::Normalized(fx->mModel)), "",
+                        item.getRefData().getPosition().asVec3());
+            world.deleteObject(item);
         }
 
         return applied;

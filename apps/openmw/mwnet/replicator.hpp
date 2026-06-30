@@ -175,6 +175,10 @@ namespace MWNet
         // Used to tell a host-owned floor item apart from anything else when this peer deletes one
         // (picks it up), so only those are reported back to the host.
         std::set<ESM::RefNum> mReplicatedItems;
+        // Client only: summoned creatures instantiated from the host's spawn descriptor, by their (host)
+        // RefNum. Lets a despawn removal be told apart from any other removed actor (a disposed corpse),
+        // so only an actual summon plays the summon-end VFX as it is deleted.
+        std::set<ESM::RefNum> mInstantiatedSummons;
         // Host only: the summoned-creature RefNums replicated last tick, so a summon that vanished from
         // every summoner's map (its effect ended / it died) is detected and broadcast as a removal.
         std::set<ESM::RefNum> mReplicatedSummons;
