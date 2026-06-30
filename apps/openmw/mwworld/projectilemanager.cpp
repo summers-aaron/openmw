@@ -610,10 +610,22 @@ namespace MWWorld
                 const MWWorld::Ptr& ptr = ref.getPtr();
                 effects = &esmStore.get<ESM::Enchantment>().find(ptr.getClass().getEnchantment(ptr))->mEffects;
             }
-            // A cosmetic bolt (mirror of a networked caster) shows the impact explosion but applies
+            // A cosmetic bolt (mirror of a networked caster) shows the impact visuals but applies
             // nothing — the real effect stays authoritative on the peer that owns the caster.
             if (magicBoltState.mCosmetic)
+            {
+                // The area/orb burst (also covers a non-actor surface hit)...
                 cast.explodeSpell(*effects, target, ESM::RT_Target, /*visualOnly=*/true);
+                // ...and the on-target hit flash, which the real path plays per applied effect (so a
+                // direct zero-area bolt on an actor isn't silent). playEffects is purely visual.
+                if (!target.isEmpty() && target.getClass().isActor())
+                {
+                    const auto& magicEffects = esmStore.get<ESM::MagicEffect>();
+                    for (const ESM::IndexedENAMstruct& effect : effects->mList)
+                        if (effect.mData.mRange == ESM::RT_Target)
+                            MWMechanics::playEffects(target, *magicEffects.find(effect.mData.mEffectID));
+                }
+            }
             else
                 cast.inflict(target, *effects, ESM::RT_Target);
 

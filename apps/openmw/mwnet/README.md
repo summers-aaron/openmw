@@ -165,10 +165,6 @@ hit/knockdown/knockout/death). Deliberately left out, low-value or fiddly:
 - **Idle fidget variants** (`idle2`–`idle9`) and **`idlestorm`** (shielding from ash storms).
   The fidgets are random cosmetic flavour; `idlestorm` is weather-driven and plays on the
   avatar locally anyway when it stands in the same storm. Neither is worth a wire field.
-- **On-actor hit flash for zero-area bolts.** Area spells and surface impacts show their explosion
-  on witnesses, but a *direct* zero-area bolt striking an actor shows nothing — vanilla puts that
-  visual in the on-target hit static (`playEffects`), which is gameplay-coupled and so isn't
-  reproduced on the cosmetic bolt.
 
 ## Roadmap (rough, next-first)
 
