@@ -141,6 +141,11 @@ namespace MWNet
         // This peer's own player network id (role-based: host vs client), so we never
         // instantiate an avatar for our own player echoed back.
         ESM::RefNum mLocalPlayerNetId;
+        // Client only: this peer's player bounty last mirrored across the wire, so a client-side change
+        // (paying a fine, going to jail — all of which clear the bounty on the local player) is reported
+        // to the host to clear the avatar's bounty, while a host-driven change isn't echoed back. The
+        // first sample only records a baseline (nullopt -> value) so a pre-existing bounty isn't resent.
+        std::optional<std::int32_t> mLastLocalBounty;
         // Hits this peer's player landed on host-owned actors, awaiting send to the host.
         std::vector<CombatHit> mOutgoingHits;
         // Host only: damage dealt to remote players' avatars, awaiting send to their owners.
@@ -370,6 +375,11 @@ namespace MWNet
         /// to whatever the host computed when its avatar committed a crime in the shared world.
         void applyIncomingPlayerBounty(const ActionBatch& batch);
 
+        /// Apply received avatar-bounty reports (host only): a client cleared/changed its own player's
+        /// bounty (e.g. resolved an arrest), so mirror it onto that player's avatar — guards reading the
+        /// avatar's bounty then stop pursuing once it hits zero.
+        void applyAvatarBounty(const ActionBatch& batch);
+
         /// Read the world's active actors (and this peer's player) and build the delta.
         SnapshotDelta sampleDelta();
 
@@ -412,6 +422,11 @@ namespace MWNet
         /// each frame.
         void recordMotion(const ESM::RefNum& id, const MWWorld::Ptr& actor, const osg::Vec3f& target,
             const osg::Vec3f& rotation, std::optional<float> speed);
+
+        /// Client only: if this peer's player bounty changed since last mirrored (an arrest resolved,
+        /// a fine paid), queue it for the host so the avatar's bounty follows. Records a silent baseline
+        /// on the first sample so a pre-existing bounty isn't reported. No-op off a networked client.
+        void sampleLocalBounty();
 
         /// Read a lootable inventory's current contents into a ContainerState. nullopt if the object
         /// isn't a syncable lootable (a world container or a corpse) currently loaded in a cell.

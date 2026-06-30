@@ -1652,8 +1652,30 @@ namespace MWNet
         }
     }
 
+    void Replicator::sampleLocalBounty()
+    {
+        if (!isNetworkClient())
+            return;
+        const MWWorld::Ptr player = MWBase::Environment::get().getWorld()->getPlayerPtr();
+        if (player.isEmpty() || !player.getClass().isNpc())
+            return;
+        const std::int32_t bounty = player.getClass().getNpcStats(player).getBounty();
+        if (!mLastLocalBounty)
+        {
+            mLastLocalBounty = bounty; // baseline on first sight; only later changes propagate
+            return;
+        }
+        if (*mLastLocalBounty == bounty)
+            return;
+        mLastLocalBounty = bounty;
+        // Reuse the PlayerBounty channel in the client -> host direction: the host mirrors it onto our
+        // avatar (applyAvatarBounty). Absolute value, so it is idempotent on resend.
+        mOutgoingBounties.push_back({ mLocalPlayerNetId, bounty });
+    }
+
     ActionBatch Replicator::takeOutgoingActions()
     {
+        sampleLocalBounty(); // client: report our player's bounty if it changed (e.g. an arrest resolved)
         ActionBatch batch;
         batch.mHits = std::move(mOutgoingHits);
         batch.mPlayerDamages = std::move(mOutgoingPlayerDamages);
@@ -2042,6 +2064,29 @@ namespace MWNet
             {
                 stats.setBounty(b.mBounty);
                 Log(Debug::Verbose) << "Crime bounty from the shared world -> " << b.mBounty;
+            }
+            // Mirror the host-driven value so sampleLocalBounty doesn't echo it straight back as a
+            // client-originated change.
+            mLastLocalBounty = b.mBounty;
+        }
+    }
+
+    void Replicator::applyAvatarBounty(const ActionBatch& batch)
+    {
+        if (!mIsAuthority || batch.mBounties.empty())
+            return;
+        for (const PlayerBounty& b : batch.mBounties)
+        {
+            const auto it = mAvatars.find(b.mTarget);
+            if (it == mAvatars.end() || it->second.isEmpty() || !it->second.getClass().isNpc())
+                continue; // not one of our avatars (or not instantiated yet)
+            MWWorld::Ptr avatar = it->second;
+            MWMechanics::NpcStats& stats = avatar.getClass().getNpcStats(avatar);
+            if (stats.getBounty() != b.mBounty)
+            {
+                stats.setBounty(b.mBounty);
+                Log(Debug::Verbose) << "Avatar bounty from player " << b.mTarget.mIndex << " -> " << b.mBounty
+                                    << " (guards stop pursuing once it hits 0)";
             }
         }
     }

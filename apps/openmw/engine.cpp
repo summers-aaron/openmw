@@ -282,6 +282,7 @@ void OMW::Engine::pumpTransport()
                     {
                         mReplicator->applyActions(*actions);
                         mReplicator->applyContainerChanges(*actions); // resolve clients' take/put requests
+                        mReplicator->applyAvatarBounty(*actions); // a client cleared its avatar's bounty
                     }
                     else
                     {
