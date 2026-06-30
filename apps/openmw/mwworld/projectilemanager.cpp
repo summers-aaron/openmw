@@ -289,7 +289,7 @@ namespace MWWorld
     }
 
     void ProjectileManager::launchMagicBolt(
-        const ESM::RefId& spellId, const Ptr& caster, const osg::Vec3f& fallbackDirection, ESM::RefNum item)
+        const ESM::RefId& spellId, const Ptr& caster, const osg::Vec3f& fallbackDirection, ESM::RefNum item, bool cosmetic)
     {
         osg::Vec3f pos = caster.getRefData().getPosition().asVec3();
         if (caster.getClass().isActor())
@@ -314,6 +314,7 @@ namespace MWWorld
         state.mSpellId = spellId;
         state.mCasterHandle = caster;
         state.mItem = item;
+        state.mCosmetic = cosmetic;
         MWBase::Environment::get().getWorldModel()->registerPtr(caster);
         state.mCaster = caster.getCellRef().getRefNum();
 
@@ -609,7 +610,12 @@ namespace MWWorld
                 const MWWorld::Ptr& ptr = ref.getPtr();
                 effects = &esmStore.get<ESM::Enchantment>().find(ptr.getClass().getEnchantment(ptr))->mEffects;
             }
-            cast.inflict(target, *effects, ESM::RT_Target);
+            // A cosmetic bolt (mirror of a networked caster) shows the impact explosion but applies
+            // nothing — the real effect stays authoritative on the peer that owns the caster.
+            if (magicBoltState.mCosmetic)
+                cast.explodeSpell(*effects, target, ESM::RT_Target, /*visualOnly=*/true);
+            else
+                cast.inflict(target, *effects, ESM::RT_Target);
 
             magicBoltState.mToDelete = true;
         }
@@ -685,6 +691,9 @@ namespace MWWorld
 
         for (const MagicBoltState& bolt : mMagicBolts)
         {
+            if (bolt.mCosmetic)
+                continue; // visual-only mirror of a networked caster — not part of this peer's world state
+
             writer.startRecord(ESM::REC_MPRJ);
 
             ESM::MagicBoltState state;
@@ -807,7 +816,10 @@ namespace MWWorld
 
     size_t ProjectileManager::countSavedGameRecords() const
     {
-        return mMagicBolts.size() + mProjectiles.size();
+        // Cosmetic bolts are excluded from write(), so they must not be counted here either.
+        return static_cast<size_t>(std::count_if(mMagicBolts.begin(), mMagicBolts.end(),
+                   [](const MagicBoltState& bolt) { return !bolt.mCosmetic; }))
+            + mProjectiles.size();
     }
 
     void ProjectileManager::saveLoaded(const ESM::ESMReader& reader)

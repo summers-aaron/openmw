@@ -10,8 +10,13 @@
 #include <components/debug/debuglog.hpp>
 #include <components/esm/refid.hpp>
 #include <components/esm3/loadcrea.hpp>
+#include <components/esm3/loadench.hpp>
 #include <components/esm3/loadgmst.hpp>
+#include <components/esm3/loadmgef.hpp>
 #include <components/esm3/loadnpc.hpp>
+#include <components/esm3/loadspel.hpp>
+#include <components/esm3/loadstat.hpp>
+#include <components/misc/resourcehelpers.hpp>
 #include <components/misc/rng.hpp>
 #include <components/vfs/pathutil.hpp>
 
@@ -27,6 +32,7 @@
 #include "../mwmechanics/creaturestats.hpp"
 #include "../mwmechanics/drawstate.hpp"
 #include "../mwmechanics/movement.hpp"
+#include "../mwmechanics/spellcasting.hpp"
 #include "../mwmechanics/stat.hpp"
 
 #include "../mwrender/animation.hpp"
@@ -225,6 +231,26 @@ namespace MWNet
                 || group == "handtohand" || group == "spellcast";
         }
 
+        // The spell or enchantment an actor is currently casting, as a serialized-text RefId, so a
+        // receiver can reproduce the caster's cosmetic visuals. Mirrors how CharacterController picks the
+        // id at cast time: the actor's selected spell, or — if none — the enchantment of its selected
+        // magic item. Empty if neither is set (the receiver then just plays the bare cast animation).
+        std::string sampleCastSpell(const MWWorld::Ptr& actor)
+        {
+            if (!actor.getClass().isActor())
+                return {};
+            const MWMechanics::CreatureStats& stats = actor.getClass().getCreatureStats(actor);
+            ESM::RefId spell = stats.getSpells().getSelectedSpell();
+            if (spell.empty() && actor.getClass().hasInventoryStore(actor))
+            {
+                const MWWorld::InventoryStore& inv = actor.getClass().getInventoryStore(actor);
+                const auto enchantItem = inv.getSelectedEnchantItem();
+                if (enchantItem != inv.end())
+                    spell = enchantItem->getClass().getEnchantment(*enchantItem);
+            }
+            return spell.serializeText();
+        }
+
         // This actor's current world movement speed (units/sec), used to set the avatar's
         // animation playback rate so its feet match its replicated translation (see
         // driveLocomotionAnimation).
@@ -235,8 +261,12 @@ namespace MWNet
             return actor.getClass().getCurrentSpeed(actor);
         }
 
-        // Read an actor's run/sneak stance as a compact bit set for replication (bit 0 run,
-        // bit 1 sneak), so a remote avatar visibly runs and sneaks like its owner.
+        // Read an actor's per-tick stance/reaction flags as a compact bit set for replication:
+        //   bit 0 run, bit 1 sneak (movement gait), bit 2 airborne (jump), bit 3 knocked down.
+        // Each is a SUSTAINED state the receiver mirrors onto the avatar so its own controller plays
+        // the matching animation. (Discrete one-shot reactions — swings, casts, blocks — ride the
+        // swing channel instead; transient flags reset within one mechanics pass aren't sampled here
+        // because sampleDelta runs at frame start, before mechanics.)
         std::optional<std::uint8_t> sampleMoveFlags(const MWWorld::Ptr& actor)
         {
             if (!actor.getClass().isActor())
@@ -256,12 +286,20 @@ namespace MWNet
             if (world->isActorCollisionEnabled(actor) && !world->isOnGround(actor) && !world->isSwimming(actor)
                 && !world->isFlying(actor))
                 flags |= 1 << 2;
+            // Knocked down / out. The controller keeps getKnockedDown() set for the whole time the
+            // actor is on the floor (it clears it only when the recovery animation finishes), and a
+            // knockout additionally drives off the replicated fatigue (< 0), so mirroring this flag plus
+            // the stats reproduces both the fall-and-rise of a plain knockdown and the held, looping
+            // pose of a fatigue knockout — and makes the avatar pick the matching death-knockdown /
+            // death-knockout variant if it dies while down.
+            if (stats.getKnockedDown())
+                flags |= 1 << 3;
             return flags;
         }
 
-        // Apply a replicated run/sneak stance to an actor, so the controller picks the run/sneak
-        // animation variants. Out-of-range bits are ignored; only run and sneak are honored (the
-        // airborne bit is handled separately, by Replicator::applyJump).
+        // Apply replicated sustained stance/reaction flags to an actor, so its controller picks the
+        // matching animation. Run/sneak set the gait; knocked-down lays it out (and lets it rise when
+        // the flag clears). The airborne bit (2) is handled separately, by Replicator::applyJump.
         void applyMoveFlags(const MWWorld::Ptr& actor, std::uint8_t flags)
         {
             if (!actor.getClass().isActor())
@@ -269,6 +307,7 @@ namespace MWNet
             MWMechanics::CreatureStats& stats = actor.getClass().getCreatureStats(actor);
             stats.setMovementFlag(MWMechanics::CreatureStats::Flag_Run, (flags & (1 << 0)) != 0);
             stats.setMovementFlag(MWMechanics::CreatureStats::Flag_Sneak, (flags & (1 << 1)) != 0);
+            stats.setKnockedDown((flags & (1 << 3)) != 0);
         }
 
         std::optional<DynamicStats> sampleStats(const MWWorld::Ptr& actor)
@@ -566,6 +605,8 @@ namespace MWNet
             if (actor.isEmpty() || !actor.isInCell() || !actor.getClass().isActor())
             {
                 mWasAirborne.erase(it->first);
+                mPendingCastBolt.erase(it->first);
+                mPendingFollow.erase(it->first);
                 it = mRemoteMotion.erase(it); // avatar gone (left range / disconnected) — stop driving it
                 continue;
             }
@@ -584,6 +625,54 @@ namespace MWNet
             // No hand-rolled jump animation to fight it on the shared anim group.
             const auto airborne = mWasAirborne.find(it->first);
             world.setActorOnGround(actor, airborne == mWasAirborne.end() || !airborne->second);
+
+            // Launch a deferred cosmetic bolt the moment the cast animation reaches its release key, so
+            // the bolt leaves the avatar's hands in step with the cast — not at its start. The avatar
+            // plays the same spellcast animation as the caster, so its own playhead gives the timing.
+            const auto bolt = mPendingCastBolt.find(it->first);
+            if (bolt != mPendingCastBolt.end())
+            {
+                const MWRender::Animation* anim = world.getAnimation(actor);
+                const float now = anim ? anim->getCurrentTime("spellcast") : -1.f;
+                const float release = anim ? anim->getTextKeyTime("spellcast: " + bolt->second.mType + " release") : -1.f;
+                if (now < 0.f)
+                    mPendingCastBolt.erase(bolt); // cast animation no longer playing (cancelled) — drop it
+                else if (release >= 0.f && now >= release)
+                {
+                    // launchMagicBolt resolves its own projectile effects and no-ops for self/touch
+                    // spells (no projectile); cosmetic means it flies and explodes but applies nothing.
+                    world.launchMagicBolt(
+                        ESM::RefId::deserializeText(bolt->second.mSpell), actor, osg::Vec3f(), ESM::RefNum(), true);
+                    mPendingCastBolt.erase(bolt);
+                }
+            }
+
+            // Play a weapon swing's follow-through once its strike arc lands. The strike (phase 2) is held
+            // at the impact key; when the playhead reaches it, swap in "<type> small follow start" ->
+            // "<type> small follow stop" so the weapon recovers smoothly instead of snapping back. Played
+            // as its own segment (not spanned from the strike) so only this one strength's follow runs.
+            const auto follow = mPendingFollow.find(it->first);
+            if (follow != mPendingFollow.end())
+            {
+                MWRender::Animation* anim = world.getAnimation(actor);
+                const std::string& group = follow->second.mGroup;
+                const std::string& type = follow->second.mType;
+                const std::string impact = type == "shoot" ? "shoot release" : type + " hit";
+                const float now = anim ? anim->getCurrentTime(group) : -1.f;
+                const float impactTime = anim ? anim->getTextKeyTime(group + ": " + impact) : -1.f;
+                if (now < 0.f)
+                    mPendingFollow.erase(follow); // strike animation gone (interrupted) — drop it
+                else if (impactTime >= 0.f && now >= impactTime)
+                {
+                    const std::string followStart = type == "shoot" ? "shoot follow start" : type + " small follow start";
+                    const std::string followStop = type == "shoot" ? "shoot follow stop" : type + " small follow stop";
+                    anim->disable(group); // clear the held strike so play() restarts the group
+                    anim->play(group, MWRender::Animation::AnimPriority(MWMechanics::Priority_Weapon),
+                        MWRender::BlendMask_UpperBody, /*autodisable=*/true, /*speedmult=*/1.f, followStart, followStop,
+                        /*startpoint=*/0.f, /*loops=*/0);
+                    mPendingFollow.erase(follow);
+                }
+            }
             ++it;
         }
     }
@@ -596,21 +685,23 @@ namespace MWNet
         const bool attacking = stats.getAttackingOrSpell();
         bool& was = mWasAttacking[id];
         bool& pending = mPendingSwing[id];
+        const bool releaseEdge = was && !attacking; // button let go: a charged attack is loosed
         if (attacking && !was)
             pending = true; // rising edge: a new discrete swing/cast began — arm a capture for it
         if (!attacking)
-            pending = false; // pulse ended (a cancelled swing that never reached its anim) — disarm
+            pending = false; // pulse ended — disarm the wind-up capture (the release is handled below)
         was = attacking;
+        const MWRender::Animation* anim = MWBase::Environment::get().getWorld()->getAnimation(actor);
         if (pending)
         {
-            // First tick of this attack pulse where the weapon group is actually the active Torso
-            // group: capture what to play (group + chosen attack type) and bump the counter so the
-            // receiver plays it exactly once. The group/type stay fixed for the swing; only the
-            // counter matters thereafter.
-            const MWRender::Animation* animation = MWBase::Environment::get().getWorld()->getAnimation(actor);
-            const std::string_view group = animation ? animation->getActiveGroup(MWRender::BoneGroup_Torso)
-                                                      : std::string_view();
-            if (isAttackGroup(group))
+            // First tick of this attack pulse where the weapon group is actually the active Torso group:
+            // capture what to play (group + chosen attack type) and bump the counter so the receiver
+            // plays it exactly once. This is the WIND-UP: a held weapon attack stays in its drawn-back
+            // pose until the owner releases, so emit phase 1 and arm the matching release. The group/type
+            // stay fixed for the whole attack; only the counter changes. Spell casts are handled
+            // separately below (their flag is cleared before we ever sample it), so exclude spellcast.
+            const std::string_view group = anim ? anim->getActiveGroup(MWRender::BoneGroup_Torso) : std::string_view();
+            if (isAttackGroup(group) && group != "spellcast")
             {
                 SwingState swing;
                 swing.mGroup = std::string(group);
@@ -618,14 +709,61 @@ namespace MWNet
                 // request is usually "Any" (CreatureStats type empty) while the controller picks the
                 // actual slash/chop/thrust at wind-up. Read that so the receiver plays the right one.
                 swing.mType = std::string(MWBase::Environment::get().getMechanicsManager()->getActiveAttackType(actor));
+                swing.mPhase = 1; // wind-up: hold the charge pose on the receiver until the release
                 swing.mSeq = mSampledSwing[id].mSeq + 1;
                 mSampledSwing[id] = std::move(swing);
+                mWindupPendingRelease[id] = true;
                 pending = false;
             }
         }
+
+        // The release: when the owner lets go of a charged attack, replay the same swing as phase 2 (a
+        // fresh counter) so the receiver swings through from the held pose. Only fire if a wind-up was
+        // captured for this pulse — a bare falling edge with no captured swing is nothing to release.
+        if (releaseEdge && mWindupPendingRelease[id])
+        {
+            SwingState release = mSampledSwing[id];
+            release.mPhase = 2;
+            release.mSeq = mSampledSwing[id].mSeq + 1;
+            mSampledSwing[id] = std::move(release);
+            mWindupPendingRelease[id] = false;
+        }
+
+        // A spell cast is a discrete reaction that rides this same channel. It can't be read from
+        // getAttackingOrSpell() — the controller clears that flag the same frame the cast begins (so it
+        // doesn't recast every held frame), and sampleDelta runs at frame start, so the flag is never
+        // seen set here. The spellcast ANIMATION, though, plays for ~a second, so detect its rising edge
+        // on the torso and emit it once, carrying the cast id so the receiver can mirror the cast VFX.
+        const bool casting = anim != nullptr && anim->getActiveGroup(MWRender::BoneGroup_Torso) == "spellcast";
+        bool& wasCasting = mWasCasting[id];
+        if (casting && !wasCasting)
+        {
+            SwingState cast;
+            cast.mGroup = "spellcast";
+            cast.mType = std::string(MWBase::Environment::get().getMechanicsManager()->getActiveAttackType(actor));
+            cast.mSpell = sampleCastSpell(actor);
+            cast.mSeq = mSampledSwing[id].mSeq + 1;
+            mSampledSwing[id] = std::move(cast);
+        }
+        wasCasting = casting;
+
+        // A shield block is also detected from its animation (the getBlock() flag is likewise cleared
+        // within one mechanics pass), on the left arm where the controller layers it.
+        const bool blocking = anim != nullptr && anim->getActiveGroup(MWRender::BoneGroup_LeftArm) == "shield";
+        bool& wasBlocking = mWasBlocking[id];
+        if (blocking && !wasBlocking)
+        {
+            SwingState block;
+            block.mGroup = "shield";
+            block.mType = "block";
+            block.mSeq = mSampledSwing[id].mSeq + 1;
+            mSampledSwing[id] = std::move(block);
+        }
+        wasBlocking = blocking;
+
         const auto it = mSampledSwing.find(id);
         if (it == mSampledSwing.end() || it->second.mSeq == 0)
-            return std::nullopt; // this actor has not swung yet
+            return std::nullopt; // this actor has not swung, cast or blocked yet
         return it->second;
     }
 
@@ -648,31 +786,122 @@ namespace MWNet
         MWRender::Animation* animation = MWBase::Environment::get().getWorld()->getAnimation(actor);
         if (animation == nullptr || swing.mGroup.empty())
             return;
-        // Play the swing once on the upper body only, so the ready pose and the replicated
-        // lower-body locomotion are untouched. A typed melee swing plays its segment
-        // ("<type> start" -> "<type> small follow stop"); an empty type (e.g. a spell cast) plays
-        // the whole group.
+        // A shield block is carried on this same discrete channel (it is a one-shot reaction, like a
+        // swing). It plays "block start" -> "block stop" on the left arm only, so the avatar raises its
+        // shield without disturbing its replicated locomotion or weapon pose — mirroring how the
+        // controller layers the block over the body with Priority_Block on the left arm.
+        if (swing.mGroup == "shield")
+        {
+            animation->play("shield", MWRender::Animation::AnimPriority(MWMechanics::Priority_Block),
+                MWRender::BlendMask_LeftArm, /*autodisable=*/true, /*speedmult=*/1.f, "block start", "block stop",
+                /*startpoint=*/0.f, /*loops=*/0);
+            return;
+        }
+        // A charged weapon attack is replayed in two slices so a witness sees the same hold-then-strike
+        // its owner does (phase 1 = wind-up, phase 2 = release). A wind-up plays "<type> start" ->
+        // "<type> max attack" and HOLDS the drawn-back pose (autodisable=false) until the release slice
+        // replaces it; the release swings on through the follow. The owner's controller does exactly
+        // this — it holds at "max attack" while the attack button is down.
+        //
+        // Both slices play the SAME group, and Animation::play is a no-op if that group is still active
+        // (it early-returns rather than restart it). The held wind-up leaves the group active, so the
+        // release would do nothing and the charge would never let go — disable the group first to clear
+        // it, exactly as the controller does before it plays the release segment.
+        if (swing.mPhase == 1 || swing.mPhase == 2)
+            animation->disable(swing.mGroup);
+        if (swing.mPhase == 1)
+        {
+            animation->play(swing.mGroup, MWRender::Animation::AnimPriority(MWMechanics::Priority_Weapon),
+                MWRender::BlendMask_UpperBody, /*autodisable=*/false, /*speedmult=*/1.f, swing.mType + " start",
+                swing.mType + " max attack", /*startpoint=*/0.f, /*loops=*/0);
+            return; // strike (and swish) ride the phase-2 release
+        }
+        if (swing.mPhase == 2)
+        {
+            // Strike: the swing arc from the held pose to the impact key ("hit", or "release" for
+            // ranged) — exactly the controller's strike segment. HOLD it there (autodisable=false); the
+            // follow-through recovery is a SEPARATE segment driveRemoteActors plays once the arc lands.
+            // Playing straight through to "<type> small follow stop" instead would cross the region that
+            // holds the small/medium/large follow-throughs and run all three in a row (the swing seeming
+            // to loop three times), and stopping dead at the impact key snaps back with no recovery.
+            const std::string impact = swing.mType == "shoot" ? "shoot release" : swing.mType + " hit";
+            animation->play(swing.mGroup, MWRender::Animation::AnimPriority(MWMechanics::Priority_Weapon),
+                MWRender::BlendMask_UpperBody, /*autodisable=*/false, /*speedmult=*/1.f, swing.mType + " max attack",
+                impact, /*startpoint=*/0.f, /*loops=*/0);
+            mPendingFollow[id] = swing;
+            // The swing's swish — the swinger emits this in prepareHit(), which we don't run for a remote
+            // avatar. Reproduce it for melee/hand-to-hand only (no swish for ranged, thrown, or spells).
+            // Attack strength isn't replicated, so use a neutral volume/pitch.
+            if (swing.mGroup == "weapononehand" || swing.mGroup == "weapontwohand" || swing.mGroup == "weapontwowide"
+                || swing.mGroup == "handtohand")
+            {
+                static const ESM::RefId weaponSwish = ESM::RefId::stringRefId("Weapon Swish");
+                MWBase::Environment::get().getSoundManager()->playSound3D(actor, weaponSwish, /*volume=*/0.99f,
+                    /*pitch=*/0.95f);
+            }
+            return;
+        }
+
+        // Phase 0 — played whole, in one segment:
+        //   - a spell cast plays "<range> start" -> "<range> stop" (range = self/touch/target);
+        //   - a creature's random-attack swing plays the whole group ("start" -> "stop").
+        // The spellcast group has no "small follow stop" key, so reusing the melee stop key there
+        // makes Animation::reset fail to find it and the cast silently never plays.
         std::string start = "start";
         std::string stop = "stop";
         if (!swing.mType.empty())
         {
             start = swing.mType + " start";
-            stop = swing.mType + " small follow stop";
+            stop = swing.mGroup == "spellcast" ? swing.mType + " stop" : swing.mType + " small follow stop";
         }
         animation->play(swing.mGroup, MWRender::Animation::AnimPriority(MWMechanics::Priority_Weapon),
             MWRender::BlendMask_UpperBody, /*autodisable=*/true, /*speedmult=*/1.f, start, stop, /*startpoint=*/0.f,
             /*loops=*/0);
 
-        // The swing's swish — the swinger emits this in prepareHit(), which we don't run for a remote
-        // avatar. Reproduce it for melee/hand-to-hand only (the engine plays no swish for ranged,
-        // thrown, or spells). Attack strength isn't replicated, so use a neutral volume/pitch.
-        if (swing.mGroup == "weapononehand" || swing.mGroup == "weapontwohand" || swing.mGroup == "weapontwowide"
-            || swing.mGroup == "handtohand")
+        if (swing.mGroup == "spellcast" && !swing.mSpell.empty())
         {
-            static const ESM::RefId weaponSwish = ESM::RefId::stringRefId("Weapon Swish");
-            MWBase::Environment::get().getSoundManager()->playSound3D(actor, weaponSwish, /*volume=*/0.99f,
-                /*pitch=*/0.95f);
+            // Play the body aura and glowing hands now (the caster shows these from the start of the
+            // cast), but defer the bolt: it must leave the hands at the animation's release point, not
+            // the moment casting begins. driveRemoteActors fires it when the playhead reaches the key.
+            applyCastEffects(actor, animation, ESM::RefId::deserializeText(swing.mSpell));
+            mPendingCastBolt[id] = swing;
         }
+    }
+
+    void Replicator::applyCastEffects(
+        const MWWorld::Ptr& actor, MWRender::Animation* animation, const ESM::RefId& spellId)
+    {
+        // Reproduce the caster's cosmetic spell visuals on this peer — the cast aura on the body, the
+        // glowing-hands effect, and (for a target-range spell) a flying bolt — WITHOUT applying any
+        // gameplay. The effect itself stays authoritative on the peer that owns the caster, so the bolt
+        // is launched cosmetic (no on-impact effect). This mirrors what CharacterController emits at the
+        // local caster's own cast site (see its spell branch).
+        const MWWorld::ESMStore& store = *MWBase::Environment::get().getESMStore();
+        const std::vector<ESM::IndexedENAMstruct>* effects = nullptr;
+        MWMechanics::CastSpell cast(actor, MWWorld::Ptr());
+        if (const ESM::Spell* spell = store.get<ESM::Spell>().search(spellId))
+        {
+            effects = &spell->mEffects.mList;
+            cast.playSpellCastingEffects(spell);
+        }
+        else if (const ESM::Enchantment* enchantment = store.get<ESM::Enchantment>().search(spellId))
+        {
+            effects = &enchantment->mEffects.mList;
+            cast.playSpellCastingEffects(enchantment);
+        }
+        if (effects == nullptr || effects->empty())
+            return;
+
+        // Glowing hands, coloured by the last effect (matching CharacterController). The VFX_Hands static
+        // is attached to each hand bone if present.
+        const ESM::MagicEffect* lastEffect = store.get<ESM::MagicEffect>().find(effects->back().mData.mEffectID);
+        const ESM::Static* castStatic = store.get<ESM::Static>().find(ESM::RefId::stringRefId("VFX_Hands"));
+        const VFS::Path::Normalized handsModel
+            = Misc::ResourceHelpers::correctMeshPath(VFS::Path::Normalized(castStatic->mModel));
+        if (animation->getNode("Bip01 L Hand"))
+            animation->addEffect(handsModel.value(), "", false, "Bip01 L Hand", lastEffect->mParticle);
+        if (animation->getNode("Bip01 R Hand"))
+            animation->addEffect(handsModel.value(), "", false, "Bip01 R Hand", lastEffect->mParticle);
     }
 
     void Replicator::applyHitReaction(

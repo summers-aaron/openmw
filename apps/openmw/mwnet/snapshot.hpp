@@ -97,6 +97,19 @@ namespace MWNet
         std::string mGroup;
         std::string mType;
         std::uint32_t mSeq = 0;
+        // For a spell cast (mGroup == "spellcast"), the serialized-text RefId of the spell or
+        // enchantment being cast; empty for a melee swing. The records are shared content, so the
+        // receiver resolves the id to reproduce the caster's cosmetic visuals (the cast aura on the
+        // body, the glowing-hands effect, and — for a target-range spell — a non-damaging bolt). The
+        // actual spell effect is NOT applied from this; it stays authoritative on the caster.
+        std::string mSpell;
+        // Which slice of the action to play, so a charged weapon attack reads as a hold-then-strike
+        // rather than a single instant swing: 0 = the whole thing at once (a spell cast, a shield block,
+        // an uncharged/creature attack); 1 = wind-up — play "<type> start" -> "<type> max attack" and
+        // hold the drawn-back charge pose; 2 = release — play the strike from "<type> max attack"
+        // through the follow-through. A weapon swing emits a 1 when its owner begins charging and a 2
+        // (new mSeq) when the owner lets go, so witnesses hold the pose for exactly as long as the owner.
+        std::uint8_t mPhase = 0;
 
         friend bool operator==(const SwingState&, const SwingState&) = default;
     };

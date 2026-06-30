@@ -7,7 +7,7 @@ namespace MWNet
     namespace
     {
         // Wire format version. Bumped if the layout below changes incompatibly.
-        constexpr std::uint8_t sVersion = 6;
+        constexpr std::uint8_t sVersion = 8;
 
         // EntityState field bits (mFieldMask, a uint16 to leave room for more states).
         constexpr std::uint16_t sFieldTransform = 1 << 0;
@@ -89,6 +89,8 @@ namespace MWNet
                 writer.writeString(entity.mSwing->mGroup);
                 writer.writeString(entity.mSwing->mType);
                 writer.write(entity.mSwing->mSeq);
+                writer.writeString(entity.mSwing->mSpell);
+                writer.write(entity.mSwing->mPhase);
             }
             if (entity.mSpeed)
                 writer.write(*entity.mSpeed);
@@ -199,7 +201,7 @@ namespace MWNet
             {
                 SwingState swing;
                 if (!reader.readString(swing.mGroup) || !reader.readString(swing.mType)
-                    || !reader.read(swing.mSeq))
+                    || !reader.read(swing.mSeq) || !reader.readString(swing.mSpell) || !reader.read(swing.mPhase))
                     return std::nullopt;
                 entity.mSwing = std::move(swing);
             }

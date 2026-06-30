@@ -50,8 +50,10 @@ namespace MWWorld
             MWRender::RenderingManager* rendering, MWPhysics::PhysicsSystem* physics);
 
         /// If caster is an actor, the actor's facing orientation is used. Otherwise fallbackDirection is used.
+        /// A cosmetic bolt flies and renders like a normal one but applies no effect on impact — used to
+        /// mirror a remote (networked) caster's bolt without re-running its gameplay on this peer.
         void launchMagicBolt(const ESM::RefId& spellId, const MWWorld::Ptr& caster, const osg::Vec3f& fallbackDirection,
-            ESM::RefNum item);
+            ESM::RefNum item, bool cosmetic = false);
 
         void launchProjectile(const MWWorld::Ptr& actor, const MWWorld::ConstPtr& projectile, const osg::Vec3f& pos,
             const osg::Quat& orient, const MWWorld::Ptr& bow, float speed, float attackStrength);
@@ -112,6 +114,10 @@ namespace MWWorld
 
             std::vector<MWBase::Sound*> mSounds;
             std::set<ESM::RefId> mSoundIds;
+
+            // Visual-only bolt mirroring a networked caster: skip the on-impact effect and never persist
+            // it to a save (the caster is a transient remote avatar).
+            bool mCosmetic = false;
         };
 
         struct ProjectileState : public State

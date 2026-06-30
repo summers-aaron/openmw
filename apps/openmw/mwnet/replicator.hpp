@@ -17,6 +17,16 @@
 #include "actions.hpp"
 #include "snapshot.hpp"
 
+namespace ESM
+{
+    class RefId;
+}
+
+namespace MWRender
+{
+    class Animation;
+}
+
 namespace MWNet
 {
     /// Bridges the running simulation to the snapshot/delta channel. Each tick it
@@ -59,6 +69,17 @@ namespace MWNet
         // from a free-running playhead. mSampledSwing holds the latest {group, type, seq} to emit.
         std::map<ESM::RefNum, bool> mWasAttacking;
         std::map<ESM::RefNum, bool> mPendingSwing;
+        // Sampling side: a weapon wind-up has been emitted (phase 1) and is waiting for its owner to let
+        // go, at which point a phase-2 release is emitted on the same channel.
+        std::map<ESM::RefNum, bool> mWindupPendingRelease;
+        // Sampling side: each actor's block state last tick (the shield animation playing on the left
+        // arm), so a block emits on the swing channel once per rising edge — like a swing.
+        std::map<ESM::RefNum, bool> mWasBlocking;
+        // Sampling side: each actor's spell-cast state last tick (the spellcast animation playing on
+        // the torso). A cast can't be read from getAttackingOrSpell() — the controller clears that flag
+        // the same frame the cast begins, and sampleDelta runs at frame start — so, like a block, the
+        // cast is detected from its animation and emitted on the swing channel once per rising edge.
+        std::map<ESM::RefNum, bool> mWasCasting;
         std::map<ESM::RefNum, SwingState> mSampledSwing;
         // Applying side: the swing counter last played on each actor, so a received swing fires its
         // segment exactly once — when the counter changes. The first counter seen for an actor is
@@ -68,6 +89,15 @@ namespace MWNet
         // moveflags. driveRemoteActors forces the puppet's physics grounded state from it each frame,
         // so the puppet's own controller plays jump/land and gates locomotion natively.
         std::map<ESM::RefNum, bool> mWasAirborne;
+        // Applying side: a cast whose cosmetic bolt is waiting to be launched. The spell/type ride in a
+        // SwingState; driveRemoteActors fires the bolt when the avatar's spellcast animation reaches the
+        // "<type> release" key, so the bolt leaves the hands in step with the cast rather than at its start.
+        std::map<ESM::RefNum, SwingState> mPendingCastBolt;
+        // Applying side: a weapon strike whose follow-through recovery is waiting to play. The strike
+        // (phase 2) is held at its impact key; driveRemoteActors swaps in the follow-through segment
+        // once the playhead lands there, so the weapon recovers smoothly without spanning all three
+        // strength follow-throughs at once.
+        std::map<ESM::RefNum, SwingState> mPendingFollow;
         // The last swing received for each avatar, so the host relays the peer's ORIGINAL swing
         // (its own counter) to other clients rather than re-deriving one from its brief overlay.
         std::map<ESM::RefNum, std::optional<SwingState>> mAvatarSwing;
@@ -270,6 +300,9 @@ namespace MWNet
         /// last played, play the attack segment once on the actor's upper body. No-op while the
         /// counter is unchanged, so a continuously-active weapon animation never re-fires.
         void applySwing(const MWWorld::Ptr& actor, const ESM::RefNum& id, const SwingState& swing);
+        // Reproduce a remote caster's cosmetic spell visuals (cast aura, glowing hands, and a non-damaging
+        // bolt for target spells) without applying any gameplay effect.
+        void applyCastEffects(const MWWorld::Ptr& actor, MWRender::Animation* animation, const ESM::RefId& spellId);
         void applyJump(const MWWorld::Ptr& actor, const ESM::RefNum& id, bool airborne);
 
         /// React visibly to a drop in an actor's replicated health: make it flinch (hit-recovery

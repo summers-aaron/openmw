@@ -28,8 +28,6 @@ namespace MWMechanics
 
         void playSpellCastingEffects(const std::vector<ESM::IndexedENAMstruct>& effects) const;
 
-        void explodeSpell(const ESM::EffectList& effects, const MWWorld::Ptr& ignore, ESM::RangeType rangeType) const;
-
         /// Launch a bolt with the given effects.
         void launchMagicBolt() const;
 
@@ -71,6 +69,12 @@ namespace MWMechanics
         /// @note \a target can be any type of object, not just actors.
         void inflict(const MWWorld::Ptr& target, const ESM::EffectList& effects, ESM::RangeType range,
             bool exploded = false) const;
+
+        /// Spawn the impact/area explosion effects (orb + sound) at mHitPosition. With \a visualOnly the
+        /// effects are only shown, never applied to actors in range — used to mirror a networked caster's
+        /// bolt impact on a peer that does not own the caster (no gameplay).
+        void explodeSpell(const ESM::EffectList& effects, const MWWorld::Ptr& ignore, ESM::RangeType rangeType,
+            bool visualOnly = false) const;
     };
 
     void playEffects(const MWWorld::Ptr& target, const ESM::MagicEffect& magicEffect, bool playNonLooping = true);

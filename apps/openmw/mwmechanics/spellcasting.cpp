@@ -38,7 +38,7 @@ namespace MWMechanics
     }
 
     void CastSpell::explodeSpell(
-        const ESM::EffectList& effects, const MWWorld::Ptr& ignore, ESM::RangeType rangeType) const
+        const ESM::EffectList& effects, const MWWorld::Ptr& ignore, ESM::RangeType rangeType, bool visualOnly) const
     {
         const auto world = MWBase::Environment::get().getWorld();
         std::map<MWWorld::Ptr, std::vector<ESM::IndexedENAMstruct>> toApply;
@@ -90,6 +90,8 @@ namespace MWMechanics
                         world->getStore().get<ESM::Skill>().find(effect->mData.mSchool)->mSchool->mAreaSound, 1.0f,
                         1.0f);
             }
+            if (visualOnly)
+                continue; // mirror only the explosion's look/sound; never gather or affect actors
             // Get the actors in range of the effect
             std::vector<MWWorld::Ptr> objects;
             static const int unitsPerFoot = static_cast<int>(std::ceil(Constants::UnitsPerFoot));

@@ -67,9 +67,24 @@ second move).
 - Two clients connect to a headless dedicated server and load the shared save.
 - Clients **see each other as avatars** with the correct race/sex/head/hair and worn
   equipment.
-- Remote avatars **animate**: walk/idle locomotion at the right speed, run/sneak gait,
-  weapon draw, and discrete melee/spell **swings** (replicated as an edge-counter, not a
-  streamed playhead).
+- Remote avatars **animate** across the player animation state space:
+  - **locomotion** — walk/idle at the right speed, run/sneak gait, strafe, swimming, and
+    jump/fall/land (an airborne flag on the wire; the puppet's own controller plays the arc);
+  - **weapon draw / sheathe** and the combat stance;
+  - discrete **melee swings** (per-type: chop/slash/thrust) and **spell casts**, replicated
+    as an edge-counter (not a streamed playhead) so a free-running NPC weapon loop can't spawn
+    phantom swings. A weapon swing is sent in two slices — a **wind-up** (the avatar holds its
+    drawn-back charge pose for exactly as long as its owner holds the attack button) and a
+    **release** (the strike on let-go) — so a charged attack reads as hold-then-strike, not an
+    instant swing. A cast reproduces its **cosmetic VFX** — the body aura, glowing hands, and a
+    non-damaging bolt for target spells that leaves the hand at the animation's release key and
+    bursts on impact (gameplay stays authoritative on the caster);
+  - **shield blocks**, carried on the same discrete channel (detected from the block animation,
+    since the `getBlock()` flag is set and cleared within one mechanics pass);
+  - **hit reactions** — flinch on damage, **knockdown** and fatigue **knockout** (the
+    knocked-down flag rides a spare move-flag bit; knockout additionally falls out of replicated
+    fatigue), and **death** (from replicated health <= 0, picking the matching
+    death-knockdown/knockout variant because the knockdown state is replicated too).
 - Avatars **track their owner across cells**, interiors included (cell id on the wire +
   direct avatar migration).
 - **World NPCs are simulated by the host** and replicated to clients. A client stops
@@ -134,6 +149,26 @@ should be gated behind a verbose flag or removed before any merge.
 The avatar-as-non-primary-player approach is exercised against a headless host. A
 "host-that-also-plays" (one window is both authority and a rendered player) needs the
 avatar rendered on the host and is less tested.
+
+### 7. A few animation states are still not replicated
+
+The player animation state machine is covered (locomotion, jump, draw, swing, cast, block,
+hit/knockdown/knockout/death). Deliberately left out, low-value or fiddly:
+
+- **Turn-in-place** (`turnleft`/`turnright`, the foot-shuffle while pivoting without
+  translating). The controller derives it from a per-frame rotation *rate* it reads from
+  `Movement::mRotation`, but the avatar's rotation is set authoritatively each tick via
+  `rotateObject`, so there is no rate to read. Feeding a synthetic `mRotation` would fight the
+  authoritative rotation. Avatars still face the right way; they just don't shuffle their feet
+  while turning on the spot.
+- **Idle fidget variants** (`idle2`–`idle9`) and **`idlestorm`** (shielding from ash storms).
+  The fidgets are random cosmetic flavour; `idlestorm` is weather-driven and plays on the
+  avatar locally anyway when it stands in the same storm. Neither is worth a wire field.
+- **Attack strength.** A charged attack holds, strikes (`"<type> max attack"` -> `"<type> hit"`)
+  and recovers through its follow-through — but the *strength* it was charged to isn't replicated,
+  so the witness always plays the "small" follow-through rather than scaling to a half/full power
+  attack. (The strike and follow are played as two segments, like the controller does, so the
+  recovery doesn't span all three small/medium/large follows at once.)
 
 ## Roadmap (rough, next-first)
 
