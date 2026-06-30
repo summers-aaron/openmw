@@ -181,6 +181,11 @@ namespace MWBase
         /// Remove a non-primary player by index (index 0, the primary player, cannot be removed).
         virtual void removePlayer(std::size_t index) = 0;
 
+        /// Mint a unique RefNum for a host-spawned summoned creature, in a reserved content file so it
+        /// never collides with a client's locally-generated refs (which a normal generated RefNum,
+        /// counting down from -1, would share). Monotonic index; never reused.
+        virtual ESM::RefNum reserveNetworkSummonRefNum() = 0;
+
         virtual MWWorld::ESMStore& getStore() = 0;
         virtual const MWWorld::ESMStore& getStore() const = 0;
 

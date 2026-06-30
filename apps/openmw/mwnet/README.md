@@ -97,6 +97,13 @@ second move).
 - **World NPCs are simulated by the host** and replicated to clients. A client stops
   running local AI on a host-owned actor (`isRemoteOwned` → cease-remote-sim), so the two
   sides don't fight over the same actor.
+- **Summoned creatures** are host-authoritative. A host NPC's summon spawns host-side and
+  replicates like any NPC; a **player's** summon is intercepted on the client and routed to the
+  host (a `SummonAction`), which spawns the creature bound to that player's avatar. Because the
+  creature isn't in the shared save, the host carries a **spawn descriptor** (its creature RefId
+  + cell) on the wire so receivers instantiate it the first time they see it, then drive it like
+  any host-owned actor; its despawn (effect ended, or it died) is broadcast as a removal. Being
+  host-owned, its AI and combat ride the normal NPC / cross-peer-hit paths.
 - **Combat both ways:**
   - **PvP** — a client can damage another client; the hit is routed to the victim by
     network id and applied to their real player (with flinch / hit overlay).

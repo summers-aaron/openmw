@@ -112,6 +112,21 @@ namespace MWNet
         friend bool operator==(const ContainerRevoke&, const ContainerRevoke&) = default;
     };
 
+    /// A client's summon, routed to the host so the summoned creature is host-authoritative (owned and
+    /// simulated by the host, like any world NPC, so its AI and combat ride the normal paths). mSummoner
+    /// is the casting player's network id — the host spawns the creature bound to that player's avatar.
+    /// mEffectId is the summon magic effect's serialized RefId (the host maps it to the creature record).
+    /// mEnd false = spawn (the player cast the summon); true = despawn (the player's summon effect ended).
+    /// (netId, effectId) keys the host's registry that links the despawn back to the spawned creature.
+    struct SummonAction
+    {
+        ESM::RefNum mSummoner;
+        std::string mEffectId;
+        bool mEnd = false;
+
+        friend bool operator==(const SummonAction&, const SummonAction&) = default;
+    };
+
     /// One frame's worth of reported actions crossing the transport (Reliable channel).
     /// mHits / mDrops / mItemsTaken flow client -> host (resolve my action); mPlayerDamages flow
     /// host -> client (you were hit). mContainers flow BOTH ways (a changed lootable inventory). A
@@ -131,11 +146,14 @@ namespace MWNet
         std::vector<ContainerChange> mContainerChanges;
         // host -> the over-taking client: items it must drop from its inventory (lost a take race).
         std::vector<ContainerRevoke> mContainerRevokes;
+        // client -> host: spawn/despawn a host-authoritative summoned creature for the casting player.
+        std::vector<SummonAction> mSummons;
 
         bool empty() const
         {
             return mHits.empty() && mPlayerDamages.empty() && mDrops.empty() && mItemsTaken.empty()
-                && mContainers.empty() && mContainerChanges.empty() && mContainerRevokes.empty();
+                && mContainers.empty() && mContainerChanges.empty() && mContainerRevokes.empty()
+                && mSummons.empty();
         }
 
         friend bool operator==(const ActionBatch&, const ActionBatch&) = default;

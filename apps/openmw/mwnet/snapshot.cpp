@@ -7,7 +7,7 @@ namespace MWNet
     namespace
     {
         // Wire format version. Bumped if the layout below changes incompatibly.
-        constexpr std::uint8_t sVersion = 9;
+        constexpr std::uint8_t sVersion = 10;
 
         // EntityState field bits (mFieldMask, a uint16 to leave room for more states).
         constexpr std::uint16_t sFieldTransform = 1 << 0;
@@ -20,8 +20,10 @@ namespace MWNet
         constexpr std::uint16_t sFieldSpeed = 1 << 7;
         constexpr std::uint16_t sFieldCell = 1 << 8;
         constexpr std::uint16_t sFieldItem = 1 << 9;
+        constexpr std::uint16_t sFieldCreature = 1 << 10;
         constexpr std::uint16_t sKnownFields = sFieldTransform | sFieldStats | sFieldDrawState | sFieldAppearance
-            | sFieldEquipment | sFieldMoveFlags | sFieldSwing | sFieldSpeed | sFieldCell | sFieldItem;
+            | sFieldEquipment | sFieldMoveFlags | sFieldSwing | sFieldSpeed | sFieldCell | sFieldItem
+            | sFieldCreature;
 
         // Smallest possible encoded equipment entry: slot (1) + a zero-length item string (4).
         constexpr std::uint32_t sMinEquipmentBytes = 5;
@@ -65,6 +67,8 @@ namespace MWNet
                 fieldMask |= sFieldCell;
             if (entity.mItem)
                 fieldMask |= sFieldItem;
+            if (entity.mCreature)
+                fieldMask |= sFieldCreature;
             writer.write(fieldMask);
 
             if (entity.mTransform)
@@ -120,6 +124,8 @@ namespace MWNet
                 writer.writeString(entity.mItem->mRefId);
                 writer.write(entity.mItem->mCount);
             }
+            if (entity.mCreature)
+                writer.writeString(*entity.mCreature);
         }
 
         writer.write(static_cast<std::uint32_t>(delta.mRemovedItems.size()));
@@ -257,6 +263,13 @@ namespace MWNet
                 if (!reader.readString(item.mRefId) || !reader.read(item.mCount))
                     return std::nullopt;
                 entity.mItem = std::move(item);
+            }
+            if (fieldMask & sFieldCreature)
+            {
+                std::string creature;
+                if (!reader.readString(creature))
+                    return std::nullopt;
+                entity.mCreature = std::move(creature);
             }
 
             delta.mEntities.push_back(entity);

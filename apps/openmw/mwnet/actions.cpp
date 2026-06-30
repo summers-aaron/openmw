@@ -6,7 +6,7 @@ namespace MWNet
 {
     namespace
     {
-        constexpr std::uint8_t sVersion = 2;
+        constexpr std::uint8_t sVersion = 3;
         // Smallest encoded CombatHit: attacker RefNum (4+4) + victim RefNum (4+4) + damage
         // (float, 4) + health-damage flag (1).
         constexpr std::uint32_t sMinHitBytes = 21;
@@ -26,6 +26,8 @@ namespace MWNet
         constexpr std::uint32_t sMinContainerChangeBytes = 37;
         // Smallest encoded ContainerRevoke: target RefNum (8) + item (20).
         constexpr std::uint32_t sMinContainerRevokeBytes = 28;
+        // Smallest encoded SummonAction: summoner RefNum (8) + zero-length effect id (4) + flag (1).
+        constexpr std::uint32_t sMinSummonBytes = 13;
 
         void writeContainerItem(ByteWriter& writer, const ContainerItem& item)
         {
@@ -107,6 +109,14 @@ namespace MWNet
             writer.write(revoke.mTarget.mIndex);
             writer.write(revoke.mTarget.mContentFile);
             writeContainerItem(writer, revoke.mItem);
+        }
+        writer.write(static_cast<std::uint32_t>(batch.mSummons.size()));
+        for (const SummonAction& summon : batch.mSummons)
+        {
+            writer.write(summon.mSummoner.mIndex);
+            writer.write(summon.mSummoner.mContentFile);
+            writer.writeString(summon.mEffectId);
+            writer.write(static_cast<std::uint8_t>(summon.mEnd ? 1 : 0));
         }
         return out;
     }
@@ -245,6 +255,23 @@ namespace MWNet
                 || !readContainerItem(reader, revoke.mItem))
                 return std::nullopt;
             batch.mContainerRevokes.push_back(std::move(revoke));
+        }
+
+        std::uint32_t summonCount = 0;
+        if (!reader.read(summonCount))
+            return std::nullopt;
+        if (summonCount > reader.remaining() / sMinSummonBytes)
+            return std::nullopt;
+        batch.mSummons.reserve(summonCount);
+        for (std::uint32_t i = 0; i < summonCount; ++i)
+        {
+            SummonAction summon;
+            std::uint8_t end = 0;
+            if (!reader.read(summon.mSummoner.mIndex) || !reader.read(summon.mSummoner.mContentFile)
+                || !reader.readString(summon.mEffectId) || !reader.read(end))
+                return std::nullopt;
+            summon.mEnd = end != 0;
+            batch.mSummons.push_back(std::move(summon));
         }
         return batch;
     }

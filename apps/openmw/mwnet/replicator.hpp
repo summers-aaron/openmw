@@ -147,6 +147,8 @@ namespace MWNet
         // Client only: items this peer dropped / picked up, awaiting send to the host to resolve.
         std::vector<ItemDrop> mOutgoingDrops;
         std::vector<ESM::RefNum> mOutgoingTakes;
+        // Client only: this player's summon spawn/despawn requests, awaiting send to the host to resolve.
+        std::vector<SummonAction> mOutgoingSummons;
         // Client only: take/put requests against lootable inventories, awaiting host resolution.
         std::vector<ContainerChange> mOutgoingContainerChanges;
         // Host only: over-take corrections, awaiting send to the clients that lost a take race.
@@ -173,6 +175,12 @@ namespace MWNet
         // Used to tell a host-owned floor item apart from anything else when this peer deletes one
         // (picks it up), so only those are reported back to the host.
         std::set<ESM::RefNum> mReplicatedItems;
+        // Host only: the summoned-creature RefNums replicated last tick, so a summon that vanished from
+        // every summoner's map (its effect ended / it died) is detected and broadcast as a removal.
+        std::set<ESM::RefNum> mReplicatedSummons;
+        // Host only: a player's summon routed here via SummonAction, keyed by (summoner net id, effect
+        // id), so the matching despawn (or the summoner leaving) can find and delete the spawned creature.
+        std::map<std::pair<ESM::RefNum, std::string>, ESM::RefNum> mHostedSummons;
         // Host only: re-broadcast clients' players (avatars) so clients see each other.
         bool mRelayAvatars = false;
         // True on the host (the authority that resolves combat for the shared world).
@@ -218,6 +226,14 @@ namespace MWNet
         /// network id, so the host routes the damage to that player (PvP). healthDamage selects
         /// health vs fatigue.
         void reportHit(const MWWorld::Ptr& victim, float damage, bool healthDamage);
+
+        /// Client: route this player's summon to the host (which spawns it host-authoritatively) instead
+        /// of spawning it locally. Returns true if it was routed (the caller then skips its local spawn);
+        /// false if not handled (off the network, or not the local player), so the caller spawns normally.
+        bool reportSummon(const ESM::RefId& effectId, const MWWorld::Ptr& summoner);
+
+        /// Client: tell the host this player's summon effect ended, so it despawns the host-owned creature.
+        void reportSummonEnd(const ESM::RefId& effectId, const MWWorld::Ptr& summoner);
 
         /// Report (host only) that a host-owned actor dealt damage to a remote player's avatar,
         /// so the owning client can apply it to its real player. A no-op off the authority or if

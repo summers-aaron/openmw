@@ -178,6 +178,13 @@ namespace MWNet
         // RefNum like any other entity). Re-advertised on full-refresh ticks; the high-frequency
         // actor fields (stats/draw/swing/...) are never set on an item.
         std::optional<ItemState> mItem;
+        // Present iff this entity is a dynamically SUMMONED creature (not in the shared save), carrying
+        // the creature record's serialized-text RefId so a receiver can instantiate it the first time it
+        // sees it (then track and drive it by its RefNum like any other host-owned actor). Re-advertised
+        // on full-refresh ticks. Summons are host-authoritative: the host owns the creature (a player's
+        // summon is routed to the host, which spawns it bound to the summoner's avatar), so its combat
+        // and AI ride the normal NPC paths.
+        std::optional<std::string> mCreature;
 
         friend bool operator==(const EntityState&, const EntityState&) = default;
     };

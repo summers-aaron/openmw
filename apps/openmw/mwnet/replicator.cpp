@@ -33,6 +33,7 @@
 #include "../mwmechanics/drawstate.hpp"
 #include "../mwmechanics/movement.hpp"
 #include "../mwmechanics/spellcasting.hpp"
+#include "../mwmechanics/summoning.hpp"
 #include "../mwmechanics/weapontype.hpp"
 #include "../mwmechanics/stat.hpp"
 
@@ -406,7 +407,8 @@ namespace MWNet
                                  std::optional<AppearanceState> appearance = std::nullopt,
                                  std::optional<std::vector<EquipmentSlot>> equipment = std::nullopt,
                                  std::optional<std::string> cellId = std::nullopt,
-                                 std::optional<ItemState> item = std::nullopt) {
+                                 std::optional<ItemState> item = std::nullopt,
+                                 std::optional<std::string> creature = std::nullopt) {
             // Appearance and equipment are deliberately outside the dedup key: they are only
             // ever passed on full-refresh ticks (which always resend anyway), so they never
             // perturb the change detection that decides whether to emit transform/stats at all.
@@ -432,6 +434,7 @@ namespace MWNet
             entity.mEquipment = std::move(equipment);
             entity.mCellId = std::move(cellId);
             entity.mItem = std::move(item);
+            entity.mCreature = std::move(creature);
             delta.mEntities.push_back(entity);
         };
 
@@ -477,6 +480,23 @@ namespace MWNet
         MWBase::Environment::get().getMechanicsManager()->getActorsInRange(
             player.getRefData().getPosition().asVec3(), std::numeric_limits<float>::max(), actors);
 
+        // Summoned creatures aren't in the shared save, so receivers must INSTANTIATE them from a spawn
+        // descriptor (their creature RefId). Collect every summon in range from its summoner's map (the
+        // host owns all summons — a player's is routed here and bound to its avatar — so this is
+        // host-only). Membership marks an actor below as a summon so its descriptor + cell ride along.
+        std::set<ESM::RefNum> summons;
+        if (mIsAuthority)
+        {
+            for (const MWWorld::Ptr& actor : actors)
+            {
+                if (actor.isEmpty() || !actor.getClass().isActor())
+                    continue;
+                for (const auto& [effect, refNum] : actor.getClass().getCreatureStats(actor).getSummonedCreatureMap())
+                    if (refNum.isSet())
+                        summons.insert(refNum);
+            }
+        }
+
         for (const MWWorld::Ptr& actor : actors)
         {
             if (actor.isEmpty())
@@ -491,11 +511,26 @@ namespace MWNet
             if (!id.isSet())
                 continue; // no stable network identity (e.g. the player ref, sent above)
 
+            // A summon carries its spawn descriptor (creature RefId) and cell so a receiver that has
+            // never seen it can instantiate it; both are sent every tick it's replicated (cheap — few
+            // summons) so it appears promptly rather than waiting for the next full refresh.
+            const bool isSummon = summons.contains(id);
             const ESM::Position& position = actor.getRefData().getPosition();
             include(id,
                 TransformState{ position.asVec3(), osg::Vec3f(position.rot[0], position.rot[1], position.rot[2]) },
                 sampleStats(actor), sampleDrawState(actor), sampleMoveFlags(actor), sampleSwing(actor, id),
-                sampleSpeed(actor));
+                sampleSpeed(actor), std::nullopt, std::nullopt, isSummon ? sampleCellId(actor) : std::nullopt,
+                std::nullopt, isSummon ? std::optional(actor.getCellRef().getRefId().serializeText()) : std::nullopt);
+        }
+
+        // A summon that vanished from every summoner's map since last tick (its effect ended or it died)
+        // is broadcast as a removal so receivers delete their instantiated copy.
+        if (mIsAuthority)
+        {
+            for (const ESM::RefNum& prev : mReplicatedSummons)
+                if (!summons.contains(prev))
+                    mPendingItemRemovals.push_back(prev);
+            mReplicatedSummons = std::move(summons);
         }
 
         // Host relay: re-broadcast each connected client's player (the avatar we hold) under its
@@ -1225,6 +1260,33 @@ namespace MWNet
             if (!applyWorldEntities)
                 continue;
 
+            // A summoned creature isn't in the shared save: instantiate it the first time we see it
+            // (like a loose item), adopting the host's RefNum, then fall through to the world-entity
+            // drive below which marks it remote-owned and applies its transform/stats/animation.
+            if (entity.mCreature && worldModel.getPtr(entity.mId).isEmpty())
+            {
+                const MWWorld::Ptr localPlayer = world.getPlayerPtr();
+                if (localPlayer.isEmpty() || !localPlayer.isInCell())
+                    continue;
+                MWWorld::CellStore* cell = entity.mCellId
+                    ? worldModel.findCell(ESM::RefId::deserializeText(*entity.mCellId))
+                    : nullptr;
+                if (cell == nullptr)
+                    cell = localPlayer.getCell();
+                try
+                {
+                    MWWorld::ManualRef ref(world.getStore(), ESM::RefId::deserializeText(*entity.mCreature), 1);
+                    MWWorld::Ptr placed = world.placeObject(ref.getPtr(), cell, toPosition(*entity.mTransform));
+                    worldModel.deregisterLiveCellRef(*placed.getBase()); // adopt the host's RefNum
+                    placed.getCellRef().setRefNum(entity.mId);
+                    worldModel.registerPtr(placed);
+                }
+                catch (const std::exception&)
+                {
+                    continue; // could not instantiate this tick; try again on the next update
+                }
+            }
+
             if (entity.mItem)
             {
                 // A loose item the host owns. Spawn it the first time we see it, adopting the host's
@@ -1421,6 +1483,43 @@ namespace MWNet
             if (!item.isEmpty() && item.getCellRef().getCount() > 0)
                 world.deleteObject(item);
         }
+
+        // A client routed its player's summon here so the creature is host-authoritative. Spawn it bound
+        // to the summoner's avatar (it follows/fights for that player, like the real summon) or, on the
+        // matching end, despawn it. sampleDelta then replicates the creature — and its later removal —
+        // like any host-owned world NPC, and combat rides the normal cross-peer paths.
+        if (mIsAuthority)
+        {
+            for (const SummonAction& summon : batch.mSummons)
+            {
+                const auto avatarIt = mAvatars.find(summon.mSummoner);
+                if (avatarIt == mAvatars.end() || avatarIt->second.isEmpty() || !avatarIt->second.isInCell())
+                    continue;
+                MWWorld::Ptr avatar = avatarIt->second;
+                const auto key = std::make_pair(summon.mSummoner, summon.mEffectId);
+                if (!summon.mEnd)
+                {
+                    if (mHostedSummons.find(key) != mHostedSummons.end())
+                        continue; // already have a live creature for this (summoner, effect)
+                    const ESM::RefNum creature
+                        = MWMechanics::summonCreature(ESM::RefId::deserializeText(summon.mEffectId), avatar);
+                    if (creature.isSet())
+                        mHostedSummons.emplace(key, creature);
+                }
+                else
+                {
+                    const auto it = mHostedSummons.find(key);
+                    if (it == mHostedSummons.end())
+                        continue;
+                    mechanics.cleanupSummonedCreature(it->second);
+                    // Drop it from the avatar's map so sampleDelta's despawn detection broadcasts removal.
+                    auto& map = avatar.getClass().getCreatureStats(avatar).getSummonedCreatureMap();
+                    for (auto m = map.begin(); m != map.end();)
+                        m = (m->second == it->second) ? map.erase(m) : std::next(m);
+                    mHostedSummons.erase(it);
+                }
+            }
+        }
     }
 
     ActionBatch Replicator::takeOutgoingActions()
@@ -1432,12 +1531,14 @@ namespace MWNet
         batch.mItemsTaken = std::move(mOutgoingTakes);
         batch.mContainerChanges = std::move(mOutgoingContainerChanges); // client -> host take/put requests
         batch.mContainerRevokes = std::move(mOutgoingRevokes); // host -> client over-take corrections
+        batch.mSummons = std::move(mOutgoingSummons); // client -> host summon spawn/despawn requests
         mOutgoingHits.clear();
         mOutgoingPlayerDamages.clear();
         mOutgoingDrops.clear();
         mOutgoingTakes.clear();
         mOutgoingContainerChanges.clear();
         mOutgoingRevokes.clear();
+        mOutgoingSummons.clear();
 
         // Host: periodically re-assert every changed lootable so a peer that arrived after a loot is
         // brought up to date, and so a container whose cell unloaded-and-reloaded (rolling it back to
@@ -1641,6 +1742,24 @@ namespace MWNet
             }
         }
         mOutgoingHits.push_back({ mLocalPlayerNetId, victimId, damage, healthDamage });
+    }
+
+    bool Replicator::reportSummon(const ESM::RefId& effectId, const MWWorld::Ptr& summoner)
+    {
+        // A client's own player summon is routed to the host instead of spawning locally, so the
+        // creature is host-authoritative. Only the local player's summons cross here (a client never
+        // simulates a host-owned NPC's summon); anything else falls back to a normal local spawn.
+        if (!mLocalPlayerNetId.isSet() || summoner != MWBase::Environment::get().getWorld()->getPlayerPtr())
+            return false;
+        mOutgoingSummons.push_back({ mLocalPlayerNetId, effectId.serializeText(), /*end=*/false });
+        return true;
+    }
+
+    void Replicator::reportSummonEnd(const ESM::RefId& effectId, const MWWorld::Ptr& summoner)
+    {
+        if (!mLocalPlayerNetId.isSet() || summoner != MWBase::Environment::get().getWorld()->getPlayerPtr())
+            return;
+        mOutgoingSummons.push_back({ mLocalPlayerNetId, effectId.serializeText(), /*end=*/true });
     }
 
     void Replicator::reportRemotePlayerHit(const MWWorld::Ptr& avatar, float damage, bool healthDamage)

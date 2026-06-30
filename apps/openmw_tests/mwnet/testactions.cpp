@@ -100,6 +100,20 @@ namespace MWNet
             EXPECT_EQ(parsed->mContainerRevokes[0].mItem.mCount, 15);
         }
 
+        TEST(MWNetActionsTest, summonsRoundTrip)
+        {
+            ActionBatch batch;
+            batch.mSummons.push_back({ ESM::RefNum{ 3, -1000 }, "summon scamp", /*end=*/false });
+            batch.mSummons.push_back({ ESM::RefNum{ 3, -1000 }, "summon scamp", /*end=*/true });
+            const std::optional<ActionBatch> parsed = deserializeActions(serializeActions(batch));
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(*parsed, batch);
+            ASSERT_EQ(parsed->mSummons.size(), 2u);
+            EXPECT_EQ(parsed->mSummons[0].mEffectId, "summon scamp");
+            EXPECT_FALSE(parsed->mSummons[0].mEnd);
+            EXPECT_TRUE(parsed->mSummons[1].mEnd);
+        }
+
         TEST(MWNetActionsTest, rejectsEmptyBuffer)
         {
             EXPECT_FALSE(deserializeActions(std::span<const std::byte>{}).has_value());
@@ -115,8 +129,9 @@ namespace MWNet
         TEST(MWNetActionsTest, rejectsImplausibleCount)
         {
             std::vector<std::byte> bytes = serializeActions(ActionBatch{});
-            // version + 7 4-byte 0 counts (hits, playerDamages, drops, taken, containers, changes, revokes)
-            ASSERT_EQ(bytes.size(), 29u);
+            // version + 8 4-byte 0 counts (hits, playerDamages, drops, taken, containers, changes,
+            // revokes, summons)
+            ASSERT_EQ(bytes.size(), 33u);
             for (std::size_t i = 0; i < 4; ++i)
                 bytes[1 + i] = std::byte{ 0xff }; // implausible hit count
             EXPECT_FALSE(deserializeActions(bytes).has_value());

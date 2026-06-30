@@ -3614,6 +3614,15 @@ namespace MWWorld
         return ptr;
     }
 
+    ESM::RefNum World::reserveNetworkSummonRefNum()
+    {
+        // A reserved content file, clear of real content (>= 0), generated refs (count down from -1),
+        // the net-player wire id (-1000) and network-player avatars (-2000). Clients never generate
+        // into it, so a host summon's RefNum can't collide with a client's local refs.
+        constexpr std::int32_t sNetworkSummonRefNumContentFile = -3000;
+        return ESM::RefNum{ mNextNetworkSummonRefNum++, sNetworkSummonRefNumContentFile };
+    }
+
     MWWorld::Ptr World::placeNetworkPlayer(const MWWorld::Ptr& ptr, MWWorld::CellStore& cell, const osg::Vec3f& position)
     {
         MWWorld::Player* player = mPlayers.findPlayer(ptr);

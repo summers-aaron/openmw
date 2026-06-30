@@ -17,6 +17,8 @@
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
 
+#include "../mwnet/replicator.hpp"
+
 #include "../mwmechanics/actorutil.hpp"
 #include "../mwmechanics/aifollow.hpp"
 #include "../mwmechanics/npcstats.hpp"
@@ -1076,6 +1078,11 @@ namespace MWMechanics
                 ESM::RefNum actor = effect.getActor();
                 if (actor.isSet())
                     MWBase::Environment::get().getMechanicsManager()->cleanupSummonedCreature(actor);
+                // Multiplayer: a client routed this summon to the host (so actor is unset locally); tell
+                // the host the effect ended so it despawns the host-owned creature it spawned for us.
+                if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+                    if (!replicator->isAuthority())
+                        replicator->reportSummonEnd(effect.mEffectId, target);
                 auto& summons = target.getClass().getCreatureStats(target).getSummonedCreatureMap();
                 auto [begin, end] = summons.equal_range(effect.mEffectId);
                 for (auto it = begin; it != end; ++it)

@@ -105,6 +105,10 @@ namespace MWWorld
         // every time, never reused, so a freshly added avatar can never collide with one still
         // referenced by an in-flight AiCombat target (which tracks its quarry purely by RefNum).
         std::uint32_t mNextNetworkPlayerRefNum = 1;
+        // Monotonic source of unique RefNum indices for host-spawned summoned creatures, in a reserved
+        // content file so they never collide with a client's locally-generated refs (its avatars and
+        // instantiated items use the normal generated space, which a host summon would otherwise share).
+        std::uint32_t mNextNetworkSummonRefNum = 1;
         // Dedicated server: the primary player is a stationary placeholder (no human controls it), so
         // the navmesh must follow the network avatars instead of it. Set by the engine at startup.
         bool mDedicatedServer = false;
@@ -258,6 +262,7 @@ namespace MWWorld
         MWWorld::Ptr placeNetworkPlayer(
             const MWWorld::Ptr& ptr, MWWorld::CellStore& cell, const osg::Vec3f& position) override;
         void removePlayer(std::size_t index) override;
+        ESM::RefNum reserveNetworkSummonRefNum() override;
         // Mark this World as belonging to a dedicated server (no local human player), so the navmesh
         // follows the network avatars rather than the stationary primary placeholder.
         void setDedicatedServer(bool value) { mDedicatedServer = value; }

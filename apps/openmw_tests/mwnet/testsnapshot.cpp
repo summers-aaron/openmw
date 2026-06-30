@@ -184,6 +184,22 @@ namespace MWNet
             EXPECT_EQ(parsed->mRemovedItems[1].mIndex, 8u);
         }
 
+        TEST(MWNetSnapshotTest, creatureSpawnRoundTrip)
+        {
+            SnapshotDelta delta;
+            EntityState summon = makeEntity(70, -2000, makeTransform(4.f));
+            summon.mCreature = "scamp"; // spawn descriptor for a host-owned summoned creature
+            summon.mCellId = "Bitter Coast Region";
+            delta.mEntities.push_back(summon);
+
+            const std::optional<SnapshotDelta> parsed = deserializeSnapshot(serializeSnapshot(delta));
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(*parsed, delta);
+            ASSERT_EQ(parsed->mEntities.size(), 1u);
+            ASSERT_TRUE(parsed->mEntities[0].mCreature.has_value());
+            EXPECT_EQ(*parsed->mEntities[0].mCreature, "scamp");
+        }
+
         TEST(MWNetSnapshotTest, swingAndSpeedRoundTrip)
         {
             SnapshotDelta delta;
