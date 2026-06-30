@@ -231,6 +231,13 @@ namespace MWNet
                 || group == "handtohand" || group == "spellcast";
         }
 
+        // The random standing-idle variations ("idle2".."idle9") an actor's AI plays as fidgets via the
+        // animation queue. Identified by name so they can ride the discrete channel like a swing.
+        bool isIdleFidget(std::string_view group)
+        {
+            return group.size() == 5 && group.starts_with("idle") && group[4] >= '2' && group[4] <= '9';
+        }
+
         // The spell or enchantment an actor is currently casting, as a serialized-text RefId, so a
         // receiver can reproduce the caster's cosmetic visuals. Mirrors how CharacterController picks the
         // id at cast time: the actor's selected spell, or — if none — the enchantment of its selected
@@ -771,9 +778,26 @@ namespace MWNet
         }
         wasBlocking = blocking;
 
+        // An idle fidget (idle2..idle9) — the random standing-idle variations an actor's AI plays via
+        // the animation queue. A remote actor's AI is suppressed on the receiver, so it never picks one
+        // itself; detect the authority playing one (on the lower body, where the full-body idle shows)
+        // and emit it on this channel so the receiver plays the same variation.
+        const std::string_view lower
+            = anim != nullptr ? anim->getActiveGroup(MWRender::BoneGroup_LowerBody) : std::string_view();
+        const bool fidgeting = isIdleFidget(lower);
+        bool& wasFidgeting = mWasFidgeting[id];
+        if (fidgeting && !wasFidgeting)
+        {
+            SwingState idle;
+            idle.mGroup = std::string(lower);
+            idle.mSeq = mSampledSwing[id].mSeq + 1;
+            mSampledSwing[id] = std::move(idle);
+        }
+        wasFidgeting = fidgeting;
+
         const auto it = mSampledSwing.find(id);
         if (it == mSampledSwing.end() || it->second.mSeq == 0)
-            return std::nullopt; // this actor has not swung, cast or blocked yet
+            return std::nullopt; // this actor has not swung, cast, blocked or fidgeted yet
         return it->second;
     }
 
@@ -796,6 +820,15 @@ namespace MWNet
         MWRender::Animation* animation = MWBase::Environment::get().getWorld()->getAnimation(actor);
         if (animation == nullptr || swing.mGroup.empty())
             return;
+        // An idle fidget (idle2..idle9) — play it through the animation queue exactly as the AI does, so
+        // the receiver's own controller owns it (and resumes the base idle when it ends) instead of
+        // fighting a hand-played group at idle priority.
+        if (isIdleFidget(swing.mGroup))
+        {
+            MWBase::Environment::get().getMechanicsManager()->playAnimationGroup(
+                actor, swing.mGroup, /*mode=*/0, /*number=*/1);
+            return;
+        }
         // A shield block is carried on this same discrete channel (it is a one-shot reaction, like a
         // swing). It plays "block start" -> "block stop" on the left arm only, so the avatar raises its
         // shield without disturbing its replicated locomotion or weapon pose — mirroring how the

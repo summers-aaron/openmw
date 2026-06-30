@@ -85,7 +85,10 @@ second move).
   - **hit reactions** — flinch on damage, **knockdown** and fatigue **knockout** (the
     knocked-down flag rides a spare move-flag bit; knockout additionally falls out of replicated
     fatigue), and **death** (from replicated health <= 0, picking the matching
-    death-knockdown/knockout variant because the knockdown state is replicated too).
+    death-knockdown/knockout variant because the knockdown state is replicated too);
+  - **idle fidgets** (`idle2`–`idle9`) — the random standing-idle variations an actor's AI plays
+    via the animation queue. A host-owned actor's AI is suppressed on the receiver, so it would
+    never fidget on its own; the authority's choice is detected and replayed through the same queue.
 - Avatars **track their owner across cells**, interiors included (cell id on the wire +
   direct avatar migration).
 - **World NPCs are simulated by the host** and replicated to clients. A client stops
@@ -162,9 +165,9 @@ hit/knockdown/knockout/death). Deliberately left out, low-value or fiddly:
   `rotateObject`, so there is no rate to read. Feeding a synthetic `mRotation` would fight the
   authoritative rotation. Avatars still face the right way; they just don't shuffle their feet
   while turning on the spot.
-- **Idle fidget variants** (`idle2`–`idle9`) and **`idlestorm`** (shielding from ash storms).
-  The fidgets are random cosmetic flavour; `idlestorm` is weather-driven and plays on the
-  avatar locally anyway when it stands in the same storm. Neither is worth a wire field.
+- **`idlestorm`** (shielding from ash storms) is not replicated, but it's weather-driven and the
+  avatar's own controller plays it locally when it stands in the same storm, so it needs no wire
+  field. (The random `idle2`–`idle9` fidgets *are* replicated — see "What works".)
 
 ## Roadmap (rough, next-first)
 

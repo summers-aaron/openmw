@@ -80,6 +80,9 @@ namespace MWNet
         // the same frame the cast begins, and sampleDelta runs at frame start — so, like a block, the
         // cast is detected from its animation and emitted on the swing channel once per rising edge.
         std::map<ESM::RefNum, bool> mWasCasting;
+        // Sampling side: each actor's idle-fidget state last tick (an idle2..idle9 group playing on the
+        // lower body), so a fidget emits on the discrete channel once per rising edge — like a swing.
+        std::map<ESM::RefNum, bool> mWasFidgeting;
         std::map<ESM::RefNum, SwingState> mSampledSwing;
         // Applying side: the swing counter last played on each actor, so a received swing fires its
         // segment exactly once — when the counter changes. The first counter seen for an actor is
