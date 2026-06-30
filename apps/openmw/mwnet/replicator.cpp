@@ -1655,6 +1655,7 @@ namespace MWNet
         batch.mHits = std::move(mOutgoingHits);
         batch.mPlayerDamages = std::move(mOutgoingPlayerDamages);
         batch.mBounties = std::move(mOutgoingBounties); // host -> client new total bounties
+        batch.mSpeech = std::move(mOutgoingSpeech); // host -> clients voiced NPC lines
         batch.mDrops = std::move(mOutgoingDrops);
         batch.mItemsTaken = std::move(mOutgoingTakes);
         batch.mContainerChanges = std::move(mOutgoingContainerChanges); // client -> host take/put requests
@@ -1663,6 +1664,7 @@ namespace MWNet
         mOutgoingHits.clear();
         mOutgoingPlayerDamages.clear();
         mOutgoingBounties.clear();
+        mOutgoingSpeech.clear();
         mOutgoingDrops.clear();
         mOutgoingTakes.clear();
         mOutgoingContainerChanges.clear();
@@ -1905,6 +1907,37 @@ namespace MWNet
                                     << " damage to remote player " << netId.mIndex;
                 return;
             }
+        }
+    }
+
+    void Replicator::reportNpcSpeech(const MWWorld::ConstPtr& actor, std::string_view sound)
+    {
+        // Only the host replicates speech: it owns and simulates the world's NPCs, so every NPC say()
+        // happens here. Off the authority (a client, or single-player/loopback) this is a no-op, so SP
+        // stays unchanged and a client never echoes its own local audio.
+        if (!mIsAuthority || actor.isEmpty() || sound.empty())
+            return;
+        const ESM::RefNum id = actor.getCellRef().getRefNum();
+        // Need a stable world RefNum the clients can resolve. Skip avatars (a remote player's puppet,
+        // whose voice its own client plays) and the host's anchor player; only genuine world actors cross.
+        if (!id.isSet() || isNetPlayer(id) || actor.mRef == MWBase::Environment::get().getWorld()->getPlayerPtr().mRef)
+            return;
+        mOutgoingSpeech.push_back({ id, std::string(sound) });
+    }
+
+    void Replicator::applyNpcSpeech(const ActionBatch& batch)
+    {
+        if (batch.mSpeech.empty())
+            return;
+        MWWorld::WorldModel& worldModel = *MWBase::Environment::get().getWorldModel();
+        MWBase::SoundManager& soundMgr = *MWBase::Environment::get().getSoundManager();
+        for (const NpcSpeech& speech : batch.mSpeech)
+        {
+            const MWWorld::Ptr actor = worldModel.getPtr(speech.mActor);
+            // Its cell isn't loaded here (the actor is out of range) — nothing to play it on.
+            if (actor.isEmpty() || !actor.isInCell() || !actor.getClass().isActor())
+                continue;
+            soundMgr.say(actor, VFS::Path::Normalized(speech.mSound));
         }
     }
 

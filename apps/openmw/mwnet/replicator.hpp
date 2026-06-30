@@ -5,6 +5,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -146,6 +147,8 @@ namespace MWNet
         std::vector<PlayerDamage> mOutgoingPlayerDamages;
         // Host only: new total bounties for players whose avatar committed a crime, awaiting send.
         std::vector<PlayerBounty> mOutgoingBounties;
+        // Host only: voiced lines host-owned actors spoke this tick, awaiting broadcast to clients.
+        std::vector<NpcSpeech> mOutgoingSpeech;
         // Host only: a deferred assault on a host-owned actor, awaiting that actor's cell to finish
         // loading so its retaliation and the crime/witness reaction can take hold (see
         // driveRemoteActors). An avatar can act in a cell the host is still loading in the background,
@@ -260,6 +263,15 @@ namespace MWNet
         /// so the owning client can apply it to its real player. A no-op off the authority or if
         /// the struck Ptr isn't one of our avatars.
         void reportRemotePlayerHit(const MWWorld::Ptr& avatar, float damage, bool healthDamage);
+
+        /// Report (host only) that a host-owned actor spoke a voiced line, so every client replays it
+        /// on that actor. sound is the already-corrected voice file path the host resolved. A no-op off
+        /// the authority, for a transient/unset RefNum, or for a player/avatar (only world NPCs cross).
+        void reportNpcSpeech(const MWWorld::ConstPtr& actor, std::string_view sound);
+
+        /// Apply received speech reports (client only): play each voiced line on the host-owned actor
+        /// it names, if that actor's cell is loaded here (you only hear NPCs near you).
+        void applyNpcSpeech(const ActionBatch& batch);
 
         /// Report (from a client) that this peer dropped an item into the shared world, for the
         /// host to place authoritatively and replicate back to everyone. cellId is the serialized

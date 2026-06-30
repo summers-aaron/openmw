@@ -288,6 +288,7 @@ void OMW::Engine::pumpTransport()
                         mReplicator->applyIncomingPlayerDamage(*actions);
                         mReplicator->applyIncomingPlayerBounty(*actions); // crime bounty the host gave our avatar
                         mReplicator->applyContainerRevokes(*actions); // drop items we lost a take race for
+                        mReplicator->applyNpcSpeech(*actions); // replay voiced lines host NPCs spoke
                     }
                     // Authoritative lootable contents flow host -> clients; the host relays them onward.
                     mReplicator->applyContainers(*actions, /*relay=*/authority);

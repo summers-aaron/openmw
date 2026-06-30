@@ -6,7 +6,7 @@ namespace MWNet
 {
     namespace
     {
-        constexpr std::uint8_t sVersion = 4;
+        constexpr std::uint8_t sVersion = 5;
         // Smallest encoded CombatHit: attacker RefNum (4+4) + victim RefNum (4+4) + damage
         // (float, 4) + health-damage flag (1).
         constexpr std::uint32_t sMinHitBytes = 21;
@@ -30,6 +30,8 @@ namespace MWNet
         constexpr std::uint32_t sMinSummonBytes = 13;
         // Smallest encoded PlayerBounty: target RefNum (4 + 4) + bounty (int32, 4).
         constexpr std::uint32_t sMinBountyBytes = 12;
+        // Smallest encoded NpcSpeech: actor RefNum (4 + 4) + zero-length sound path (4).
+        constexpr std::uint32_t sMinSpeechBytes = 12;
 
         void writeContainerItem(ByteWriter& writer, const ContainerItem& item)
         {
@@ -126,6 +128,13 @@ namespace MWNet
             writer.write(bounty.mTarget.mIndex);
             writer.write(bounty.mTarget.mContentFile);
             writer.write(bounty.mBounty);
+        }
+        writer.write(static_cast<std::uint32_t>(batch.mSpeech.size()));
+        for (const NpcSpeech& speech : batch.mSpeech)
+        {
+            writer.write(speech.mActor.mIndex);
+            writer.write(speech.mActor.mContentFile);
+            writer.writeString(speech.mSound);
         }
         return out;
     }
@@ -296,6 +305,21 @@ namespace MWNet
                 || !reader.read(bounty.mBounty))
                 return std::nullopt;
             batch.mBounties.push_back(bounty);
+        }
+
+        std::uint32_t speechCount = 0;
+        if (!reader.read(speechCount))
+            return std::nullopt;
+        if (speechCount > reader.remaining() / sMinSpeechBytes)
+            return std::nullopt;
+        batch.mSpeech.reserve(speechCount);
+        for (std::uint32_t i = 0; i < speechCount; ++i)
+        {
+            NpcSpeech speech;
+            if (!reader.read(speech.mActor.mIndex) || !reader.read(speech.mActor.mContentFile)
+                || !reader.readString(speech.mSound))
+                return std::nullopt;
+            batch.mSpeech.push_back(std::move(speech));
         }
         return batch;
     }

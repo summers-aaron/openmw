@@ -139,6 +139,21 @@ namespace MWNet
         friend bool operator==(const SummonAction&, const SummonAction&) = default;
     };
 
+    /// Host -> clients: a host-owned actor spoke a voiced line (a combat taunt, a greeting, a hit
+    /// grunt, a scripted Say). The host owns and simulates the world's NPCs, so all their say()
+    /// calls happen host-side; clients run no AI for those actors and would otherwise stay silent.
+    /// mActor is the speaking actor's world RefNum; mSound is the already-corrected voice file path
+    /// the host resolved (replicating the resolved file, not the dialogue topic, keeps it
+    /// deterministic — the client just plays it, no re-filtering). Cosmetic only: the audio plays on
+    /// whichever peers have that actor's cell loaded; gameplay stays authoritative on the host.
+    struct NpcSpeech
+    {
+        ESM::RefNum mActor;
+        std::string mSound;
+
+        friend bool operator==(const NpcSpeech&, const NpcSpeech&) = default;
+    };
+
     /// One frame's worth of reported actions crossing the transport (Reliable channel).
     /// mHits / mDrops / mItemsTaken flow client -> host (resolve my action); mPlayerDamages flow
     /// host -> client (you were hit). mContainers flow BOTH ways (a changed lootable inventory). A
@@ -162,12 +177,14 @@ namespace MWNet
         std::vector<SummonAction> mSummons;
         // host -> clients: a player's new total crime bounty after the host resolved a crime for it.
         std::vector<PlayerBounty> mBounties;
+        // host -> clients: voiced lines a host-owned actor spoke, for clients to replay on that actor.
+        std::vector<NpcSpeech> mSpeech;
 
         bool empty() const
         {
             return mHits.empty() && mPlayerDamages.empty() && mDrops.empty() && mItemsTaken.empty()
                 && mContainers.empty() && mContainerChanges.empty() && mContainerRevokes.empty()
-                && mSummons.empty() && mBounties.empty();
+                && mSummons.empty() && mBounties.empty() && mSpeech.empty();
         }
 
         friend bool operator==(const ActionBatch&, const ActionBatch&) = default;
