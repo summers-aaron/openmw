@@ -6,7 +6,7 @@ namespace MWNet
 {
     namespace
     {
-        constexpr std::uint8_t sVersion = 7;
+        constexpr std::uint8_t sVersion = 8;
         // Smallest encoded CombatHit: attacker RefNum (4+4) + victim RefNum (4+4) + damage
         // (float, 4) + health-damage flag (1).
         constexpr std::uint32_t sMinHitBytes = 21;
@@ -35,6 +35,8 @@ namespace MWNet
         constexpr std::uint32_t sMinSpeechBytes = 16;
         // Smallest encoded ArrestRequest: target RefNum (4 + 4) + guard RefNum (4 + 4).
         constexpr std::uint32_t sMinArrestBytes = 16;
+        // Smallest encoded CombatRequest: instigator RefNum (4 + 4) + target RefNum (4 + 4).
+        constexpr std::uint32_t sMinCombatRequestBytes = 16;
 
         void writeContainerItem(ByteWriter& writer, const ContainerItem& item)
         {
@@ -147,6 +149,14 @@ namespace MWNet
             writer.write(arrest.mTarget.mContentFile);
             writer.write(arrest.mGuard.mIndex);
             writer.write(arrest.mGuard.mContentFile);
+        }
+        writer.write(static_cast<std::uint32_t>(batch.mCombatRequests.size()));
+        for (const CombatRequest& request : batch.mCombatRequests)
+        {
+            writer.write(request.mInstigator.mIndex);
+            writer.write(request.mInstigator.mContentFile);
+            writer.write(request.mTarget.mIndex);
+            writer.write(request.mTarget.mContentFile);
         }
         return out;
     }
@@ -347,6 +357,21 @@ namespace MWNet
                 || !reader.read(arrest.mGuard.mIndex) || !reader.read(arrest.mGuard.mContentFile))
                 return std::nullopt;
             batch.mArrests.push_back(arrest);
+        }
+
+        std::uint32_t combatRequestCount = 0;
+        if (!reader.read(combatRequestCount))
+            return std::nullopt;
+        if (combatRequestCount > reader.remaining() / sMinCombatRequestBytes)
+            return std::nullopt;
+        batch.mCombatRequests.reserve(combatRequestCount);
+        for (std::uint32_t i = 0; i < combatRequestCount; ++i)
+        {
+            CombatRequest request;
+            if (!reader.read(request.mInstigator.mIndex) || !reader.read(request.mInstigator.mContentFile)
+                || !reader.read(request.mTarget.mIndex) || !reader.read(request.mTarget.mContentFile))
+                return std::nullopt;
+            batch.mCombatRequests.push_back(request);
         }
         return batch;
     }

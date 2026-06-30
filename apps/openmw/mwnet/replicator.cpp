@@ -1682,6 +1682,7 @@ namespace MWNet
         batch.mBounties = std::move(mOutgoingBounties); // host -> client new total bounties
         batch.mSpeech = std::move(mOutgoingSpeech); // host -> clients voiced NPC lines
         batch.mArrests = std::move(mOutgoingArrests); // host -> client open-arrest-dialogue
+        batch.mCombatRequests = std::move(mOutgoingCombatRequests); // client -> host host-actor-fight-me
         batch.mDrops = std::move(mOutgoingDrops);
         batch.mItemsTaken = std::move(mOutgoingTakes);
         batch.mContainerChanges = std::move(mOutgoingContainerChanges); // client -> host take/put requests
@@ -1692,6 +1693,7 @@ namespace MWNet
         mOutgoingBounties.clear();
         mOutgoingSpeech.clear();
         mOutgoingArrests.clear();
+        mOutgoingCombatRequests.clear();
         mOutgoingDrops.clear();
         mOutgoingTakes.clear();
         mOutgoingContainerChanges.clear();
@@ -2013,6 +2015,47 @@ namespace MWNet
             if (guard.isEmpty() || !guard.isInCell() || !guard.getClass().isActor())
                 continue; // the guard's cell isn't loaded here yet
             windowManager.pushGuiMode(MWGui::GM_Dialogue, guard);
+        }
+    }
+
+    bool Replicator::reportCombatStart(const MWWorld::Ptr& instigator, const MWWorld::Ptr& target)
+    {
+        // Only a networked client routes this. The instigator must be a host-owned actor (a remote-owned
+        // puppet here — the client can't authoritatively drive it) and the target must be our own player.
+        if (!isNetworkClient() || instigator.isEmpty() || target.isEmpty())
+            return false;
+        if (!instigator.getRefData().isRemoteOwned())
+            return false;
+        if (target.mRef != MWBase::Environment::get().getWorld()->getPlayerPtr().mRef)
+            return false;
+        const ESM::RefNum instigatorId = instigator.getCellRef().getRefNum();
+        if (!instigatorId.isSet())
+            return false;
+        mOutgoingCombatRequests.push_back({ instigatorId, mLocalPlayerNetId });
+        return true;
+    }
+
+    void Replicator::applyCombatRequests(const ActionBatch& batch)
+    {
+        if (!mIsAuthority || batch.mCombatRequests.empty())
+            return;
+        MWWorld::WorldModel& worldModel = *MWBase::Environment::get().getWorldModel();
+        MWBase::MechanicsManager& mechanics = *MWBase::Environment::get().getMechanicsManager();
+        for (const CombatRequest& request : batch.mCombatRequests)
+        {
+            const auto it = mAvatars.find(request.mTarget);
+            if (it == mAvatars.end() || it->second.isEmpty() || !it->second.isInCell())
+                continue; // we don't have this peer's avatar (yet)
+            const MWWorld::Ptr avatar = it->second;
+            const MWWorld::Ptr instigator = worldModel.getPtr(request.mInstigator);
+            if (instigator.isEmpty() || !instigator.isInCell() || !instigator.getClass().isActor()
+                || instigator.getClass().getCreatureStats(instigator).isDead())
+                continue; // the host actor isn't resolvable / not alive here
+            // Same authoritative call single-player makes on resist: the actor fights the avatar, and
+            // pin it so the fight persists if the avatar is briefly unreachable. startCombat also pulls
+            // any other guards pursuing this avatar into combat.
+            mechanics.startCombat(instigator, avatar, nullptr);
+            instigator.getClass().getCreatureStats(instigator).setHitAttemptActor(avatar.getCellRef().getRefNum());
         }
     }
 

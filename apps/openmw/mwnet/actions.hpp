@@ -170,6 +170,19 @@ namespace MWNet
         friend bool operator==(const ArrestRequest&, const ArrestRequest&) = default;
     };
 
+    /// A client -> host request to make a host-owned actor fight this client's player: the client can't
+    /// drive a host actor (its local copy is a suppressed puppet), so when something tells that actor to
+    /// attack the local player — the "resist arrest" dialogue's StartCombat, or any scripted aggression —
+    /// it routes the order to the host. mInstigator is the host actor's world RefNum (the guard); mTarget
+    /// is the requesting player's network id, whose avatar the host puts that actor into combat with.
+    struct CombatRequest
+    {
+        ESM::RefNum mInstigator;
+        ESM::RefNum mTarget;
+
+        friend bool operator==(const CombatRequest&, const CombatRequest&) = default;
+    };
+
     /// One frame's worth of reported actions crossing the transport (Reliable channel).
     /// mHits / mDrops / mItemsTaken flow client -> host (resolve my action); mPlayerDamages flow
     /// host -> client (you were hit). mContainers flow BOTH ways (a changed lootable inventory). A
@@ -197,12 +210,15 @@ namespace MWNet
         std::vector<NpcSpeech> mSpeech;
         // host -> the owning client: a guard caught its avatar, so it should open the arrest dialogue.
         std::vector<ArrestRequest> mArrests;
+        // client -> host: make a host-owned actor fight my avatar (resist arrest / scripted aggression).
+        std::vector<CombatRequest> mCombatRequests;
 
         bool empty() const
         {
             return mHits.empty() && mPlayerDamages.empty() && mDrops.empty() && mItemsTaken.empty()
                 && mContainers.empty() && mContainerChanges.empty() && mContainerRevokes.empty()
-                && mSummons.empty() && mBounties.empty() && mSpeech.empty() && mArrests.empty();
+                && mSummons.empty() && mBounties.empty() && mSpeech.empty() && mArrests.empty()
+                && mCombatRequests.empty();
         }
 
         friend bool operator==(const ActionBatch&, const ActionBatch&) = default;

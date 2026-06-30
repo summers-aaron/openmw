@@ -156,6 +156,9 @@ namespace MWNet
         std::vector<NpcSpeech> mOutgoingSpeech;
         // Host only: arrests (a guard caught a player's avatar) awaiting send to that player's client.
         std::vector<ArrestRequest> mOutgoingArrests;
+        // Client only: requests for the host to put a host-owned actor into combat with our player
+        // (resist arrest / scripted aggression), awaiting send to the host.
+        std::vector<CombatRequest> mOutgoingCombatRequests;
         // Host only: the subtitle for the very next say() — set by the caller that knows the line's
         // text (dialogue/script/Lua) immediately before it speaks, since say() itself carries only the
         // sound file. Consumed (and cleared) by the next reportNpcSpeech, so it never crosses lines.
@@ -297,6 +300,16 @@ namespace MWNet
         /// Apply received arrests (client only): if one names this peer's player, open the arrest
         /// dialogue with the guard it names (resolved to this peer's local copy by RefNum).
         void applyArrests(const ActionBatch& batch);
+
+        /// Route (client only) an order for a host-owned actor to fight this peer's own player — the
+        /// "resist arrest" StartCombat, or any scripted aggression a client can't drive itself — to the
+        /// host. Returns true if it was routed (the caller skips the local, suppressed-puppet combat);
+        /// false otherwise (off the network, the instigator isn't host-owned, or the target isn't us).
+        bool reportCombatStart(const MWWorld::Ptr& instigator, const MWWorld::Ptr& target);
+
+        /// Apply received combat requests (host only): put each named host-owned actor into combat with
+        /// the requesting player's avatar, authoritatively (the actor and its retaliation are host-owned).
+        void applyCombatRequests(const ActionBatch& batch);
 
         /// Apply received speech reports (client only): play each voiced line on the host-owned actor
         /// it names, if that actor's cell is loaded here (you only hear NPCs near you).

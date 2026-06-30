@@ -157,6 +157,20 @@ namespace MWNet
             EXPECT_EQ(parsed->mArrests[1].mGuard.mContentFile, 2);
         }
 
+        TEST(MWNetActionsTest, combatRequestsRoundTrip)
+        {
+            ActionBatch batch;
+            batch.mCombatRequests.push_back({ ESM::RefNum{ 88, 0 }, ESM::RefNum{ 7, -1000 } });
+            batch.mCombatRequests.push_back({ ESM::RefNum{ 0xabcd, 4 }, ESM::RefNum{ 3, -1000 } });
+            const std::optional<ActionBatch> parsed = deserializeActions(serializeActions(batch));
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(*parsed, batch);
+            ASSERT_EQ(parsed->mCombatRequests.size(), 2u);
+            EXPECT_EQ(parsed->mCombatRequests[0].mInstigator.mIndex, 88u);
+            EXPECT_EQ(parsed->mCombatRequests[0].mTarget.mIndex, 7u);
+            EXPECT_EQ(parsed->mCombatRequests[1].mInstigator.mContentFile, 4);
+        }
+
         TEST(MWNetActionsTest, rejectsEmptyBuffer)
         {
             EXPECT_FALSE(deserializeActions(std::span<const std::byte>{}).has_value());
@@ -172,9 +186,9 @@ namespace MWNet
         TEST(MWNetActionsTest, rejectsImplausibleCount)
         {
             std::vector<std::byte> bytes = serializeActions(ActionBatch{});
-            // version + 11 4-byte 0 counts (hits, playerDamages, drops, taken, containers, changes,
-            // revokes, summons, bounties, speech, arrests)
-            ASSERT_EQ(bytes.size(), 45u);
+            // version + 12 4-byte 0 counts (hits, playerDamages, drops, taken, containers, changes,
+            // revokes, summons, bounties, speech, arrests, combatRequests)
+            ASSERT_EQ(bytes.size(), 49u);
             for (std::size_t i = 0; i < 4; ++i)
                 bytes[1 + i] = std::byte{ 0xff }; // implausible hit count
             EXPECT_FALSE(deserializeActions(bytes).has_value());

@@ -29,6 +29,8 @@
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
 
+#include "../mwnet/replicator.hpp"
+
 #include "../mwsound/constants.hpp"
 
 #include "actor.hpp"
@@ -1699,6 +1701,13 @@ namespace MWMechanics
     void MechanicsManager::startCombat(
         const MWWorld::Ptr& ptr, const MWWorld::Ptr& target, const std::set<MWWorld::Ptr>* targetAllies)
     {
+        // Multiplayer: a host-owned actor being told to fight THIS client's player — the "resist arrest"
+        // dialogue's StartCombat, or any scripted aggression — must be resolved on the host, which owns
+        // that actor. Route it there and skip the local puppet's package (its AI is host-driven anyway).
+        if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+            if (replicator->reportCombatStart(ptr, target))
+                return;
+
         CreatureStats& stats = ptr.getClass().getCreatureStats(ptr);
 
         // Don't add duplicate packages nor add packages to dead actors.
