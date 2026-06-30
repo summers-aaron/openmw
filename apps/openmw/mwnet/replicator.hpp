@@ -92,6 +92,10 @@ namespace MWNet
         // moveflags. driveRemoteActors forces the puppet's physics grounded state from it each frame,
         // so the puppet's own controller plays jump/land and gates locomotion natively.
         std::map<ESM::RefNum, bool> mWasAirborne;
+        // Applying side: the turn-in-place direction of each driven actor (0 none, 1 left, 2 right),
+        // recorded from its move flags. driveRemoteActors loops the foot-shuffle on the lower body
+        // while it is set and disables it when it clears; the authoritative rotation still sets facing.
+        std::map<ESM::RefNum, std::uint8_t> mTurnState;
         // Applying side: a cast whose cosmetic bolt is waiting to be launched. The spell/type ride in a
         // SwingState; driveRemoteActors fires the bolt when the avatar's spellcast animation reaches the
         // "<type> release" key, so the bolt leaves the hands in step with the cast rather than at its start.
@@ -307,6 +311,7 @@ namespace MWNet
         // bolt for target spells) without applying any gameplay effect.
         void applyCastEffects(const MWWorld::Ptr& actor, MWRender::Animation* animation, const ESM::RefId& spellId);
         void applyJump(const MWWorld::Ptr& actor, const ESM::RefNum& id, bool airborne);
+        void applyTurn(const ESM::RefNum& id, std::uint8_t flags);
 
         /// React visibly to a drop in an actor's replicated health: make it flinch (hit-recovery
         /// animation, played by its own controller) and play the pain sound, once per hit. localPlayer

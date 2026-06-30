@@ -33,6 +33,7 @@
 #include "../mwmechanics/drawstate.hpp"
 #include "../mwmechanics/movement.hpp"
 #include "../mwmechanics/spellcasting.hpp"
+#include "../mwmechanics/weapontype.hpp"
 #include "../mwmechanics/stat.hpp"
 
 #include "../mwrender/animation.hpp"
@@ -269,7 +270,8 @@ namespace MWNet
         }
 
         // Read an actor's per-tick stance/reaction flags as a compact bit set for replication:
-        //   bit 0 run, bit 1 sneak (movement gait), bit 2 airborne (jump), bit 3 knocked down.
+        //   bit 0 run, bit 1 sneak (movement gait), bit 2 airborne (jump), bit 3 knocked down,
+        //   bit 4 turning left, bit 5 turning right (turn-in-place foot-shuffle).
         // Each is a SUSTAINED state the receiver mirrors onto the avatar so its own controller plays
         // the matching animation. (Discrete one-shot reactions — swings, casts, blocks — ride the
         // swing channel instead; transient flags reset within one mechanics pass aren't sampled here
@@ -301,6 +303,20 @@ namespace MWNet
             // death-knockout variant if it dies while down.
             if (stats.getKnockedDown())
                 flags |= 1 << 3;
+            // Turn-in-place. The controller plays "turnleft"/"turnright" on the lower body while the
+            // actor pivots without translating. The receiver's puppet has no rotation rate to re-derive
+            // it from (we set its facing authoritatively), so observe the animation here and carry it as
+            // a sustained flag; the receiver replays the foot-shuffle while it is set.
+            if (const MWRender::Animation* anim = world->getAnimation(actor))
+            {
+                // The active group may be a weapon variant ("turnleft1h", "1hturnleft" for a spell
+                // stance, ...), so match by substring rather than exact name.
+                const std::string_view lower = anim->getActiveGroup(MWRender::BoneGroup_LowerBody);
+                if (lower.find("turnleft") != std::string_view::npos)
+                    flags |= 1 << 4;
+                else if (lower.find("turnright") != std::string_view::npos)
+                    flags |= 1 << 5;
+            }
             return flags;
         }
 
@@ -614,6 +630,7 @@ namespace MWNet
                 mWasAirborne.erase(it->first);
                 mPendingCastBolt.erase(it->first);
                 mPendingFollow.erase(it->first);
+                mTurnState.erase(it->first);
                 it = mRemoteMotion.erase(it); // avatar gone (left range / disconnected) — stop driving it
                 continue;
             }
@@ -685,6 +702,48 @@ namespace MWNet
                         /*startpoint=*/0.f, /*loops=*/0);
                     mPendingFollow.erase(follow);
                 }
+            }
+
+            // Turn-in-place foot-shuffle: while the owner pivots and the avatar is stationary, loop the
+            // turn group. The receiver's controller can't derive it (we set its facing authoritatively,
+            // so it has no rotation rate), so play it explicitly over Priority_Movement so it covers the
+            // base idle; the facing stays exact. The group name and blend mask track the controller's own
+            // weapon-aware choice (refreshMovementAnims): no weapon -> "turn<dir>" on the whole body; a
+            // weapon with its own turn variant -> "turn<dir><shortGroup>" on the whole body; a weapon
+            // without one -> "turn<dir>" on the lower body, the weapon held on the upper body. When the
+            // turn ends or the actor starts moving, disable it so idle/locomotion resumes.
+            const auto turn = mTurnState.find(it->first);
+            const std::uint8_t turnDir = turn != mTurnState.end() ? turn->second : 0;
+            if (MWRender::Animation* anim = world.getAnimation(actor))
+            {
+                const std::string_view active = anim->getActiveGroup(MWRender::BoneGroup_LowerBody);
+                const bool playing = active.find("turnleft") != std::string_view::npos
+                    || active.find("turnright") != std::string_view::npos;
+                if (it->second.mFraction <= 0.f && turnDir != 0)
+                {
+                    std::string group = turnDir == 1 ? "turnleft" : "turnright";
+                    int mask = MWRender::BlendMask_All;
+                    if (actor.getClass().getCreatureStats(actor).getDrawState() != MWMechanics::DrawState::Nothing)
+                    {
+                        int weaponType = 0;
+                        MWMechanics::getActiveWeapon(actor, &weaponType);
+                        const std::string_view shortGroup = MWMechanics::getWeaponType(weaponType)->mShortGroup;
+                        if (!shortGroup.empty())
+                        {
+                            std::string variant = group + std::string(shortGroup);
+                            if (anim->hasAnimation(variant))
+                                group = std::move(variant); // whole-body weapon turn variant
+                            else
+                                mask = MWRender::BlendMask_LowerBody; // base turn legs, weapon on the arms
+                        }
+                    }
+                    if (active != group) // don't restart the loop while it's already the right group
+                        anim->play(group, MWRender::Animation::AnimPriority(MWMechanics::Priority_Movement), mask,
+                            /*autodisable=*/false, /*speedmult=*/1.f, "start", "stop", /*startpoint=*/0.f,
+                            /*loops=*/std::numeric_limits<std::uint32_t>::max());
+                }
+                else if (playing)
+                    anim->disable(std::string(active));
             }
             ++it;
         }
@@ -806,6 +865,13 @@ namespace MWNet
         // Record the authoritative airborne state; driveRemoteActors forces the puppet's grounded
         // state from it each frame, and the puppet's own controller plays jump/land from that.
         mWasAirborne[id] = airborne;
+    }
+
+    void Replicator::applyTurn(const ESM::RefNum& id, std::uint8_t flags)
+    {
+        // Record the turn-in-place direction (0 none, 1 left, 2 right) from the move-flag bits;
+        // driveRemoteActors loops the matching foot-shuffle on the lower body while it is set.
+        mTurnState[id] = (flags & (1 << 4)) ? 1 : (flags & (1 << 5)) ? 2 : 0;
     }
 
     void Replicator::applySwing(const MWWorld::Ptr& actor, const ESM::RefNum& id, const SwingState& swing)
@@ -1107,6 +1173,7 @@ namespace MWNet
                 {
                     applyMoveFlags(avatar, *entity.mMoveFlags); // before record: maxSpeed depends on stance
                     applyJump(avatar, entity.mId, (*entity.mMoveFlags & (1 << 2)) != 0);
+                    applyTurn(entity.mId, *entity.mMoveFlags);
                 }
                 recordMotion(entity.mId, avatar, entity.mTransform->mPosition, entity.mTransform->mRotation,
                     entity.mSpeed);
@@ -1203,6 +1270,7 @@ namespace MWNet
             {
                 applyMoveFlags(ptr, *entity.mMoveFlags); // before record: maxSpeed depends on stance
                 applyJump(ptr, entity.mId, (*entity.mMoveFlags & (1 << 2)) != 0);
+                applyTurn(entity.mId, *entity.mMoveFlags);
             }
             recordMotion(entity.mId, ptr, entity.mTransform->mPosition, entity.mTransform->mRotation, entity.mSpeed);
             world.moveObject(ptr, entity.mTransform->mPosition);

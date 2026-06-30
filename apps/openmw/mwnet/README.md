@@ -70,6 +70,9 @@ second move).
 - Remote avatars **animate** across the player animation state space:
   - **locomotion** — walk/idle at the right speed, run/sneak gait, strafe, swimming, and
     jump/fall/land (an airborne flag on the wire; the puppet's own controller plays the arc);
+  - **turn-in-place** — the `turnleft`/`turnright` foot-shuffle, observed from the lower body on the
+    authority and carried as two spare move-flag bits; the receiver loops the group explicitly (the
+    puppet has no rotation rate to re-derive it from) while the authoritative facing is unchanged;
   - **weapon draw / sheathe** and the combat stance;
   - discrete **melee swings** (per-type: chop/slash/thrust) and **spell casts**, replicated
     as an edge-counter (not a streamed playhead) so a free-running NPC weapon loop can't spawn
@@ -154,17 +157,11 @@ The avatar-as-non-primary-player approach is exercised against a headless host. 
 "host-that-also-plays" (one window is both authority and a rendered player) needs the
 avatar rendered on the host and is less tested.
 
-### 7. A few animation states are still not replicated
+### 7. A couple of animation states are still not replicated
 
-The player animation state machine is covered (locomotion, jump, draw, swing, cast, block,
-hit/knockdown/knockout/death). Deliberately left out, low-value or fiddly:
+The player animation state machine is covered (locomotion, turn-in-place, jump, draw, swing,
+cast, block, hit/knockdown/knockout/death, idle fidgets). Deliberately left out:
 
-- **Turn-in-place** (`turnleft`/`turnright`, the foot-shuffle while pivoting without
-  translating). The controller derives it from a per-frame rotation *rate* it reads from
-  `Movement::mRotation`, but the avatar's rotation is set authoritatively each tick via
-  `rotateObject`, so there is no rate to read. Feeding a synthetic `mRotation` would fight the
-  authoritative rotation. Avatars still face the right way; they just don't shuffle their feet
-  while turning on the spot.
 - **`idlestorm`** (shielding from ash storms) is not replicated, but it's weather-driven and the
   avatar's own controller plays it locally when it stands in the same storm, so it needs no wire
   field. (The random `idle2`–`idle9` fidgets *are* replicated — see "What works".)
