@@ -2407,6 +2407,15 @@ namespace MWMechanics
         return it->second->getCharacterController().getActiveAttackType();
     }
 
+    float Actors::getAttackStrength(const MWWorld::Ptr& ptr) const
+    {
+        const auto it = mIndex.find(ptr.mRef);
+        if (it == mIndex.end())
+            return -1.f;
+
+        return it->second->getCharacterController().getAttackStrength();
+    }
+
     int Actors::getGreetingTimer(const MWWorld::Ptr& ptr) const
     {
         const auto it = mIndex.find(ptr.mRef);

@@ -1941,6 +1941,11 @@ namespace MWMechanics
         return mActors.getActiveAttackType(ptr);
     }
 
+    float MechanicsManager::getAttackStrength(const MWWorld::Ptr& ptr) const
+    {
+        return mActors.getAttackStrength(ptr);
+    }
+
     void MechanicsManager::setWerewolf(const MWWorld::Ptr& actor, bool werewolf)
     {
         MWMechanics::NpcStats& npcStats = actor.getClass().getNpcStats(actor);

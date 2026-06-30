@@ -110,6 +110,10 @@ namespace MWNet
         // through the follow-through. A weapon swing emits a 1 when its owner begins charging and a 2
         // (new mSeq) when the owner lets go, so witnesses hold the pose for exactly as long as the owner.
         std::uint8_t mPhase = 0;
+        // How hard a weapon attack was charged, quantized to 0..255 (= 0..1). Only meaningful on a
+        // release (mPhase == 2); the receiver uses it to pick the small/medium/large follow-through and
+        // the strike's start point, so a power attack reads at full size rather than always "small".
+        std::uint8_t mStrength = 0;
 
         friend bool operator==(const SwingState&, const SwingState&) = default;
     };

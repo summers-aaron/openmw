@@ -265,6 +265,10 @@ namespace MWBase
         /// (slash/chop/thrust, or shoot/self/touch/target); empty if not mid-swing.
         virtual std::string_view getActiveAttackType(const MWWorld::Ptr& ptr) const = 0;
 
+        /// How far the actor's controller charged its current swing, 0..1 (set at release). -1 if the
+        /// actor has no controller. Used to replicate a power attack's strength to remote avatars.
+        virtual float getAttackStrength(const MWWorld::Ptr& ptr) const = 0;
+
         virtual void castSpell(const MWWorld::Ptr& ptr, const ESM::RefId& spellId, bool scriptedSpell) = 0;
 
         virtual void processChangedSettings(const std::set<std::pair<std::string, std::string>>& settings) = 0;

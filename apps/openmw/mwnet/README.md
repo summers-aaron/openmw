@@ -75,8 +75,9 @@ second move).
     as an edge-counter (not a streamed playhead) so a free-running NPC weapon loop can't spawn
     phantom swings. A weapon swing is sent in two slices — a **wind-up** (the avatar holds its
     drawn-back charge pose for exactly as long as its owner holds the attack button) and a
-    **release** (the strike on let-go) — so a charged attack reads as hold-then-strike, not an
-    instant swing. A cast reproduces its **cosmetic VFX** — the body aura, glowing hands, and a
+    **release** (the strike on let-go, played as a strike arc plus a strength-scaled
+    follow-through) — so a charged attack reads as hold-then-strike at the size it was charged to,
+    not an instant swing. A cast reproduces its **cosmetic VFX** — the body aura, glowing hands, and a
     non-damaging bolt for target spells that leaves the hand at the animation's release key and
     bursts on impact (gameplay stays authoritative on the caster);
   - **shield blocks**, carried on the same discrete channel (detected from the block animation,
@@ -164,11 +165,10 @@ hit/knockdown/knockout/death). Deliberately left out, low-value or fiddly:
 - **Idle fidget variants** (`idle2`–`idle9`) and **`idlestorm`** (shielding from ash storms).
   The fidgets are random cosmetic flavour; `idlestorm` is weather-driven and plays on the
   avatar locally anyway when it stands in the same storm. Neither is worth a wire field.
-- **Attack strength.** A charged attack holds, strikes (`"<type> max attack"` -> `"<type> hit"`)
-  and recovers through its follow-through — but the *strength* it was charged to isn't replicated,
-  so the witness always plays the "small" follow-through rather than scaling to a half/full power
-  attack. (The strike and follow are played as two segments, like the controller does, so the
-  recovery doesn't span all three small/medium/large follows at once.)
+- **On-actor hit flash for zero-area bolts.** Area spells and surface impacts show their explosion
+  on witnesses, but a *direct* zero-area bolt striking an actor shows nothing — vanilla puts that
+  visual in the on-target hit static (`playEffects`), which is gameplay-coupled and so isn't
+  reproduced on the cosmetic bolt.
 
 ## Roadmap (rough, next-first)
 

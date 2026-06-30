@@ -188,14 +188,14 @@ namespace MWNet
         {
             SnapshotDelta delta;
             EntityState swinging = makeEntity(40, -1000, makeTransform(1.f));
-            swinging.mSwing = SwingState{ "weapononehand", "thrust", 7u, "", /*phase=*/2 };
+            swinging.mSwing = SwingState{ "weapononehand", "thrust", 7u, "", /*phase=*/2, /*strength=*/200 };
             swinging.mSpeed = 123.5f;
             delta.mEntities.push_back(swinging);
             EntityState idle = makeEntity(41, -1000, makeTransform(2.f)); // no swing
             idle.mSpeed = 0.f;
             delta.mEntities.push_back(idle);
             EntityState casting = makeEntity(42, -1000, makeTransform(3.f));
-            casting.mSwing = SwingState{ "spellcast", "target", 3u, "fireball", /*phase=*/0 }; // carries the cast spell id
+            casting.mSwing = SwingState{ "spellcast", "target", 3u, "fireball", /*phase=*/0, /*strength=*/0 }; // carries the cast spell id
             delta.mEntities.push_back(casting);
 
             const std::optional<SnapshotDelta> parsed = deserializeSnapshot(serializeSnapshot(delta));
@@ -207,6 +207,7 @@ namespace MWNet
             EXPECT_EQ(parsed->mEntities[0].mSwing->mType, "thrust");
             EXPECT_EQ(parsed->mEntities[0].mSwing->mSeq, 7u);
             EXPECT_EQ(parsed->mEntities[0].mSwing->mPhase, 2); // release phase round-trips
+            EXPECT_EQ(parsed->mEntities[0].mSwing->mStrength, 200); // charge strength round-trips
             EXPECT_TRUE(parsed->mEntities[0].mSwing->mSpell.empty()); // melee carries no spell id
             EXPECT_EQ(parsed->mEntities[0].mSpeed, 123.5f);
             EXPECT_FALSE(parsed->mEntities[1].mSwing.has_value());

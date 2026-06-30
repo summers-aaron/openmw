@@ -664,8 +664,14 @@ namespace MWNet
                     mPendingFollow.erase(follow); // strike animation gone (interrupted) — drop it
                 else if (impactTime >= 0.f && now >= impactTime)
                 {
-                    const std::string followStart = type == "shoot" ? "shoot follow start" : type + " small follow start";
-                    const std::string followStop = type == "shoot" ? "shoot follow stop" : type + " small follow stop";
+                    // Pick the follow-through by how hard the attack was charged, like the controller:
+                    // small (<1/3), medium (<2/3), large (otherwise). Ranged has a single follow.
+                    const float strength = follow->second.mStrength / 255.f;
+                    const std::string_view tier = strength < 0.33f ? "small" : strength < 0.66f ? "medium" : "large";
+                    const std::string followStart
+                        = type == "shoot" ? "shoot follow start" : type + ' ' + std::string(tier) + " follow start";
+                    const std::string followStop
+                        = type == "shoot" ? "shoot follow stop" : type + ' ' + std::string(tier) + " follow stop";
                     anim->disable(group); // clear the held strike so play() restarts the group
                     anim->play(group, MWRender::Animation::AnimPriority(MWMechanics::Priority_Weapon),
                         MWRender::BlendMask_UpperBody, /*autodisable=*/true, /*speedmult=*/1.f, followStart, followStop,
@@ -724,6 +730,10 @@ namespace MWNet
         {
             SwingState release = mSampledSwing[id];
             release.mPhase = 2;
+            // Capture how hard the attack was charged (the controller finalizes mAttackStrength when it
+            // enters the release, which has happened by now). Quantize 0..1 to a byte for the wire.
+            const float strength = MWBase::Environment::get().getMechanicsManager()->getAttackStrength(actor);
+            release.mStrength = static_cast<std::uint8_t>(std::clamp(strength, 0.f, 1.f) * 255.f);
             release.mSeq = mSampledSwing[id].mSeq + 1;
             mSampledSwing[id] = std::move(release);
             mWindupPendingRelease[id] = false;
@@ -825,19 +835,33 @@ namespace MWNet
             // holds the small/medium/large follow-throughs and run all three in a row (the swing seeming
             // to loop three times), and stopping dead at the impact key snaps back with no recovery.
             const std::string impact = swing.mType == "shoot" ? "shoot release" : swing.mType + " hit";
+            const float strength = swing.mStrength / 255.f;
+            // Start point into the arc, scaled by charge so a weaker attack skips more of the wind-down —
+            // the controller's own formula (a stronger charge plays a fuller arc).
+            float startPoint = 0.f;
+            const float minAttackTime = animation->getTextKeyTime(swing.mGroup + ": " + swing.mType + " min attack");
+            const float maxAttackTime = animation->getTextKeyTime(swing.mGroup + ": " + swing.mType + " max attack");
+            if (minAttackTime != -1.f && minAttackTime < maxAttackTime)
+            {
+                startPoint = 1.f - strength;
+                const float minHitTime = animation->getTextKeyTime(swing.mGroup + ": " + swing.mType + " min hit");
+                const float hitTime = animation->getTextKeyTime(swing.mGroup + ": " + impact);
+                if (maxAttackTime <= minHitTime && minHitTime < hitTime)
+                    startPoint *= (minHitTime - maxAttackTime) / (hitTime - maxAttackTime);
+            }
             animation->play(swing.mGroup, MWRender::Animation::AnimPriority(MWMechanics::Priority_Weapon),
                 MWRender::BlendMask_UpperBody, /*autodisable=*/false, /*speedmult=*/1.f, swing.mType + " max attack",
-                impact, /*startpoint=*/0.f, /*loops=*/0);
+                impact, startPoint, /*loops=*/0);
             mPendingFollow[id] = swing;
             // The swing's swish — the swinger emits this in prepareHit(), which we don't run for a remote
-            // avatar. Reproduce it for melee/hand-to-hand only (no swish for ranged, thrown, or spells).
-            // Attack strength isn't replicated, so use a neutral volume/pitch.
+            // avatar. Reproduce it for melee/hand-to-hand only (no swish for ranged, thrown, or spells),
+            // scaling volume/pitch by the charge exactly as the controller does.
             if (swing.mGroup == "weapononehand" || swing.mGroup == "weapontwohand" || swing.mGroup == "weapontwowide"
                 || swing.mGroup == "handtohand")
             {
                 static const ESM::RefId weaponSwish = ESM::RefId::stringRefId("Weapon Swish");
-                MWBase::Environment::get().getSoundManager()->playSound3D(actor, weaponSwish, /*volume=*/0.99f,
-                    /*pitch=*/0.95f);
+                MWBase::Environment::get().getSoundManager()->playSound3D(
+                    actor, weaponSwish, /*volume=*/0.98f + strength * 0.02f, /*pitch=*/0.75f + strength * 0.4f);
             }
             return;
         }
