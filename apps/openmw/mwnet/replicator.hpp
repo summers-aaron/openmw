@@ -149,6 +149,8 @@ namespace MWNet
         std::vector<PlayerBounty> mOutgoingBounties;
         // Host only: voiced lines host-owned actors spoke this tick, awaiting broadcast to clients.
         std::vector<NpcSpeech> mOutgoingSpeech;
+        // Host only: arrests (a guard caught a player's avatar) awaiting send to that player's client.
+        std::vector<ArrestRequest> mOutgoingArrests;
         // Host only: the subtitle for the very next say() — set by the caller that knows the line's
         // text (dialogue/script/Lua) immediately before it speaks, since say() itself carries only the
         // sound file. Consumed (and cleared) by the next reportNpcSpeech, so it never crosses lines.
@@ -281,6 +283,15 @@ namespace MWNet
         /// on that actor. sound is the already-corrected voice file path the host resolved. A no-op off
         /// the authority, for a transient/unset RefNum, or for a player/avatar (only world NPCs cross).
         void reportNpcSpeech(const MWWorld::ConstPtr& actor, std::string_view sound);
+
+        /// Report (host only) that a guard caught a player's avatar to arrest it, so the arrest dialogue
+        /// opens on that player's client instead of on the host. Returns true if avatar was one of our
+        /// avatars (the caller then suppresses the host-side dialogue); false otherwise (handle locally).
+        bool reportArrest(const MWWorld::Ptr& avatar, const MWWorld::Ptr& guard);
+
+        /// Apply received arrests (client only): if one names this peer's player, open the arrest
+        /// dialogue with the guard it names (resolved to this peer's local copy by RefNum).
+        void applyArrests(const ActionBatch& batch);
 
         /// Apply received speech reports (client only): play each voiced line on the host-owned actor
         /// it names, if that actor's cell is loaded here (you only hear NPCs near you).

@@ -157,6 +157,19 @@ namespace MWNet
         friend bool operator==(const NpcSpeech&, const NpcSpeech&) = default;
     };
 
+    /// Host -> the owning client: a host guard pursuing that client's avatar for a crime has caught it,
+    /// so the client should open the arrest dialogue. The host can't show the client's UI (and opening
+    /// it on the host would pull the host's own player into the conversation), so it routes the arrest
+    /// to the avatar's owner. mTarget is that player's network id; mGuard is the arresting guard's world
+    /// RefNum, which the client resolves to its local copy of the guard to talk to.
+    struct ArrestRequest
+    {
+        ESM::RefNum mTarget;
+        ESM::RefNum mGuard;
+
+        friend bool operator==(const ArrestRequest&, const ArrestRequest&) = default;
+    };
+
     /// One frame's worth of reported actions crossing the transport (Reliable channel).
     /// mHits / mDrops / mItemsTaken flow client -> host (resolve my action); mPlayerDamages flow
     /// host -> client (you were hit). mContainers flow BOTH ways (a changed lootable inventory). A
@@ -182,12 +195,14 @@ namespace MWNet
         std::vector<PlayerBounty> mBounties;
         // host -> clients: voiced lines a host-owned actor spoke, for clients to replay on that actor.
         std::vector<NpcSpeech> mSpeech;
+        // host -> the owning client: a guard caught its avatar, so it should open the arrest dialogue.
+        std::vector<ArrestRequest> mArrests;
 
         bool empty() const
         {
             return mHits.empty() && mPlayerDamages.empty() && mDrops.empty() && mItemsTaken.empty()
                 && mContainers.empty() && mContainerChanges.empty() && mContainerRevokes.empty()
-                && mSummons.empty() && mBounties.empty() && mSpeech.empty();
+                && mSummons.empty() && mBounties.empty() && mSpeech.empty() && mArrests.empty();
         }
 
         friend bool operator==(const ActionBatch&, const ActionBatch&) = default;

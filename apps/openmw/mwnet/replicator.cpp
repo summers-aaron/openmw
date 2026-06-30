@@ -25,6 +25,7 @@
 #include "../mwbase/environment.hpp"
 #include "../mwbase/mechanicsmanager.hpp"
 #include "../mwbase/soundmanager.hpp"
+#include "../mwbase/guimode.hpp"
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
 
@@ -1658,6 +1659,7 @@ namespace MWNet
         batch.mPlayerDamages = std::move(mOutgoingPlayerDamages);
         batch.mBounties = std::move(mOutgoingBounties); // host -> client new total bounties
         batch.mSpeech = std::move(mOutgoingSpeech); // host -> clients voiced NPC lines
+        batch.mArrests = std::move(mOutgoingArrests); // host -> client open-arrest-dialogue
         batch.mDrops = std::move(mOutgoingDrops);
         batch.mItemsTaken = std::move(mOutgoingTakes);
         batch.mContainerChanges = std::move(mOutgoingContainerChanges); // client -> host take/put requests
@@ -1667,6 +1669,7 @@ namespace MWNet
         mOutgoingPlayerDamages.clear();
         mOutgoingBounties.clear();
         mOutgoingSpeech.clear();
+        mOutgoingArrests.clear();
         mOutgoingDrops.clear();
         mOutgoingTakes.clear();
         mOutgoingContainerChanges.clear();
@@ -1947,6 +1950,47 @@ namespace MWNet
             // sends it; each client decides whether to display it).
             if (!speech.mText.empty() && Settings::gui().mSubtitles)
                 MWBase::Environment::get().getWindowManager()->messageBox(speech.mText);
+        }
+    }
+
+    bool Replicator::reportArrest(const MWWorld::Ptr& avatar, const MWWorld::Ptr& guard)
+    {
+        if (!mIsAuthority || avatar.isEmpty() || guard.isEmpty())
+            return false;
+        const ESM::RefNum guardId = guard.getCellRef().getRefNum();
+        if (!guardId.isSet())
+            return false;
+        // Which remote player does this avatar stand in for? Route the arrest to that client.
+        for (const auto& [netId, ptr] : mAvatars)
+        {
+            if (ptr == avatar)
+            {
+                mOutgoingArrests.push_back({ netId, guardId });
+                Log(Debug::Verbose) << "Routing arrest of player " << netId.mIndex << " to its client (guard refNum=("
+                                    << guardId.mIndex << "," << guardId.mContentFile << "))";
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void Replicator::applyArrests(const ActionBatch& batch)
+    {
+        if (!mLocalPlayerNetId.isSet() || batch.mArrests.empty())
+            return;
+        MWWorld::WorldModel& worldModel = *MWBase::Environment::get().getWorldModel();
+        MWBase::WindowManager& windowManager = *MWBase::Environment::get().getWindowManager();
+        for (const ArrestRequest& arrest : batch.mArrests)
+        {
+            if (arrest.mTarget != mLocalPlayerNetId)
+                continue; // addressed to another player
+            // Already in a conversation (including this very arrest, opened a prior tick) — don't stack.
+            if (windowManager.containsMode(MWGui::GM_Dialogue))
+                continue;
+            const MWWorld::Ptr guard = worldModel.getPtr(arrest.mGuard);
+            if (guard.isEmpty() || !guard.isInCell() || !guard.getClass().isActor())
+                continue; // the guard's cell isn't loaded here yet
+            windowManager.pushGuiMode(MWGui::GM_Dialogue, guard);
         }
     }
 

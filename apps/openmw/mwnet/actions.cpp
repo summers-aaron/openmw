@@ -6,7 +6,7 @@ namespace MWNet
 {
     namespace
     {
-        constexpr std::uint8_t sVersion = 6;
+        constexpr std::uint8_t sVersion = 7;
         // Smallest encoded CombatHit: attacker RefNum (4+4) + victim RefNum (4+4) + damage
         // (float, 4) + health-damage flag (1).
         constexpr std::uint32_t sMinHitBytes = 21;
@@ -33,6 +33,8 @@ namespace MWNet
         // Smallest encoded NpcSpeech: actor RefNum (4 + 4) + zero-length sound path (4) + zero-length
         // subtitle (4).
         constexpr std::uint32_t sMinSpeechBytes = 16;
+        // Smallest encoded ArrestRequest: target RefNum (4 + 4) + guard RefNum (4 + 4).
+        constexpr std::uint32_t sMinArrestBytes = 16;
 
         void writeContainerItem(ByteWriter& writer, const ContainerItem& item)
         {
@@ -137,6 +139,14 @@ namespace MWNet
             writer.write(speech.mActor.mContentFile);
             writer.writeString(speech.mSound);
             writer.writeString(speech.mText);
+        }
+        writer.write(static_cast<std::uint32_t>(batch.mArrests.size()));
+        for (const ArrestRequest& arrest : batch.mArrests)
+        {
+            writer.write(arrest.mTarget.mIndex);
+            writer.write(arrest.mTarget.mContentFile);
+            writer.write(arrest.mGuard.mIndex);
+            writer.write(arrest.mGuard.mContentFile);
         }
         return out;
     }
@@ -322,6 +332,21 @@ namespace MWNet
                 || !reader.readString(speech.mSound) || !reader.readString(speech.mText))
                 return std::nullopt;
             batch.mSpeech.push_back(std::move(speech));
+        }
+
+        std::uint32_t arrestCount = 0;
+        if (!reader.read(arrestCount))
+            return std::nullopt;
+        if (arrestCount > reader.remaining() / sMinArrestBytes)
+            return std::nullopt;
+        batch.mArrests.reserve(arrestCount);
+        for (std::uint32_t i = 0; i < arrestCount; ++i)
+        {
+            ArrestRequest arrest;
+            if (!reader.read(arrest.mTarget.mIndex) || !reader.read(arrest.mTarget.mContentFile)
+                || !reader.read(arrest.mGuard.mIndex) || !reader.read(arrest.mGuard.mContentFile))
+                return std::nullopt;
+            batch.mArrests.push_back(arrest);
         }
         return batch;
     }
