@@ -141,6 +141,10 @@ namespace MWNet
         // This peer's own player network id (role-based: host vs client), so we never
         // instantiate an avatar for our own player echoed back.
         ESM::RefNum mLocalPlayerNetId;
+        // Whether the local player may be replicated. A connecting client clears this while it runs
+        // chargen (the multiplayer start path) so its half-built avatar isn't broadcast, and restores
+        // it once the character is finalized. Always true on the host and in single-player.
+        bool mLocalPlayerReady = true;
         // Client only: this peer's player bounty last mirrored across the wire, so a client-side change
         // (paying a fine, going to jail — all of which clear the bounty on the local player) is reported
         // to the host to clear the avatar's bounty, while a host-driven change isn't echoed back. The
@@ -230,6 +234,19 @@ namespace MWNet
     public:
         /// Identify this peer's player on the wire (host and each client get distinct ids).
         void setLocalPlayerNetId(ESM::RefNum id) { mLocalPlayerNetId = id; }
+
+        /// Whether this peer's own player may be replicated yet. Cleared on a connecting client while
+        /// it runs character generation (the multiplayer start path) so a half-built avatar is never
+        /// broadcast; set once chargen is finalized. Defaults true so single-player and the host —
+        /// which never run client chargen — are unaffected.
+        void setLocalPlayerReady(bool value) { mLocalPlayerReady = value; }
+        bool isLocalPlayerReady() const { return mLocalPlayerReady; }
+
+        /// Client multiplayer-start tick: while the local player isn't ready (still in chargen), watch
+        /// for the chargen GUI to close and then finalize the new character (mark chargen done, re-enable
+        /// the HUD, allow replication). Pumped every frame from the engine; a no-op once ready, so it
+        /// costs nothing on the host or in single-player.
+        void updateClientStart();
 
         /// Host only: relay other peers' players (the avatars we hold) back out under their
         /// network ids, so every client sees every other client's player, not just the host's.

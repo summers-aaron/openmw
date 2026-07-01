@@ -42,6 +42,11 @@ namespace MWGui
         CharacterCreation(osg::Group* parent, Resource::ResourceSystem* resourceSystem);
         virtual ~CharacterCreation();
 
+        // Begin character creation as a standalone, self-advancing sequence (no census-office intro
+        // scripts to push each menu). Opens the Name dialog and chains Name -> Race -> Class -> Birth
+        // -> Review on its own. Used by the multiplayer start path.
+        void start();
+
         // Show a dialog
         void spawnDialog(const GuiMode id);
 

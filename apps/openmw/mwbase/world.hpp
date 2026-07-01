@@ -125,6 +125,10 @@ namespace MWBase
         virtual void startNewGame(bool bypass) = 0;
         ///< \param bypass Bypass regular game start.
 
+        virtual void startNewGameMultiplayer(const std::string& startCell) = 0;
+        ///< Multiplayer start: build the player and world like a bypassed new game, but place the
+        ///< player in \a startCell and run character generation in place of the regular intro.
+
         virtual void clear() = 0;
 
         virtual size_t countSavedGameRecords() const = 0;

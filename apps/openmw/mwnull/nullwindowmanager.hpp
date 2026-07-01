@@ -25,6 +25,7 @@ namespace MWNull
         void playVideo(std::string_view name, bool allowSkipping, bool overrideSounds) override {}
 
         void setNewGame(bool newgame) override {}
+        void startCharacterCreation() override {}
 
         void setStore(const MWWorld::ESMStore& store) override {}
         void initUI() override {}

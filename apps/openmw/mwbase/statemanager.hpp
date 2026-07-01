@@ -54,6 +54,9 @@ namespace MWBase
         ///
         /// \param bypass Skip new game mechanics.
 
+        virtual void newGameMultiplayer(const std::string& startCell) = 0;
+        ///< Start a multiplayer client's game: run character generation, then spawn in startCell.
+
         virtual void resumeGame() = 0;
 
         virtual void deleteGame(const MWState::Character* character, const MWState::Slot* slot) = 0;

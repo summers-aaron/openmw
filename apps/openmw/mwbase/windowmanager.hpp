@@ -124,6 +124,11 @@ namespace MWBase
 
         virtual void setNewGame(bool newgame) = 0;
 
+        /// Begin character generation as a standalone, self-advancing sequence (used by the multiplayer
+        /// start path, where there is no census-office intro to push each menu). Requires setNewGame(true)
+        /// to have created the chargen controller first.
+        virtual void startCharacterCreation() = 0;
+
         /// Engine bootstrap + per-frame hooks. Promoted to the interface so the engine can
         /// drive any WindowManager (real or null) through a base pointer; the null no-ops them.
         virtual void setStore(const MWWorld::ESMStore& store) = 0;

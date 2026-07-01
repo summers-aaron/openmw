@@ -353,6 +353,79 @@ namespace MWWorld
         mPrng.seed(mRandomSeed);
     }
 
+    void World::startNewGameMultiplayer(const std::string& startCell)
+    {
+        // A connecting multiplayer client builds a fresh character on join: set up the world and player
+        // like a bypassed new game (no prison-ship intro), drop the player into startCell, then run the
+        // regular character-generation dialogs in place of the intro. Mirrors startNewGame(bypass=true)
+        // except chargen stays active (sCharGenState = 1) and the menus are driven directly.
+        mGoToJail = false;
+        mLevitationEnabled = true;
+        mTeleportEnabled = true;
+
+        mGodMode = false;
+        mScriptsEnabled = true;
+        mSky = true;
+
+        // Rebuild player
+        setupPlayer();
+
+        renderPlayer();
+        mRendering->getCamera()->reset();
+
+        // we don't want old weather to persist on a new game
+        mWeatherManager.reset();
+        mWeatherManager = std::make_unique<MWWorld::WeatherManager>(*mRendering.get(), mStore);
+
+        // Chargen is in progress (1), not bypassed (-1): the chargen-finished guards stay closed until
+        // the client finalizes the character (MWNet::Replicator::updateClientStart).
+        mGlobalVariables[Globals::sCharGenState].setInteger(1);
+
+        MWBase::Environment::get().getLuaManager()->newGameStarted();
+
+        // Place the player in the requested start cell. Reuse the same exterior-then-interior probe as
+        // the bypass path so a configurable exterior --start still works while the multiplayer default
+        // (the Census and Excise Office) resolves as an interior.
+        ESM::Position pos;
+        ESM::RefId cellId = findExteriorPosition(startCell, pos);
+        if (!cellId.empty())
+        {
+            changeToCell(cellId, pos, true);
+            adjustPosition(getPlayerPtr(), false);
+        }
+        else
+        {
+            findInteriorPosition(startCell, pos);
+            changeToInteriorCell(startCell, pos, true);
+        }
+
+        // The Census and Excise Office intro normally hands the player their Hospitality Papers to give
+        // to Sellus Gravius. We skip that scripted sequence, so add the papers directly to the fresh
+        // character (survives chargen — buildPlayer resets stats/skills but not the inventory).
+        {
+            const MWWorld::Ptr player = getPlayerPtr();
+            player.getClass().getContainerStore(player).add(ESM::RefId::stringRefId("bk_hospitality_papers"), 1);
+        }
+
+        // enable collision
+        if (!mPhysics->toggleCollisionMode())
+            mPhysics->toggleCollisionMode();
+
+        MWBase::Environment::get().getWindowManager()->updatePlayer();
+        mTimeManager->setup(mGlobalVariables);
+
+        // Initial seed.
+        mPrng.seed(mRandomSeed);
+
+        Log(Debug::Info) << "Multiplayer start: placed new character in cell '" << startCell << "' at "
+                         << pos.pos[0] << ", " << pos.pos[1] << ", " << pos.pos[2];
+
+        // Kick off character generation now that the player exists and is in a cell (the race dialog's
+        // live preview needs both). startCharacterCreation() runs the sequence standalone, chaining
+        // Name -> Race -> Class -> Birth -> Review without the census-office intro scripts.
+        MWBase::Environment::get().getWindowManager()->startCharacterCreation();
+    }
+
     void World::clear()
     {
         mWeatherManager->clear();

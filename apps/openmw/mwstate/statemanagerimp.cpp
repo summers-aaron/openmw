@@ -197,6 +197,43 @@ void MWState::StateManager::newGame(bool bypass)
     }
 }
 
+void MWState::StateManager::newGameMultiplayer(const std::string& startCell)
+{
+    cleanup();
+
+    try
+    {
+        Log(Debug::Info) << "Starting a multiplayer character in " << startCell;
+        // Add the standard startup scripts (the `main` global script and every StartScript). These are
+        // the normal new-game globals — unrelated to the prison-ship chargen scripts we deliberately skip
+        // — and are needed for a playable world.
+        MWBase::Environment::get().getScriptManager()->getGlobalScripts().addStartup();
+        // setNewGame(true) rebuilds the CharacterCreation controller and disallows the in-game windows;
+        // it must run before startNewGameMultiplayer pushes the first chargen mode so the controller
+        // exists to receive it.
+        MWBase::Environment::get().getWindowManager()->setNewGame(true);
+        MWBase::Environment::get().getWorld()->startNewGameMultiplayer(startCell);
+
+        mState = State_Running;
+        MWBase::Environment::get().getLuaManager()->gameLoaded();
+
+        MWBase::Environment::get().getWindowManager()->fadeScreenOut(0);
+        MWBase::Environment::get().getWindowManager()->fadeScreenIn(1);
+    }
+    catch (std::exception& e)
+    {
+        std::stringstream error;
+        error << "Failed to start multiplayer character: " << e.what();
+
+        Log(Debug::Error) << error.str();
+        cleanup(true);
+
+        std::vector<std::string> buttons;
+        buttons.emplace_back("#{Interface:OK}");
+        MWBase::Environment::get().getWindowManager()->interactiveMessageBox(error.str(), buttons);
+    }
+}
+
 void MWState::StateManager::endGame()
 {
     mState = State_Ended;

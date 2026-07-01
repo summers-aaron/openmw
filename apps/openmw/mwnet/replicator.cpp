@@ -54,6 +54,7 @@
 #include "../mwworld/manualref.hpp"
 #include "../mwworld/ptr.hpp"
 #include "../mwworld/refdata.hpp"
+#include "../mwworld/globals.hpp"
 #include "../mwworld/scene.hpp"
 #include "../mwworld/worldmodel.hpp"
 
@@ -392,6 +393,35 @@ namespace MWNet
         }
     }
 
+    void Replicator::updateClientStart()
+    {
+        // Only a connecting client mid-chargen has this cleared; the host and single-player never do,
+        // so this is a no-op for them (and for a client once its character is finalized).
+        if (mLocalPlayerReady)
+            return;
+
+        MWBase::WindowManager& windowManager = *MWBase::Environment::get().getWindowManager();
+
+        // Wait until every character-creation dialog has closed. The chargen state machine self-chains
+        // Name -> Race -> Class -> Birth -> Review and, on the Review "OK", pops the last mode; only then
+        // is the new character complete. Some of these (Class) push sub-modes (Pick/Create/Generate), so
+        // all of them must be absent before we treat chargen as finished.
+        static constexpr MWGui::GuiMode sChargenModes[] = { MWGui::GM_Name, MWGui::GM_Race, MWGui::GM_Class,
+            MWGui::GM_ClassGenerate, MWGui::GM_ClassPick, MWGui::GM_ClassCreate, MWGui::GM_Birth,
+            MWGui::GM_Review };
+        for (const MWGui::GuiMode mode : sChargenModes)
+            if (windowManager.containsMode(mode))
+                return;
+
+        // Chargen finished: mark it done (unblocks rest/save/quick-keys), re-enable the HUD and inventory
+        // windows that setNewGame(true) disallowed, and open the replication gate so the now-complete
+        // avatar starts broadcasting next tick.
+        MWBase::Environment::get().getWorld()->setGlobalInt(MWWorld::Globals::sCharGenState, -1);
+        windowManager.setNewGame(false);
+        mLocalPlayerReady = true;
+        Log(Debug::Info) << "Multiplayer chargen complete; replicating local player " << mLocalPlayerNetId;
+    }
+
     SnapshotDelta Replicator::sampleDelta()
     {
         SnapshotDelta delta;
@@ -451,7 +481,9 @@ namespace MWNet
         // avatar. Sent EVERY tick (not delta-filtered): it's the entity peers care about
         // most, so they should instantiate and track it immediately rather than waiting for
         // a full-refresh tick. Only when a network role assigned an id (SP leaves it unset).
-        if (mLocalPlayerNetId.isSet())
+        // Held back while the local player isn't ready (a client still in chargen) so peers
+        // never instantiate a half-built avatar before the character is finalized.
+        if (mLocalPlayerNetId.isSet() && mLocalPlayerReady)
         {
             const ESM::Position& pos = player.getRefData().getPosition();
             EntityState self;

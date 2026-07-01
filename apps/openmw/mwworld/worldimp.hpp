@@ -224,6 +224,8 @@ namespace MWWorld
         void startNewGame(bool bypass) override;
         ///< \param bypass Bypass regular game start.
 
+        void startNewGameMultiplayer(const std::string& startCell) override;
+
         void clear() override;
 
         size_t countSavedGameRecords() const override;

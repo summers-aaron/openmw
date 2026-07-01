@@ -565,6 +565,12 @@ namespace MWGui
         mStatsWatcher->forceUpdate();
     }
 
+    void WindowManager::startCharacterCreation()
+    {
+        if (mCharGen)
+            mCharGen->start();
+    }
+
     WindowManager::~WindowManager()
     {
         try

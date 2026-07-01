@@ -150,6 +150,8 @@ namespace MWGui
 
         void setNewGame(bool newgame) override;
 
+        void startCharacterCreation() override;
+
         void pushGuiMode(GuiMode mode, const MWWorld::Ptr& arg) override;
         void pushGuiMode(GuiMode mode) override;
         void popGuiMode(bool forceExit = false) override;

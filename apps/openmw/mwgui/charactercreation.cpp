@@ -151,6 +151,17 @@ namespace MWGui
             mReviewDialog->onFrame(duration);
     }
 
+    void CharacterCreation::start()
+    {
+        // Normally the census-office intro scripts push each chargen menu in turn, and handleDialogDone()
+        // only auto-advances once the player has already been through the sequence (mCreationStage is
+        // high). With no intro scripts (the multiplayer start path), pre-advance the stage so every
+        // finished dialog chains straight to the next one — Name -> Race -> Class -> Birth -> Review.
+        // Each dialog still needs the player's input; only the sequencing is automated.
+        mCreationStage = CSE_BirthSignChosen;
+        MWBase::Environment::get().getWindowManager()->pushGuiMode(GM_Name);
+    }
+
     void CharacterCreation::spawnDialog(const GuiMode id)
     {
         try
