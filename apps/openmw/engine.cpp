@@ -352,6 +352,12 @@ void OMW::Engine::pumpTransport()
     // stays byte-identical.
     const bool applyRemote = mSession->receivesAuthoritativeState();
     const bool authority = mSession->isAuthority();
+    // A client mid-chargen lives in a private bubble. Its intro cells (prison ship, census office)
+    // are ordinary shared-world cells, so applying the host's snapshots would drive their NPCs from
+    // the server's copy of the intro — the guard walks off while the local game is paused on a
+    // chargen dialog. Hold ALL snapshot application (world entities and avatars) until the same
+    // ready gate that keeps this player hidden from peers opens (chargen complete).
+    const bool chargenBubble = applyRemote && !mReplicator->isLocalPlayerReady();
     std::size_t receivedEntities = 0;
     std::size_t appliedEntities = 0;
     std::size_t receivedEvents = 0;
@@ -366,7 +372,8 @@ void OMW::Engine::pumpTransport()
                 receivedEntities += snapshot->mEntities.size();
                 // Other peers' players always become avatars; world entities are applied
                 // only when this peer obeys the sender as an authority (a client of a host).
-                appliedEntities += mReplicator->applyDelta(*snapshot, applyRemote);
+                if (!chargenBubble)
+                    appliedEntities += mReplicator->applyDelta(*snapshot, applyRemote);
             }
         }
         else if (!message.mPayload.empty()) // Reliable: leading byte selects events vs actions
@@ -394,7 +401,7 @@ void OMW::Engine::pumpTransport()
                         mReplicator->applyAvatarBounty(*actions); // a client cleared its avatar's bounty
                         mReplicator->applyCombatRequests(*actions); // a client's avatar resisted arrest
                     }
-                    else
+                    else if (!chargenBubble) // the bubble also keeps host actions out of the intro cells
                     {
                         mReplicator->applyIncomingPlayerDamage(*actions);
                         mReplicator->applyIncomingPlayerBounty(*actions); // crime bounty the host gave our avatar
@@ -403,7 +410,8 @@ void OMW::Engine::pumpTransport()
                         mReplicator->applyArrests(*actions); // open arrest dialogue a guard triggered
                     }
                     // Authoritative lootable contents flow host -> clients; the host relays them onward.
-                    mReplicator->applyContainers(*actions, /*relay=*/authority);
+                    if (!chargenBubble)
+                        mReplicator->applyContainers(*actions, /*relay=*/authority);
                 }
             }
             else if (message.mPayload.front() == sKindControl)
