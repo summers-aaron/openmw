@@ -54,6 +54,7 @@
 #include "../mwworld/manualref.hpp"
 #include "../mwworld/ptr.hpp"
 #include "../mwworld/refdata.hpp"
+#include "../mwworld/globals.hpp"
 #include "../mwworld/scene.hpp"
 #include "../mwworld/worldmodel.hpp"
 
@@ -392,6 +393,23 @@ namespace MWNet
         }
     }
 
+    void Replicator::updateClientStart()
+    {
+        // Only a connecting client running its new-game intro has this cleared; the host and
+        // single-player never do, so this is a no-op for them (and for a client once its character is
+        // made). Hold the local player back until chargen finishes so a half-built avatar (still on the
+        // prison ship / mid-census) is never broadcast. The vanilla intro sets chargenstate to -1 when
+        // the census chargen is complete; that's our signal to open the replication gate.
+        if (mLocalPlayerReady)
+            return;
+
+        if (MWBase::Environment::get().getWorld()->getGlobalFloat(MWWorld::Globals::sCharGenState) == -1)
+        {
+            mLocalPlayerReady = true;
+            Log(Debug::Info) << "Chargen complete; replicating local player " << mLocalPlayerNetId;
+        }
+    }
+
     SnapshotDelta Replicator::sampleDelta()
     {
         SnapshotDelta delta;
@@ -451,7 +469,9 @@ namespace MWNet
         // avatar. Sent EVERY tick (not delta-filtered): it's the entity peers care about
         // most, so they should instantiate and track it immediately rather than waiting for
         // a full-refresh tick. Only when a network role assigned an id (SP leaves it unset).
-        if (mLocalPlayerNetId.isSet())
+        // Held back while the local player isn't ready (a client still in chargen) so peers
+        // never instantiate a half-built avatar before the character is finalized.
+        if (mLocalPlayerNetId.isSet() && mLocalPlayerReady)
         {
             const ESM::Position& pos = player.getRefData().getPosition();
             EntityState self;

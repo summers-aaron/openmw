@@ -212,6 +212,11 @@ void OMW::Engine::executeLocalScripts()
 
 void OMW::Engine::pumpTransport()
 {
+    // A multiplayer client still in its join-time character generation: advance that flow (finalize the
+    // character once the chargen dialogs close, then open the replication gate). A no-op for the host,
+    // single-player, and a client whose character is already created.
+    mReplicator->updateClientStart();
+
     // Broadcast this peer's post-tick state to the session, then apply whatever peers
     // delivered. The session abstracts the role: single-player loops back to itself
     // (so applyDelta/injectIncomingEvents are no-ops on the echo and SP stays byte-
@@ -910,6 +915,11 @@ void OMW::Engine::prepareEngine()
         if (id == 0)
             id = 1; // never collide with the host's id 0
         mReplicator->setLocalPlayerNetId(ESM::RefNum{ id, MWNet::sNetPlayerContentFile });
+        // A client joining without a save runs character generation before it has a character to
+        // replicate; hold its player back until chargen finalizes so peers never see a half-built
+        // avatar. A client that loads a save already has its character, so it replicates immediately.
+        if (mSaveGameFile.empty())
+            mReplicator->setLocalPlayerReady(false);
     }
     else if (mListenPort != 0)
     {
@@ -1204,7 +1214,15 @@ void OMW::Engine::go()
         Resource::collectStatistics(*mViewer);
 
     // Start the game
-    if (!mSaveGameFile.empty())
+    if (!mConnectHost.empty() && mSaveGameFile.empty())
+    {
+        // A multiplayer client that joined without a save runs the normal new-game intro (prison ship,
+        // census office, chargen) so each client creates its own character the vanilla way. Its avatar
+        // is held back until chargen finishes (the replicator's ready-gate, keyed on chargenstate). The
+        // dedicated server still boots from a save via --load.
+        mStateManager->newGame(false);
+    }
+    else if (!mSaveGameFile.empty())
     {
         mStateManager->loadGame(mSaveGameFile);
     }
