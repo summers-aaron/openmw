@@ -1,6 +1,8 @@
 #include "worldimp.hpp"
 
 #include <charconv>
+#include <memory>
+#include <sstream>
 #include <vector>
 
 #include <osg/ComputeBoundsVisitor>
@@ -3672,6 +3674,47 @@ namespace MWWorld
         MWBase::Environment::get().getLuaManager()->removePlayer(ptr);
         mWorldModel.deregisterLiveCellRef(*ptr.getBase());
         mPlayers.remove(index);
+    }
+
+    bool World::adoptNetworkCharacter(const std::string& recordBlob)
+    {
+        // Apply a server-supplied REC_PLAY record over the primary player, then re-instantiate the
+        // scene exactly as StateManager::loadGame does after restoring the player record.
+        try
+        {
+            ESM::ESMReader reader;
+            reader.open(std::make_unique<std::istringstream>(recordBlob), "<network character>");
+            bool applied = false;
+            while (reader.hasMoreRecs())
+            {
+                const ESM::NAME name = reader.getRecName();
+                reader.getRecHeader();
+                if (name.toInt() == ESM::REC_PLAY)
+                {
+                    mPlayers.primary().readRecord(reader, ESM::REC_PLAY);
+                    applied = true;
+                    break;
+                }
+                reader.skipRecord();
+            }
+            if (!applied)
+                return false;
+        }
+        catch (const std::exception& e)
+        {
+            Log(Debug::Error) << "adoptNetworkCharacter: could not apply character record: " << e.what();
+            return false;
+        }
+
+        setupPlayer();
+        renderPlayer();
+        MWBase::Environment::get().getWindowManager()->updatePlayer();
+        MWBase::Environment::get().getMechanicsManager()->playerLoaded();
+
+        const MWWorld::Ptr player = getPlayerPtr();
+        if (player.isInCell())
+            changeToCell(player.getCell()->getCell()->getId(), player.getRefData().getPosition(), false, false);
+        return true;
     }
 
     void World::updateDialogueGlobals()

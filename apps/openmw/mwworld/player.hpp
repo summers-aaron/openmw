@@ -18,6 +18,7 @@ namespace ESM
 {
     class ESMWriter;
     class ESMReader;
+    struct Player;
 }
 
 namespace Loading
@@ -114,6 +115,10 @@ namespace MWWorld
         void clear();
 
         void write(ESM::ESMWriter& writer, Loading::Listener& progress, std::size_t index) const;
+
+        /// Capture this player's full persistent state into an ESM::Player record (the same data
+        /// write() serializes). Shared by the save path and network character serving.
+        void buildEsmPlayer(ESM::Player& player) const;
 
         bool readRecord(ESM::ESMReader& reader, uint32_t type);
 

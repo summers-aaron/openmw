@@ -285,10 +285,8 @@ namespace MWWorld
         mMarkedPosition.rot[2] = 0;
     }
 
-    void Player::write(ESM::ESMWriter& writer, Loading::Listener& progress, std::size_t index) const
+    void Player::buildEsmPlayer(ESM::Player& player) const
     {
-        ESM::Player player;
-
         mPlayer.save(player.mObject);
         player.mCellId = mCellStore->getCell()->getId();
 
@@ -316,6 +314,12 @@ namespace MWWorld
             player.mSaveSkills[i] = mSaveSkills[i];
 
         player.mPreviousItems = mPreviousItems;
+    }
+
+    void Player::write(ESM::ESMWriter& writer, Loading::Listener& progress, std::size_t index) const
+    {
+        ESM::Player player;
+        buildEsmPlayer(player);
 
         // The primary player (index 0) is stored as the historical REC_PLAY record, so saves with
         // a single player remain byte-identical. Additional players are stored as REC_PLAYER_EXTRA

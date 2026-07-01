@@ -267,6 +267,7 @@ namespace MWWorld
         // follows the network avatars rather than the stationary primary placeholder.
         void setDedicatedServer(bool value) { mDedicatedServer = value; }
         bool isDedicatedServer() const override { return mDedicatedServer; }
+        bool adoptNetworkCharacter(const std::string& recordBlob) override;
 
         MWWorld::ESMStore& getStore() override { return mStore; }
 

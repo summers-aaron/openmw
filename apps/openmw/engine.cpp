@@ -41,6 +41,9 @@
 
 #include <components/version/version.hpp>
 
+#include <components/esm3/loadnpc.hpp>
+#include <components/esm3/player.hpp>
+
 #include <components/l10n/manager.hpp>
 
 #include <components/loadinglistener/asynclistener.hpp>
@@ -71,6 +74,7 @@
 #include "mwsound/soundmanagerimp.hpp"
 
 #include "mwworld/class.hpp"
+#include "mwworld/player.hpp"
 #include "mwworld/datetimemanager.hpp"
 #include "mwworld/worldimp.hpp"
 
@@ -85,6 +89,7 @@
 #include "mwmechanics/mechanicsmanagerimp.hpp"
 
 #include "mwnet/actions.hpp"
+#include "mwnet/charactercodec.hpp"
 #include "mwnet/control.hpp"
 #include "mwnet/events.hpp"
 #include "mwnet/replicator.hpp"
@@ -249,6 +254,24 @@ void OMW::Engine::handleControlMessage(MWNet::PeerId from, const MWNet::ControlM
             auto it = mLoginNetIds.find(key);
             if (it == mLoginNetIds.end())
                 it = mLoginNetIds.emplace(key, ESM::RefNum{ mNextLoginId++, MWNet::sNetPlayerContentFile }).first;
+
+            // If we already own a character for this login, serve it down so the client resumes it.
+            // (Matched by in-game character name for now; durable identity is a follow-up.) Must be
+            // sent BEFORE LoginAccept so the client adopts it before it starts replicating.
+            MWBase::World& world = *MWBase::Environment::get().getWorld();
+            for (std::size_t i = 1; i < world.getPlayerCount(); ++i)
+            {
+                const MWWorld::Ptr stored = world.getPlayerPtr(i);
+                if (!stored.getClass().isNpc() || stored.get<ESM::NPC>()->mBase->mName != request->mUsername)
+                    continue;
+                ESM::Player record;
+                world.getPlayer(i).buildEsmPlayer(record);
+                sendControl(from, MWNet::CharacterData{ static_cast<std::uint32_t>(i),
+                                      MWNet::serializeCharacter(record, ours) });
+                Log(Debug::Info) << "Serving stored character '" << request->mUsername << "' (slot " << i << ")";
+                break;
+            }
+
             sendControl(from, MWNet::LoginAccept{ it->second });
             Log(Debug::Info) << "Accepted login '" << request->mUsername << "' as net id " << it->second.mIndex;
         }
@@ -258,7 +281,16 @@ void OMW::Engine::handleControlMessage(MWNet::PeerId from, const MWNet::ControlM
         // Client side: adopt the identity the host assigned. The replication gate (ready) is left to
         // the existing logic — immediate for a loaded save, chargen-completion for a new character —
         // and appendLocalPlayer needs both the id (set here) and ready before it broadcasts.
-        if (const auto* accept = std::get_if<MWNet::LoginAccept>(&message))
+        if (const auto* character = std::get_if<MWNet::CharacterData>(&message))
+        {
+            // The server owns our character and sent it down; become it (over whatever placeholder /
+            // freshly-onboarded player we started with). Arrives before LoginAccept.
+            if (MWBase::Environment::get().getWorld()->adoptNetworkCharacter(character->mBlob))
+                Log(Debug::Info) << "Adopted server character (slot " << character->mId << ")";
+            else
+                Log(Debug::Error) << "Failed to adopt server character (slot " << character->mId << ")";
+        }
+        else if (const auto* accept = std::get_if<MWNet::LoginAccept>(&message))
         {
             mReplicator->setLocalPlayerNetId(accept->mNetId);
             Log(Debug::Info) << "Logged in; adopted network id " << accept->mNetId.mIndex;

@@ -189,6 +189,12 @@ namespace MWBase
         /// True when this instance is a headless dedicated server (no local human player / window).
         virtual bool isDedicatedServer() const = 0;
 
+        /// Adopt a server-supplied character (a REC_PLAY record blob) as the local primary player:
+        /// apply its inventory/stats/skills/cell over the current player and re-instantiate the
+        /// scene, mirroring the tail of StateManager::loadGame. Returns false on a malformed blob.
+        /// Used by a network client resuming a character the server owns. Off-host only.
+        virtual bool adoptNetworkCharacter(const std::string& recordBlob) = 0;
+
         virtual MWWorld::ESMStore& getStore() = 0;
         virtual const MWWorld::ESMStore& getStore() const = 0;
 
