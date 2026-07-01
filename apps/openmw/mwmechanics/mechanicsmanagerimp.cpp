@@ -29,6 +29,8 @@
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
 
+#include "../mwnet/replicator.hpp"
+
 #include "../mwsound/constants.hpp"
 
 #include "actor.hpp"
@@ -1149,8 +1151,11 @@ namespace MWMechanics
     {
         // NOTE: victim may be empty
 
-        // Only player can commit crime
-        if (player != getPlayer())
+        // Only a player can commit crime. In multiplayer the criminal may be a network avatar (a
+        // remote player) rather than the primary local player, so test player membership rather than
+        // identity against getPlayer(). In single-player isPlayer() is true only for the primary, so
+        // this is unchanged there.
+        if (!MWBase::Environment::get().getWorld()->isPlayer(player))
             return false;
 
         if (type == OT_Assault)
@@ -1214,7 +1219,10 @@ namespace MWMechanics
     bool MechanicsManager::canReportCrime(
         const MWWorld::Ptr& actor, const MWWorld::Ptr& victim, std::set<MWWorld::Ptr>& playerFollowers)
     {
-        if (actor == getPlayer() || !actor.getClass().isNpc() || actor.getClass().getCreatureStats(actor).isDead())
+        // No player reports a crime — not the primary local player, and in multiplayer not a network
+        // avatar either (the criminal itself, or a bystanding peer). isPlayer() covers all of them.
+        if (MWBase::Environment::get().getWorld()->isPlayer(actor) || !actor.getClass().isNpc()
+            || actor.getClass().getCreatureStats(actor).isDead())
             return false;
 
         if (actor.getClass().getCreatureStats(actor).getAiSequence().isInCombat(victim))
@@ -1293,7 +1301,9 @@ namespace MWMechanics
         if (!victim.isEmpty() && (from - victim.getRefData().getPosition().asVec3()).length2() > radius * radius)
             neighbors.push_back(victim);
 
-        int id = MWBase::Environment::get().getWorld()->getPlayer().getNewCrimeId();
+        // Crime ids are per-player; draw from the committing player so an avatar's crimes don't share
+        // (and collide with) the primary player's id sequence.
+        int id = MWBase::Environment::get().getWorld()->getPlayer(player).getNewCrimeId();
 
         // What amount of provocation did this crime generate?
         // Controls whether witnesses will engage combat with the criminal.
@@ -1529,7 +1539,8 @@ namespace MWMechanics
         AiSequence& seq = statsTarget.getAiSequence();
 
         if (!attacker.isEmpty()
-            && (attacker.getClass().getCreatureStats(attacker).getAiSequence().isInCombat(target) || attacker == player)
+            && (attacker.getClass().getCreatureStats(attacker).getAiSequence().isInCombat(target)
+                || MWBase::Environment::get().getWorld()->isPlayer(attacker))
             && !seq.isInCombat(attacker))
         {
             // Attacker is in combat with us, but we are not in combat with the attacker yet. Time to fight back.
@@ -1566,13 +1577,23 @@ namespace MWMechanics
         return true;
     }
 
+    void MechanicsManager::forgiveCrimesAgainst(const MWWorld::Ptr& player)
+    {
+        mActors.forgiveCrimesAgainst(player);
+    }
+
     bool MechanicsManager::canCommitCrimeAgainst(const MWWorld::Ptr& target, const MWWorld::Ptr& attacker)
     {
         const MWWorld::Class& cls = target.getClass();
         const MWMechanics::CreatureStats& stats = cls.getCreatureStats(target);
         const MWMechanics::AiSequence& seq = stats.getAiSequence();
-        return cls.isNpc() && !attacker.isEmpty() && !isAggressive(target, attacker) && !seq.isEngagedWithActor()
-            && !stats.getAiSequence().isInPursuit() && !cls.getNpcStats(target).isWerewolf()
+        // isAggressive already covers self-defence (the target is hostile to / in combat with the
+        // attacker), so the old broad "engaged/pursuing ANYONE" gates only wrongly exempted assaulting an
+        // NPC busy with someone else — a guard chasing another peer, an NPC mid-brawl. Gate on the
+        // attacker specifically: still no crime to fight an NPC fighting you, or to be the one a guard
+        // is already pursuing, but striking a third party the target is occupied with is a crime.
+        return cls.isNpc() && !attacker.isEmpty() && !isAggressive(target, attacker) && !seq.isInPursuit(attacker)
+            && !cls.getNpcStats(target).isWerewolf()
             && stats.getMagicEffects().getOrDefault(ESM::MagicEffect::Vampirism).getMagnitude() <= 0;
     }
 
@@ -1589,15 +1610,21 @@ namespace MWMechanics
 
         const MWMechanics::NpcStats& victimStats = victim.getClass().getNpcStats(victim);
         const MWWorld::Ptr& player = getPlayer();
-        bool canCommit = attacker == player && canCommitCrimeAgainst(victim, attacker);
+        // The killer may be the primary local player or — in multiplayer — a network peer's avatar,
+        // which is also a player. Charge the murder to whoever struck the fatal blow; only a non-player
+        // killer (a follower acting for the player) is attributed to the primary player, as before.
+        const bool attackerIsPlayer = MWBase::Environment::get().getWorld()->isPlayer(attacker);
+        MWWorld::Ptr criminal = attacker;
+        bool canCommit = attackerIsPlayer && canCommitCrimeAgainst(victim, attacker);
 
-        // For now we report only about crimes of player and player's followers
-        if (attacker != player)
+        // For now we report only about crimes of a player and a player's followers
+        if (!attackerIsPlayer)
         {
             std::set<MWWorld::Ptr> playerFollowers;
             getActorsSidingWith(player, playerFollowers);
             if (playerFollowers.find(attacker) == playerFollowers.end())
                 return;
+            criminal = player;
         }
 
         if (!canCommit && victimStats.getCrimeId() == -1)
@@ -1606,7 +1633,7 @@ namespace MWMechanics
         // Simple check for who attacked first: if the player attacked first, a crimeId should be set
         // Doesn't handle possible edge case where no one reported the assault, but in such a case,
         // for bystanders it is not possible to tell who attacked first, anyway.
-        commitCrime(player, victim, MWBase::MechanicsManager::OT_Murder);
+        commitCrime(criminal, victim, MWBase::MechanicsManager::OT_Murder);
     }
 
     bool MechanicsManager::awarenessCheck(const MWWorld::Ptr& ptr, const MWWorld::Ptr& observer, bool useCache)
@@ -1685,6 +1712,13 @@ namespace MWMechanics
     void MechanicsManager::startCombat(
         const MWWorld::Ptr& ptr, const MWWorld::Ptr& target, const std::set<MWWorld::Ptr>* targetAllies)
     {
+        // Multiplayer: a host-owned actor being told to fight THIS client's player — the "resist arrest"
+        // dialogue's StartCombat, or any scripted aggression — must be resolved on the host, which owns
+        // that actor. Route it there and skip the local puppet's package (its AI is host-driven anyway).
+        if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+            if (replicator->reportCombatStart(ptr, target))
+                return;
+
         CreatureStats& stats = ptr.getClass().getCreatureStats(ptr);
 
         // Don't add duplicate packages nor add packages to dead actors.
@@ -1728,7 +1762,10 @@ namespace MWMechanics
             }
         }
         stats.getAiSequence().stack(MWMechanics::AiCombat(target), ptr);
-        if (target == getPlayer())
+        // Any player, not just the primary one: a guard provoked by a network peer's avatar must
+        // record it as its hit-attempt actor (so it doesn't immediately drop combat when the avatar
+        // is briefly unreachable) exactly as it would for the local player.
+        if (MWBase::Environment::get().getWorld()->isPlayer(target))
         {
             // if guard starts combat with player, guards pursuing player should do the same
             if (ptr.getClass().isClass(ptr, "Guard"))
@@ -1933,6 +1970,16 @@ namespace MWMechanics
         return mActors.isAttackingOrSpell(ptr);
     }
 
+    std::string_view MechanicsManager::getActiveAttackType(const MWWorld::Ptr& ptr) const
+    {
+        return mActors.getActiveAttackType(ptr);
+    }
+
+    float MechanicsManager::getAttackStrength(const MWWorld::Ptr& ptr) const
+    {
+        return mActors.getAttackStrength(ptr);
+    }
+
     void MechanicsManager::setWerewolf(const MWWorld::Ptr& actor, bool werewolf)
     {
         MWMechanics::NpcStats& npcStats = actor.getClass().getNpcStats(actor);
@@ -1941,7 +1988,7 @@ namespace MWMechanics
         if (npcStats.isWerewolf() == werewolf)
             return;
 
-        MWWorld::Player* player = &MWBase::Environment::get().getWorld()->getPlayer();
+        MWBase::World* world = MWBase::Environment::get().getWorld();
 
         // Werewolfs can not cast spells, so we need to unset the prepared spell if there is one.
         if (npcStats.getDrawState() == MWMechanics::DrawState::Spell)
@@ -1963,33 +2010,45 @@ namespace MWMechanics
             inv.ContainerStore::remove(ESM::RefId::stringRefId("werewolfrobe"), 1);
         }
 
-        if (actor == player->getPlayer())
+        if (world->isPlayer(actor))
         {
-            MWBase::Environment::get().getWorld()->reattachPlayerCamera();
+            const bool isLocalPlayer = (actor == world->getPlayerPtr());
+            MWWorld::Player& transformingPlayer = world->getPlayer(actor);
 
-            // Update the GUI only when called on the player
-            MWBase::WindowManager* windowManager = MWBase::Environment::get().getWindowManager();
+            if (isLocalPlayer)
+                world->reattachPlayerCamera();
 
             // Transforming removes all temporary effects
             actor.getClass().getCreatureStats(actor).getActiveSpells().purge(
                 [](const auto& params) { return params.hasFlag(ESM::ActiveSpells::Flag_Temporary); }, actor);
             mActors.updateActor(actor, 0.f);
 
+            // Save/restore the transforming player's pre-werewolf stats on its own player slot.
             if (werewolf)
             {
-                player->saveStats();
-                player->setWerewolfStats();
-                windowManager->forceHide(MWGui::GW_Inventory);
-                windowManager->forceHide(MWGui::GW_Magic);
+                transformingPlayer.saveStats();
+                transformingPlayer.setWerewolfStats();
             }
             else
-            {
-                player->restoreStats();
-                windowManager->unsetForceHide(MWGui::GW_Inventory);
-                windowManager->unsetForceHide(MWGui::GW_Magic);
-            }
+                transformingPlayer.restoreStats();
 
-            windowManager->setWerewolfOverlay(werewolf);
+            // Update the GUI only when called on the local (primary) player.
+            MWBase::WindowManager* windowManager = MWBase::Environment::get().getWindowManager();
+            if (isLocalPlayer)
+            {
+                if (werewolf)
+                {
+                    windowManager->forceHide(MWGui::GW_Inventory);
+                    windowManager->forceHide(MWGui::GW_Magic);
+                }
+                else
+                {
+                    windowManager->unsetForceHide(MWGui::GW_Inventory);
+                    windowManager->unsetForceHide(MWGui::GW_Magic);
+                }
+
+                windowManager->setWerewolfOverlay(werewolf);
+            }
 
             // Witnesses of the player's transformation will make them a globally known werewolf
             std::vector<MWWorld::Ptr> neighbors;
@@ -2004,7 +2063,7 @@ namespace MWMechanics
                 if (neighbor == actor || !neighbor.getClass().isNpc())
                     continue;
 
-                if (MWBase::Environment::get().getWorld()->getLOS(neighbor, actor) && awarenessCheck(actor, neighbor))
+                if (world->getLOS(neighbor, actor) && awarenessCheck(actor, neighbor))
                 {
                     detected = true;
                     if (neighbor.getClass()
@@ -2021,8 +2080,9 @@ namespace MWMechanics
 
             if (detected)
             {
-                windowManager->messageBox("#{sWerewolfAlarmMessage}");
-                MWBase::Environment::get().getWorld()->setGlobalInt(MWWorld::Globals::sPCKnownWerewolf, 1);
+                if (isLocalPlayer)
+                    windowManager->messageBox("#{sWerewolfAlarmMessage}");
+                world->setGlobalInt(MWWorld::Globals::sPCKnownWerewolf, 1);
 
                 if (reported)
                 {

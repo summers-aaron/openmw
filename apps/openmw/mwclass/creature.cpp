@@ -33,6 +33,8 @@
 
 #include "../mwlua/localscripts.hpp"
 
+#include "../mwnet/replicator.hpp"
+
 #include "../mwworld/actionopen.hpp"
 #include "../mwworld/actiontalk.hpp"
 #include "../mwworld/cellstore.hpp"
@@ -285,8 +287,15 @@ namespace MWClass
         if (!MWMechanics::isInMeleeReach(ptr, victim, MWMechanics::getMeleeWeaponReach(ptr, weapon)))
             return;
 
+        // A remote-owned victim is a remote player's avatar (creatures never attack our own
+        // player, only NPCs do). On the host we resolve the hit below and report the damage to
+        // the owning client instead of applying it locally; a miss needs no report.
+        const bool remoteVictim = victim.getRefData().isRemoteOwned();
+
         if (!success)
         {
+            if (remoteVictim)
+                return;
             MWBase::Environment::get().getLuaManager()->onHit(ptr, victim, weapon, MWWorld::Ptr(), type, attackStrength,
                 0.0f, false, hitPosition, false, MWMechanics::DamageSourceType::Melee);
             MWMechanics::reduceWeaponCondition(0.f, false, weapon, ptr);
@@ -343,6 +352,15 @@ namespace MWClass
 
         if (MWMechanics::blockMeleeAttack(ptr, victim, weapon, damage, attackStrength))
             damage = 0;
+
+        // Host-owned avatar: report the resolved damage to its owning client instead of
+        // applying it to our local stand-in (which the network overwrites each tick anyway).
+        if (remoteVictim)
+        {
+            if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+                replicator->reportRemotePlayerHit(victim, damage, healthdmg);
+            return;
+        }
 
         MWMechanics::diseaseContact(victim, ptr);
 

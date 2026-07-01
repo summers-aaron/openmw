@@ -25,6 +25,8 @@
 
 #include "../mwmechanics/actorutil.hpp"
 
+#include "../mwnet/replicator.hpp"
+
 #include "constants.hpp"
 #include "ffmpegdecoder.hpp"
 #include "openaloutput.hpp"
@@ -315,6 +317,12 @@ namespace MWSound
 
     void SoundManager::say(const MWWorld::ConstPtr& ptr, VFS::Path::NormalizedView filename)
     {
+        // Multiplayer: the host owns the world's NPCs, so every NPC voiced line is played here.
+        // Replicate it to clients so they hear it on the same actor. Done before the audio-output
+        // guard below, because a headless dedicated server has no output yet still drives NPC speech.
+        if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+            replicator->reportNpcSpeech(ptr, filename.value());
+
         if (!mOutput->isInitialized())
             return;
 

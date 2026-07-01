@@ -254,9 +254,23 @@ namespace MWWorld
 
     void DateTimeManager::updateIsPaused()
     {
-        auto stateManager = MWBase::Environment::get().getStateManager();
-        auto wm = MWBase::Environment::get().getWindowManager();
-        mPaused = !mPausedTags.empty() || wm->isConsoleMode() || wm->isPostProcessorHudVisible()
-            || wm->isInteractiveMessageBoxActive() || stateManager->getState() == MWBase::StateManager::State_NoGame;
+        const auto stateManager = MWBase::Environment::get().getStateManager();
+        const auto wm = MWBase::Environment::get().getWindowManager();
+
+        // Pause has two kinds of source. Run-state (shared-world) sources pause the simulation
+        // itself: explicit pause tags (set by scripts, and by client menus via the 'ui' tag) and
+        // the no-game state. Client-presentation sources are local to a viewing client: the
+        // console, the post-processor HUD and modal message boxes.
+        const bool worldPaused
+            = !mPausedTags.empty() || stateManager->getState() == MWBase::StateManager::State_NoGame;
+        const bool uiPaused
+            = wm->isConsoleMode() || wm->isPostProcessorHudVisible() || wm->isInteractiveMessageBoxActive();
+
+        // Singleplayer is one local client driving the shared world, so a UI pause pauses the
+        // world too. On a headless dedicated server NullWindowManager reports no UI pause, so the
+        // world is governed by the run-state sources alone (it is never paused by a menu) — which
+        // is the behaviour a shared server needs. Networked clients (M13) will stop letting their
+        // local UI pause the shared world; the split above is where that diverges.
+        mPaused = worldPaused || uiPaused;
     }
 }

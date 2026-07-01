@@ -1,6 +1,8 @@
 #ifndef GAME_MWCLASS_CONTAINER_H
 #define GAME_MWCLASS_CONTAINER_H
 
+#include <components/esm3/refnum.hpp>
+
 #include "../mwworld/containerstore.hpp"
 #include "../mwworld/customdata.hpp"
 #include "../mwworld/registeredclass.hpp"
@@ -18,7 +20,7 @@ namespace MWClass
         MWWorld::ContainerStore mStore;
 
     public:
-        ContainerCustomData(const ESM::Container& container, MWWorld::CellStore* cell);
+        ContainerCustomData(const ESM::Container& container, MWWorld::CellStore* cell, ESM::RefNum refNum);
         ContainerCustomData(const ESM::InventoryState& inventory);
 
         ContainerCustomData& asContainerCustomData() override;

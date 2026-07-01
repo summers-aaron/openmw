@@ -3,6 +3,7 @@
 #include <atomic>
 #include <chrono>
 #include <limits>
+#include <span>
 
 #include <BulletCollision/CollisionDispatch/btCollisionObject.h>
 
@@ -26,6 +27,7 @@
 #include <components/vfs/pathutil.hpp>
 
 #include "../mwbase/environment.hpp"
+#include "../mwbase/worldrendering.hpp"
 #include "../mwbase/luamanager.hpp"
 #include "../mwbase/mechanicsmanager.hpp"
 #include "../mwbase/soundmanager.hpp"
@@ -529,6 +531,77 @@ namespace MWWorld
         mPreloader->notifyLoaded(&cell);
     }
 
+    bool Scene::isCellOccupiedByNonPrimaryPlayer(const CellStore* cell) const
+    {
+        for (std::size_t i = 1; i < mWorld.getPlayerCount(); ++i)
+        {
+            const CellStore* playerCell = mWorld.getPlayerPtr(i).getCell();
+            if (playerCell == cell)
+                return true;
+            // Keep the whole exterior grid around an extra player loaded (matching the grid the
+            // primary player keeps and what addExtraPlayer loads), so neighbouring cells the peer
+            // interacts with are not unloaded out from under it.
+            if (playerCell != nullptr && playerCell->getCell()->isExterior() && cell->getCell()->isExterior()
+                && playerCell->getCell()->getWorldSpace() == cell->getCell()->getWorldSpace())
+            {
+                const int halfGridSize = isEsm4Ext(playerCell->getCell()->getWorldSpace())
+                    ? Constants::ESM4CellGridRadius
+                    : Constants::CellGridRadius;
+                const ESM::ExteriorCellLocation a = playerCell->getCell()->getExteriorCellLocation();
+                const ESM::ExteriorCellLocation b = cell->getCell()->getExteriorCellLocation();
+                if (std::abs(a.mX - b.mX) <= halfGridSize && std::abs(a.mY - b.mY) <= halfGridSize)
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    void Scene::addExtraPlayer(const MWWorld::Ptr& player)
+    {
+        CellStore* cell = player.getCell();
+        if (cell == nullptr)
+            return;
+        auto navigatorUpdateGuard = mNavigator.makeUpdateGuard();
+        const osg::Vec3f pos = player.getRefData().getPosition().asVec3();
+        const ESM::RefId worldspace = cell->getCell()->getWorldSpace();
+        // Drive the navmesh build around this peer, exactly as a cell change does for the local player:
+        // set the navmesh bounds, load the cell geometry (which also registers the actors' agents),
+        // then kick an update so tiles actually generate. loadCell alone only feeds geometry — without
+        // updateBounds + update the navigator never builds tiles here, so host-owned NPCs have nothing
+        // to path on and a provoked one can only fight a target already in melee range. (This is the
+        // real cause of the "headless server can't chase" symptom; navmesh is CPU work and builds fine
+        // headless — it just was never being requested for a peer's surroundings.)
+        if (cell->getCell()->isExterior())
+        {
+            // Load the whole grid of exterior cells around this player, not just the single cell it
+            // stands in, so a network peer's avatar has the same surroundings simulated as the local
+            // player keeps. Otherwise actors in neighbouring cells the peer can see and interact with
+            // (e.g. a town NPC it punches) are never loaded here, so the authority can't react to them.
+            const int halfGridSize
+                = isEsm4Ext(worldspace) ? Constants::ESM4CellGridRadius : Constants::CellGridRadius;
+            const ESM::ExteriorCellLocation center = cell->getCell()->getExteriorCellLocation();
+            const DetourNavigator::CellGridBounds cellGridBounds{
+                .mCenter = osg::Vec2i(center.mX, center.mY),
+                .mHalfSize = halfGridSize,
+            };
+            mNavigator.updateBounds(worldspace, cellGridBounds, pos, navigatorUpdateGuard.get());
+            iterateOverCellsAround(center.mX, center.mY, halfGridSize, [&](int x, int y) {
+                CellStore& grid = mWorld.getWorldModel().getExterior(ESM::ExteriorCellLocation(x, y, worldspace));
+                if (mActiveCells.find(&grid) == mActiveCells.end())
+                    loadCell(grid, nullptr, false, pos, navigatorUpdateGuard.get());
+            });
+        }
+        else
+        {
+            mNavigator.updateBounds(worldspace, std::nullopt, pos, navigatorUpdateGuard.get());
+            if (mActiveCells.find(cell) == mActiveCells.end())
+                loadCell(*cell, nullptr, false, pos, navigatorUpdateGuard.get());
+        }
+        const DetourNavigator::PlayerPosition playerPosition{ worldspace, pos };
+        mNavigator.update(std::span(&playerPosition, 1), navigatorUpdateGuard.get());
+        navigatorUpdateGuard.reset();
+    }
+
     void Scene::clear()
     {
         auto navigatorUpdateGuard = mNavigator.makeUpdateGuard();
@@ -623,6 +696,10 @@ namespace MWWorld
         for (auto iter = mActiveCells.begin(); iter != mActiveCells.end();)
         {
             auto* cell = *iter++;
+            // Keep cells that another player occupies loaded even if they are outside the primary
+            // player's grid.
+            if (isCellOccupiedByNonPrimaryPlayer(cell))
+                continue;
             if (cell->getCell()->isExterior() && cell->getCell()->getWorldSpace() == playerCellIndex.mWorldspace)
             {
                 const auto dx = std::abs(playerCellX - cell->getCell()->getGridX());
@@ -686,7 +763,8 @@ namespace MWWorld
             }
         }
 
-        mNavigator.update(pos, navigatorUpdateGuard.get());
+        const DetourNavigator::PlayerPosition playerPosition{ playerCellIndex.mWorldspace, pos };
+        mNavigator.update(std::span(&playerPosition, 1), navigatorUpdateGuard.get());
 
         navigatorUpdateGuard.reset();
 
@@ -759,7 +837,8 @@ namespace MWWorld
 
             loadCell(cell, nullptr, false, position, navigatorUpdateGuard.get());
 
-            mNavigator.update(position, navigatorUpdateGuard.get());
+            const DetourNavigator::PlayerPosition playerPosition{ ESM::Cell::sDefaultWorldspaceId, position };
+            mNavigator.update(std::span(&playerPosition, 1), navigatorUpdateGuard.get());
             navigatorUpdateGuard.reset();
             mNavigator.wait(DetourNavigator::WaitConditionType::requiredTilesPresent, nullptr);
             navigatorUpdateGuard = mNavigator.makeUpdateGuard();
@@ -816,7 +895,8 @@ namespace MWWorld
                 cell.getCell()->getWorldSpace(), std::nullopt, position.asVec3(), navigatorUpdateGuard.get());
             loadCell(cell, nullptr, false, position.asVec3(), navigatorUpdateGuard.get());
 
-            mNavigator.update(position.asVec3(), navigatorUpdateGuard.get());
+            const DetourNavigator::PlayerPosition playerPosition{ cell.getCell()->getWorldSpace(), position.asVec3() };
+            mNavigator.update(std::span(&playerPosition, 1), navigatorUpdateGuard.get());
             navigatorUpdateGuard.reset();
             mNavigator.wait(DetourNavigator::WaitConditionType::requiredTilesPresent, nullptr);
             navigatorUpdateGuard = mNavigator.makeUpdateGuard();
@@ -991,7 +1071,7 @@ namespace MWWorld
 
         MWBase::Environment::get().getWindowManager()->changeCell(mCurrentCell);
 
-        MWBase::Environment::get().getWorld()->getPostProcessor()->setExteriorFlag(cell.getCell()->isQuasiExterior());
+        MWBase::Environment::get().getWorldRendering()->getPostProcessor()->setExteriorFlag(cell.getCell()->isQuasiExterior());
     }
 
     void Scene::changeToExteriorCell(
@@ -1012,7 +1092,7 @@ namespace MWWorld
         if (changeEvent)
             MWBase::Environment::get().getWindowManager()->fadeScreenIn(0.5);
 
-        MWBase::Environment::get().getWorld()->getPostProcessor()->setExteriorFlag(true);
+        MWBase::Environment::get().getWorldRendering()->getPostProcessor()->setExteriorFlag(true);
     }
 
     CellStore* Scene::getCurrentCell()

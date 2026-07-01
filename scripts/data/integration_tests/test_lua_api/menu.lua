@@ -53,6 +53,23 @@ testing.registerMenuTest('load while teleporting', function()
     menu.deleteGame(' - 1', 'load_while_teleporting.omwsave')
 end)
 
+testing.registerMenuTest('multiplayer persistence', function()
+    menu.newGame()
+    coroutine.yield()
+
+    testing.runGlobalTest('multiplayer persistence - add player')
+
+    menu.saveGame('multiplayer persistence')
+    coroutine.yield()
+
+    menu.loadGame(' - 1', 'multiplayer_persistence.omwsave')
+    coroutine.yield()
+
+    testing.runGlobalTest('multiplayer persistence - check players')
+
+    menu.deleteGame(' - 1', 'multiplayer_persistence.omwsave')
+end)
+
 local function registerGlobalTest(name, description)
    testing.registerMenuTest(description or name, function()
        menu.newGame()
@@ -77,6 +94,11 @@ registerGlobalTest('record model property')
 registerGlobalTest('nan float', 'world.setGameTimeScale should not accept nan')
 registerGlobalTest('nan vector', 'weather.stormDirection should not accept a vector with a nan component')
 registerGlobalTest('load script generated static')
+registerGlobalTest('multiplayer add and remove players')
+registerGlobalTest('per-player stats are independent')
+registerGlobalTest('extra player runs its own player scripts')
+registerGlobalTest('per-player storage is independent')
+registerGlobalTest('multiplayer simulates extra player cell')
 
 registerGlobalTest('player yaw rotation', 'rotating player with controls.yawChange should change rotation')
 registerGlobalTest('player pitch rotation', 'rotating player with controls.pitchChange should change rotation')

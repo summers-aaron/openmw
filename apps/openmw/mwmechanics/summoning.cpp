@@ -10,6 +10,8 @@
 #include "../mwbase/mechanicsmanager.hpp"
 #include "../mwbase/world.hpp"
 
+#include "../mwnet/replicator.hpp"
+
 #include "../mwworld/class.hpp"
 #include "../mwworld/esmstore.hpp"
 #include "../mwworld/manualref.hpp"
@@ -107,6 +109,19 @@ namespace MWMechanics
 
     ESM::RefNum summonCreature(ESM::RefId effectId, const MWWorld::Ptr& summoner)
     {
+        // Multiplayer: a client's own summon is host-authoritative. Route it to the host (which spawns
+        // the creature bound to this player's avatar and replicates it back) rather than spawning a
+        // client-local creature the host couldn't own. summoner's map still records an (effect -> unset)
+        // entry so the effect tracks; the matching despawn is reported when the effect is removed.
+        if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+        {
+            if (!replicator->isAuthority() && replicator->reportSummon(effectId, summoner))
+            {
+                summoner.getClass().getCreatureStats(summoner).getSummonedCreatureMap().emplace(effectId, ESM::RefNum());
+                return ESM::RefNum();
+            }
+        }
+
         const ESM::RefId& creatureID = getSummonedCreature(effectId);
         ESM::RefNum creature;
         if (!creatureID.empty())
@@ -116,6 +131,13 @@ namespace MWMechanics
                 auto world = MWBase::Environment::get().getWorld();
                 MWWorld::ManualRef ref(world->getStore(), creatureID, 1);
                 MWWorld::Ptr placed = world->safePlaceObject(ref.getPtr(), summoner, summoner.getCell(), 0, 120.f);
+                // Multiplayer: the host owns every summon (a client's is routed here). Give it a RefNum
+                // in a reserved space BEFORE registering, so it can't collide with a client's locally
+                // generated refs (its avatars and instantiated items share the normal generated space) —
+                // a collision makes the client resolve the summon's RefNum to the wrong local object and
+                // never instantiate the creature, so it stays invisible to that client.
+                if (MWNet::Replicator* rep = MWBase::Environment::get().getReplicator(); rep && rep->isAuthority())
+                    placed.getCellRef().setRefNum(world->reserveNetworkSummonRefNum());
                 MWBase::Environment::get().getWorldModel()->registerPtr(placed);
                 creature = placed.getCellRef().getRefNum();
 

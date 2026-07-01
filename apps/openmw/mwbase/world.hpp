@@ -17,8 +17,6 @@
 #include "../mwworld/ptr.hpp"
 #include "../mwworld/spellcaststate.hpp"
 
-#include "../mwrender/rendermode.hpp"
-
 namespace osg
 {
     class Vec3f;
@@ -67,10 +65,9 @@ namespace MWPhysics
 
 namespace MWRender
 {
+    // Camera / RenderingManager / PostProcessor moved to MWBase::WorldRendering.
+    // Animation stays: gameplay reads text-key timing through getAnimation() (until M6).
     class Animation;
-    class Camera;
-    class RenderingManager;
-    class PostProcessor;
 }
 
 namespace MWMechanics
@@ -128,6 +125,10 @@ namespace MWBase
         virtual void startNewGame(bool bypass) = 0;
         ///< \param bypass Bypass regular game start.
 
+        virtual void startNewGameMultiplayer(const std::string& startCell) = 0;
+        ///< Multiplayer start: build the player and world like a bypassed new game, but place the
+        ///< player in \a startCell and run character generation in place of the regular intro.
+
         virtual void clear() = 0;
 
         virtual size_t countSavedGameRecords() const = 0;
@@ -148,6 +149,46 @@ namespace MWBase
         virtual MWWorld::Player& getPlayer() = 0;
         virtual MWWorld::Ptr getPlayerPtr() = 0;
         virtual MWWorld::ConstPtr getPlayerConstPtr() const = 0;
+
+        /// Is the given object one of the players? Identity test that does not rely on the
+        /// hardcoded "player" RefId, so it remains correct once multiple players exist.
+        virtual bool isPlayer(const MWWorld::ConstPtr& ptr) const = 0;
+
+        /// Number of players currently in the world (>= 1; the zero-arg accessors above
+        /// always refer to the primary player, index 0).
+        virtual std::size_t getPlayerCount() const = 0;
+        virtual MWWorld::Player& getPlayer(std::size_t index) = 0;
+        virtual MWWorld::Ptr getPlayerPtr(std::size_t index) = 0;
+        /// The Player wrapper for the given object. Throws if it is not one of the players;
+        /// guard with isPlayer() first.
+        virtual MWWorld::Player& getPlayer(const MWWorld::ConstPtr& ptr) = 0;
+
+        /// Spawn an additional (non-primary) player at the primary player's cell/position and
+        /// register it with the world. Returns the new player's Ptr. Note: the new player is not
+        /// yet wired into rendering/physics/input; it exists as a model actor only.
+        virtual MWWorld::Ptr addPlayer() = 0;
+        /// As above, but place the new player in the given cell at the given position. The cell is
+        /// loaded and kept active so the player's surroundings are simulated. When \a record is
+        /// given the new player is built from it (its appearance) instead of the generic "Player"
+        /// record — used to spawn a network peer's avatar with that peer's race/sex/head/hair.
+        virtual MWWorld::Ptr addPlayer(
+            MWWorld::CellStore& cell, const ESM::Position& position, const ESM::NPC* record = nullptr)
+            = 0;
+        /// Move an existing non-primary player to the given cell/position, loading and keeping that
+        /// cell active (so its surroundings stay simulated) and updating the player's cell so the
+        /// indexed accessors track it. Handles crossing from one cell to another. Returns the
+        /// updated Ptr (a cell change rebuilds the reference). Used to follow a network peer's
+        /// avatar as its owner walks between cells.
+        virtual MWWorld::Ptr placeNetworkPlayer(
+            const MWWorld::Ptr& ptr, MWWorld::CellStore& cell, const osg::Vec3f& position)
+            = 0;
+        /// Remove a non-primary player by index (index 0, the primary player, cannot be removed).
+        virtual void removePlayer(std::size_t index) = 0;
+
+        /// Mint a unique RefNum for a host-spawned summoned creature, in a reserved content file so it
+        /// never collides with a client's locally-generated refs (which a normal generated RefNum,
+        /// counting down from -1, would share). Monotonic index; never reused.
+        virtual ESM::RefNum reserveNetworkSummonRefNum() = 0;
 
         virtual MWWorld::ESMStore& getStore() = 0;
         virtual const MWWorld::ESMStore& getStore() const = 0;
@@ -320,14 +361,16 @@ namespace MWBase
         virtual void setActorCollisionMode(const MWWorld::Ptr& ptr, bool internal, bool external) = 0;
         virtual bool isActorCollisionEnabled(const MWWorld::Ptr& ptr) = 0;
 
+        // Multiplayer: force a network puppet's grounded state. Its body is teleported to its owner's
+        // position and its physics simulation is skipped, so the engine never works out whether it is
+        // airborne; setting it lets the puppet's own controller play jump/land and gate locomotion
+        // natively, just like the owner's does.
+        virtual void setActorOnGround(const MWWorld::Ptr& ptr, bool onGround) = 0;
+
         virtual bool toggleCollisionMode() = 0;
         ///< Toggle collision mode for player. If disabled player object should ignore
         /// collisions and gravity.
         /// \return Resulting mode
-
-        virtual bool toggleRenderMode(MWRender::RenderMode mode) = 0;
-        ///< Toggle a render mode.
-        ///< \return Resulting mode
 
         virtual MWWorld::Ptr placeObject(
             const MWWorld::Ptr& object, float cursorX, float cursorY, int amount, bool copy = true)
@@ -364,7 +407,6 @@ namespace MWBase
 
         virtual osg::Matrixf getActorHeadTransform(const MWWorld::ConstPtr& actor) const = 0;
 
-        virtual MWRender::Camera* getCamera() = 0;
         virtual void togglePOV(bool force = false) = 0;
         virtual bool isFirstPerson() const = 0;
         virtual bool isPreviewModeEnabled() const = 0;
@@ -434,8 +476,6 @@ namespace MWBase
         virtual const MWRender::Animation* getAnimation(const MWWorld::ConstPtr& ptr) const = 0;
         virtual void reattachPlayerCamera() = 0;
 
-        /// \todo this does not belong here
-        virtual void screenshot(osg::Image* image, int w, int h) = 0;
 
         /// Find default position inside exterior cell specified by name
         /// \return empty RefId if exterior with given name not exists, the cell's RefId otherwise
@@ -474,10 +514,10 @@ namespace MWBase
         virtual void castSpell(const MWWorld::Ptr& actor, bool scriptedSpell = false) = 0;
 
         virtual void launchMagicBolt(const ESM::RefId& spellId, const MWWorld::Ptr& caster,
-            const osg::Vec3f& fallbackDirection, ESM::RefNum item)
+            const osg::Vec3f& fallbackDirection, ESM::RefNum item, bool cosmetic = false)
             = 0;
         virtual void launchProjectile(MWWorld::Ptr& actor, MWWorld::Ptr& projectile, const osg::Vec3f& worldPos,
-            const osg::Quat& orient, MWWorld::Ptr& bow, float speed, float attackStrength)
+            const osg::Quat& orient, MWWorld::Ptr& bow, float speed, float attackStrength, bool cosmetic = false)
             = 0;
         virtual void updateProjectilesCasters() = 0;
 
@@ -597,9 +637,6 @@ namespace MWBase
 
         virtual Misc::Rng::Generator& getPrng() = 0;
 
-        virtual MWRender::RenderingManager* getRenderingManager() = 0;
-
-        virtual MWRender::PostProcessor* getPostProcessor() = 0;
 
         virtual MWWorld::DateTimeManager* getTimeManager() = 0;
 

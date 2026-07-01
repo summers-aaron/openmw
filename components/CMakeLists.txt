@@ -427,6 +427,7 @@ add_component_dir(detournavigator
     makenavmesh
     navigator
     navigatorimpl
+    navigatormultiworldspace
     navigatorstub
     navigatorutils
     navmeshcacheitem

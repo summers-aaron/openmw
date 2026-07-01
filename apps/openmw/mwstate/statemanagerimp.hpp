@@ -55,6 +55,9 @@ namespace MWState
         ///
         /// \param bypass Skip new game mechanics.
 
+        void newGameMultiplayer(const std::string& startCell) override;
+        ///< Start a multiplayer client's game: run character generation, then spawn in startCell.
+
         void endGame();
 
         void resumeGame() override;

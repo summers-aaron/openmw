@@ -7,6 +7,7 @@
 #include <components/stereo/stereomanager.hpp>
 
 #include "../mwbase/environment.hpp"
+#include "../mwbase/worldrendering.hpp"
 #include "../mwbase/world.hpp"
 
 #include "postprocessor.hpp"
@@ -99,7 +100,7 @@ namespace MWRender
 
     void ScreenshotManager::screenshot(osg::Image* image, int w, int h)
     {
-        osg::Camera* camera = MWBase::Environment::get().getWorld()->getPostProcessor()->getHUDCamera();
+        osg::Camera* camera = MWBase::Environment::get().getWorldRendering()->getPostProcessor()->getHUDCamera();
         osg::ref_ptr<osg::Drawable> tempDrw = new osg::Drawable;
         tempDrw->setDrawCallback(new ReadImageFromFramebufferCallback(image, w, h));
         tempDrw->setCullingActive(false);

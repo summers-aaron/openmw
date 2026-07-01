@@ -26,8 +26,15 @@
 #include "object.hpp"
 #include "objectlists.hpp"
 
+namespace MWNet
+{
+    struct EventBatch;
+}
+
 namespace MWLua
 {
+    class PlayerScripts;
+
     // \brief LuaManager is the central interface through which the engine invokes lua scripts.
     //
     // This class implements the interface defined in MWBase::LuaManager.
@@ -65,6 +72,21 @@ namespace MWLua
         // Called by engine.cpp from the main thread between InputManager and MechanicsManager updates.
         // Can use the scene graph and applies the actions queued during update()
         void synchronizedUpdate();
+
+        // \brief Collect this peer's pending Lua events for replication (M10).
+        //
+        // Drains the events mirrored at finalizeEventBatch time (before local dispatch
+        // clears the live batch) as a transport-ready EventBatch. Draining the side copy
+        // does not alter local dispatch, so single-player stays byte-identical.
+        MWNet::EventBatch collectOutgoingEvents();
+
+        // \brief Inject Lua events received from a remote peer (M10).
+        //
+        // In single-player / loopback every entity is locally authoritative, so a
+        // received batch is this peer's own echo and is NOT re-applied. M11 injects
+        // remote peers' events here (filtered by area-of-interest subscription),
+        // applied at the next synchronizedUpdate.
+        void injectIncomingEvents(const MWNet::EventBatch& batch);
 
         // Normally it is called by `synchronizedUpdate` every frame.
         // Additionally must be called before making a save to ensure that there are no pending delayed
@@ -118,6 +140,8 @@ namespace MWLua
 
         void clear() override; // should be called before loading game or starting a new game to reset internal state.
         void setupPlayer(const MWWorld::Ptr& ptr) override; // Should be called once after each "clear".
+        void addPlayer(const MWWorld::Ptr& ptr) override;
+        void removePlayer(const MWWorld::Ptr& ptr) override;
 
         // Used only in Lua bindings
         void addCustomLocalScript(const MWWorld::Ptr&, int scriptId, std::string_view initData);
@@ -188,6 +212,15 @@ namespace MWLua
         void initConfiguration(bool reload);
         LocalScripts* createLocalScripts(const MWWorld::Ptr& ptr,
             std::optional<LuaUtil::ScriptIdsWithInitializationData> autoStartConf = std::nullopt);
+        // Create (if needed), auto-start and activate the player scripts for the given player.
+        // extraPlayer selects the reduced set (no local-only input/UI/camera scripts) for
+        // additional players; the local player gets the full set.
+        LocalScripts* setupPlayerScripts(const MWWorld::Ptr& ptr, bool extraPlayer = false);
+        PlayerScripts* getPlayerScripts(const MWWorld::Ptr& ptr) const;
+        // Per-player player-section storage. The local player uses mPlayerStorage (persisted to
+        // disk); additional players get their own in-memory storage so they do not collide.
+        LuaUtil::LuaStorage* getPlayerStorage(const MWWorld::Ptr& ptr);
+        void clearPlayerStoragesTemporary();
         void reloadAllScriptsImpl();
         void synchronizedUpdateUnsafe();
 
@@ -251,7 +284,12 @@ namespace MWLua
         std::optional<ObjectId> mDelayedUiModeChangedArg;
 
         LuaUtil::LuaStorage mGlobalStorage;
-        LuaUtil::LuaStorage mPlayerStorage;
+        LuaUtil::LuaStorage mPlayerStorage; // the local player's player-section storage
+        // Player-section storage for additional (non-local) players, keyed by player object id.
+        std::map<ObjectId, std::unique_ptr<LuaUtil::LuaStorage>> mExtraPlayerStorages;
+        // Serialized extra-player storage read from a save, keyed by player index, applied once the
+        // corresponding players have been set up.
+        std::map<std::size_t, std::string> mLoadedExtraPlayerStorage;
 
         LuaUtil::InputAction::Registry mInputActions;
         LuaUtil::InputTrigger::Registry mInputTriggers;

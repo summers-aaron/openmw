@@ -143,6 +143,18 @@ namespace MWMechanics
         return mNumPursuitPackages > 0;
     }
 
+    bool AiSequence::isInPursuit(const MWWorld::Ptr& actor) const
+    {
+        if (mNumPursuitPackages <= 0)
+            return false;
+        for (auto it = mPackages.begin(); it != mPackages.end(); ++it)
+        {
+            if ((*it)->getTypeId() == AiPackageTypeId::Pursue && (*it)->getTarget() == actor)
+                return true;
+        }
+        return false;
+    }
+
     bool AiSequence::isFleeing() const
     {
         if (!isInCombat())

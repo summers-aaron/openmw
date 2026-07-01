@@ -1,7 +1,9 @@
 #ifndef ENGINE_H
 #define ENGINE_H
 
+#include <cstdint>
 #include <filesystem>
+#include <string>
 
 #include <components/compiler/extensions.hpp>
 #include <components/debug/debuglog.hpp>
@@ -14,6 +16,8 @@
 #include <osgViewer/ViewerEventHandlers>
 
 #include "mwbase/environment.hpp"
+
+#include "runmode.hpp"
 
 namespace Resource
 {
@@ -73,18 +77,10 @@ namespace MWState
     class StateManager;
 }
 
-namespace MWGui
+namespace MWBase
 {
     class WindowManager;
-}
-
-namespace MWInput
-{
     class InputManager;
-}
-
-namespace MWSound
-{
     class SoundManager;
 }
 
@@ -101,6 +97,12 @@ namespace MWScript
 namespace MWMechanics
 {
     class MechanicsManager;
+}
+
+namespace MWNet
+{
+    class Session;
+    class Replicator;
 }
 
 namespace MWDialogue
@@ -131,17 +133,24 @@ namespace OMW
         osg::ref_ptr<SceneUtil::WorkQueue> mWorkQueue;
         std::unique_ptr<SceneUtil::UnrefQueue> mUnrefQueue;
         std::unique_ptr<MWWorld::World> mWorld;
-        std::unique_ptr<MWSound::SoundManager> mSoundManager;
+        std::unique_ptr<MWBase::SoundManager> mSoundManager;
         std::unique_ptr<MWScript::ScriptManager> mScriptManager;
-        std::unique_ptr<MWGui::WindowManager> mWindowManager;
+        std::unique_ptr<MWBase::WindowManager> mWindowManager;
         std::unique_ptr<MWMechanics::MechanicsManager> mMechanicsManager;
         std::unique_ptr<MWDialogue::DialogueManager> mDialogueManager;
         std::unique_ptr<MWDialogue::Journal> mJournal;
-        std::unique_ptr<MWInput::InputManager> mInputManager;
+        std::unique_ptr<MWBase::InputManager> mInputManager;
         std::unique_ptr<MWState::StateManager> mStateManager;
         std::unique_ptr<MWLua::LuaManager> mLuaManager;
         std::unique_ptr<MWLua::Worker> mLuaWorker;
         std::unique_ptr<L10n::Manager> mL10nManager;
+        std::unique_ptr<MWNet::Session> mSession;
+        std::unique_ptr<MWNet::Replicator> mReplicator;
+        // Multiplayer session role (M11): a connect address makes this a client, a
+        // listen port makes it a host; neither is single-player (loopback).
+        std::string mConnectHost;
+        std::uint16_t mConnectPort = 0;
+        std::uint16_t mListenPort = 0;
         MWBase::Environment mEnvironment;
         ToUTF8::FromType mEncoding;
         std::unique_ptr<ToUTF8::Utf8Encoder> mEncoder;
@@ -159,6 +168,8 @@ namespace OMW
 
         std::unique_ptr<Stereo::Manager> mStereoManager;
 
+        RunMode mRunMode;
+        unsigned mMaxFrames = 0;
         bool mSkipMenu;
         bool mUseSound;
         bool mCompileAll;
@@ -191,6 +202,13 @@ namespace OMW
         Engine& operator=(const Engine&);
 
         void executeLocalScripts();
+
+        /// Send a heartbeat through the session transport and drain anything the
+        /// peer delivered. In integrated singleplayer the transport is loopback,
+        /// so this is an in-process round-trip with no observable effect; it
+        /// exists so the simulation already runs "through the transport" before
+        /// real messages flow across it (M9+).
+        void pumpTransport();
 
         bool frame(unsigned frameNumber, float dt);
 
@@ -233,6 +251,27 @@ namespace OMW
         void setSkipMenu(bool skipMenu, bool newGame);
 
         void setGrabMouse(bool grab) { mGrab = grab; }
+
+        /// Select how this process participates in the simulation. Dedicated runs the
+        /// server half headlessly with null client managers; default is Integrated (SP).
+        void setRunMode(RunMode mode) { mRunMode = mode; }
+        bool isDedicated() const { return OMW::isDedicated(mRunMode); }
+
+        /// Join a host as a network client (M11): the session connects to host:port and
+        /// receives the host's authoritative replication stream instead of looping back.
+        void setConnect(std::string host, std::uint16_t port)
+        {
+            mConnectHost = std::move(host);
+            mConnectPort = port;
+        }
+
+        /// Host a session on the given port (M11): accept clients and broadcast the
+        /// replication stream to them.
+        void setListen(std::uint16_t port) { mListenPort = port; }
+
+        /// Run at most this many simulation frames then quit (0 = unlimited). Intended for
+        /// headless/dedicated bounded runs and automated testing.
+        void setMaxFrames(unsigned frames) { mMaxFrames = frames; }
 
         /// Initialise and enter main loop.
         void go();

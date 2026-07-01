@@ -3,6 +3,10 @@
 #include <components/lua/luastate.hpp>
 #include <components/misc/resourcehelpers.hpp>
 
+#include "../../mwbase/environment.hpp"
+#include "../../mwbase/world.hpp"
+#include "../../mwworld/ptr.hpp"
+
 namespace MWLua
 {
     namespace ObjectTypeName
@@ -112,7 +116,9 @@ namespace MWLua
         if (ref == nullptr)
             throw std::runtime_error("Can't get type name from an empty object.");
         const ESM::RefId& id = ref->mRef.getRefId();
-        if (id == "Player")
+        // The primary player keeps the "Player" id; additional players have distinct ids, so fall
+        // back to the registry membership test to classify them as the Player type too.
+        if (id == "Player" || MWBase::Environment::get().getWorld()->isPlayer(MWWorld::ConstPtr(ref)))
             return ESM::REC_INTERNAL_PLAYER;
         if (Misc::ResourceHelpers::isHiddenMarker(id))
             return ESM::REC_INTERNAL_MARKER;

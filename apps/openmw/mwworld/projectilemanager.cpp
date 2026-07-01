@@ -289,7 +289,7 @@ namespace MWWorld
     }
 
     void ProjectileManager::launchMagicBolt(
-        const ESM::RefId& spellId, const Ptr& caster, const osg::Vec3f& fallbackDirection, ESM::RefNum item)
+        const ESM::RefId& spellId, const Ptr& caster, const osg::Vec3f& fallbackDirection, ESM::RefNum item, bool cosmetic)
     {
         osg::Vec3f pos = caster.getRefData().getPosition().asVec3();
         if (caster.getClass().isActor())
@@ -314,6 +314,7 @@ namespace MWWorld
         state.mSpellId = spellId;
         state.mCasterHandle = caster;
         state.mItem = item;
+        state.mCosmetic = cosmetic;
         MWBase::Environment::get().getWorldModel()->registerPtr(caster);
         state.mCaster = caster.getCellRef().getRefNum();
 
@@ -362,10 +363,11 @@ namespace MWWorld
     }
 
     void ProjectileManager::launchProjectile(const Ptr& actor, const ConstPtr& projectile, const osg::Vec3f& pos,
-        const osg::Quat& orient, const Ptr& bow, float speed, float attackStrength)
+        const osg::Quat& orient, const Ptr& bow, float speed, float attackStrength, bool cosmetic)
     {
         ProjectileState state;
         state.mCaster = actor.getCellRef().getRefNum();
+        state.mCosmetic = cosmetic;
         state.mBowId = bow.getCellRef().getRefId();
         state.mVelocity = orient * osg::Vec3f(0, 1, 0) * speed;
         state.mIdArrow = projectile.getCellRef().getRefId();
@@ -566,6 +568,14 @@ namespace MWWorld
             if (projectile->getHitWater())
                 mRendering->emitWaterRipple(hitPosition);
 
+            // A cosmetic arrow (mirror of a networked shooter) lands visually but resolves no hit — the
+            // real shot stays authoritative on the peer that owns the shooter.
+            if (projectileState.mCosmetic)
+            {
+                projectileState.mToDelete = true;
+                continue;
+            }
+
             MWMechanics::projectileHit(
                 caster, target, bow, projectileRef.getPtr(), hitPosition, projectileState.mAttackStrength);
             projectileState.mToDelete = true;
@@ -609,7 +619,24 @@ namespace MWWorld
                 const MWWorld::Ptr& ptr = ref.getPtr();
                 effects = &esmStore.get<ESM::Enchantment>().find(ptr.getClass().getEnchantment(ptr))->mEffects;
             }
-            cast.inflict(target, *effects, ESM::RT_Target);
+            // A cosmetic bolt (mirror of a networked caster) shows the impact visuals but applies
+            // nothing — the real effect stays authoritative on the peer that owns the caster.
+            if (magicBoltState.mCosmetic)
+            {
+                // The area/orb burst (also covers a non-actor surface hit)...
+                cast.explodeSpell(*effects, target, ESM::RT_Target, /*visualOnly=*/true);
+                // ...and the on-target hit flash, which the real path plays per applied effect (so a
+                // direct zero-area bolt on an actor isn't silent). playEffects is purely visual.
+                if (!target.isEmpty() && target.getClass().isActor())
+                {
+                    const auto& magicEffects = esmStore.get<ESM::MagicEffect>();
+                    for (const ESM::IndexedENAMstruct& effect : effects->mList)
+                        if (effect.mData.mRange == ESM::RT_Target)
+                            MWMechanics::playEffects(target, *magicEffects.find(effect.mData.mEffectID));
+                }
+            }
+            else
+                cast.inflict(target, *effects, ESM::RT_Target);
 
             magicBoltState.mToDelete = true;
         }
@@ -666,6 +693,9 @@ namespace MWWorld
     {
         for (const ProjectileState& projectile : mProjectiles)
         {
+            if (projectile.mCosmetic)
+                continue; // visual-only mirror of a networked shot — not part of this peer's world state
+
             writer.startRecord(ESM::REC_PROJ);
 
             ESM::ProjectileState state;
@@ -685,6 +715,9 @@ namespace MWWorld
 
         for (const MagicBoltState& bolt : mMagicBolts)
         {
+            if (bolt.mCosmetic)
+                continue; // visual-only mirror of a networked caster — not part of this peer's world state
+
             writer.startRecord(ESM::REC_MPRJ);
 
             ESM::MagicBoltState state;
@@ -807,7 +840,11 @@ namespace MWWorld
 
     size_t ProjectileManager::countSavedGameRecords() const
     {
-        return mMagicBolts.size() + mProjectiles.size();
+        // Cosmetic projectiles/bolts are excluded from write(), so they must not be counted here either.
+        return static_cast<size_t>(std::count_if(mMagicBolts.begin(), mMagicBolts.end(),
+                   [](const MagicBoltState& bolt) { return !bolt.mCosmetic; }))
+            + static_cast<size_t>(std::count_if(mProjectiles.begin(), mProjectiles.end(),
+                [](const ProjectileState& projectile) { return !projectile.mCosmetic; }));
     }
 
     void ProjectileManager::saveLoaded(const ESM::ESMReader& reader)

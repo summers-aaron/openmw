@@ -1,0 +1,141 @@
+# Shared helpers for docker/run-server.sh and docker/run-client.sh. Sourced, not executed.
+#
+# Defines the common env (with overrides) and a few helper functions so the launchers stay small.
+# Host-specific paths default to this machine but are all overridable via env.
+
+IMAGE="${IMAGE:-openmw.server:latest}"
+MP_CONFIG="${OPENMW_CONFIG:-$HOME/.config/openmw}"
+
+# --- container runtime: explicit override, else podman (Fedora), else docker ---
+MP_RUNTIME="${CONTAINER_RUNTIME:-}"
+if [ -z "$MP_RUNTIME" ]; then
+    if command -v podman >/dev/null 2>&1; then MP_RUNTIME=podman
+    elif command -v docker >/dev/null 2>&1; then MP_RUNTIME=docker
+    else echo "error: no podman or docker found" >&2; exit 1; fi
+fi
+
+# Resolve the game data directories to bind-mount. Generic across Steam install methods (native,
+# Flatpak, GOG, manual): if OPENMW_DATA is set, mount just that; otherwise read the data= lines from
+# your openmw.cfg — the exact paths OpenMW itself loads — so it works wherever the game is installed.
+# Each is mounted at its own host path so the (copied) config resolves inside the container.
+# Sets MP_DATA_MOUNTS (array of -v run flags).
+mp_common_data_mounts() {
+    MP_DATA_MOUNTS=()
+    if [ -n "${OPENMW_DATA:-}" ]; then
+        [ -d "$OPENMW_DATA" ] || { echo "error: OPENMW_DATA is not a directory: $OPENMW_DATA" >&2; exit 1; }
+        MP_DATA_MOUNTS=(-v "$OPENMW_DATA:$OPENMW_DATA:ro")
+        return
+    fi
+    local cfg="$MP_CONFIG/openmw.cfg"
+    [ -f "$cfg" ] || { echo "error: no openmw.cfg at $cfg (set OPENMW_CONFIG, or OPENMW_DATA directly)" >&2; exit 1; }
+    local line path
+    while IFS= read -r line; do
+        case "$line" in
+            data=*)
+                path="${line#data=}"
+                path="${path%\"}"; path="${path#\"}" # strip optional surrounding quotes
+                [ -n "$path" ] && [ -d "$path" ] && MP_DATA_MOUNTS+=(-v "$path:$path:ro")
+                ;;
+        esac
+    done < "$cfg"
+    if [ ${#MP_DATA_MOUNTS[@]} -eq 0 ]; then
+        echo "error: no usable data= directories found in $cfg" >&2
+        echo "  Set OPENMW_DATA to your Morrowind 'Data Files' path, or fix the data= lines in openmw.cfg." >&2
+        exit 1
+    fi
+}
+
+mp_common_preflight() {
+    command -v "$MP_RUNTIME" >/dev/null 2>&1 || { echo "error: '$MP_RUNTIME' not found" >&2; exit 1; }
+    if ! "$MP_RUNTIME" image inspect "$IMAGE" >/dev/null 2>&1; then
+        echo "error: image '$IMAGE' not found — build it first with: docker/build-host.sh" >&2
+        exit 1
+    fi
+    [ -d "$MP_CONFIG" ] || { echo "error: openmw config dir not found at: $MP_CONFIG (set OPENMW_CONFIG)" >&2; exit 1; }
+    mp_common_data_mounts # -> MP_DATA_MOUNTS (validated)
+}
+
+# Per-instance writable copy of the config, so each process can write settings/MyGUI.log without
+# fighting over the shared one. $1 = instance name -> sets MP_CFG.
+mp_common_config_copy() {
+    MP_CFG="/tmp/openmw-mp-$1-cfg"
+    rm -rf "$MP_CFG"; cp -r "$MP_CONFIG" "$MP_CFG"
+}
+
+# A user-data dir to mount at /userdata (holds saves). If OPENMW_USERDATA is set it is COPIED (so the
+# original is never mutated); otherwise a fresh empty dir is used. $1 = instance name -> sets MP_USERDATA.
+mp_common_userdata() {
+    MP_USERDATA="/tmp/openmw-mp-$1-ud"
+    rm -rf "$MP_USERDATA"
+    if [ -n "${OPENMW_USERDATA:-}" ]; then
+        [ -d "$OPENMW_USERDATA" ] || { echo "error: OPENMW_USERDATA is not a directory: $OPENMW_USERDATA" >&2; exit 1; }
+        cp -r "$OPENMW_USERDATA" "$MP_USERDATA"
+    else
+        mkdir -p "$MP_USERDATA"
+    fi
+}
+
+# Resolve a host .omwsave file into a container mount + load flag, so you can point a launcher at a
+# save on the host without the mounted-user-data dance. $1 = host path (may be empty -> no save).
+# Sets MP_SAVE_MOUNT (array of run flags, possibly empty) and MP_SAVE_LOAD (the --load-savegame flags).
+mp_common_save() {
+    MP_SAVE_MOUNT=()
+    MP_SAVE_LOAD=()
+    [ -n "${1:-}" ] || return 0
+    [ -f "$1" ] || { echo "error: save file not found: $1" >&2; exit 1; }
+    local abs; abs="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
+    MP_SAVE_MOUNT=(-v "$abs:/game.omwsave:ro")
+    MP_SAVE_LOAD=(--load-savegame /game.omwsave)
+}
+
+# Resolve the container name. If NAME is set explicitly, keep it and remove any same-named (stale)
+# container so it can be reused. Otherwise auto-pick the first free "<base>", "<base>-2", "<base>-3", …
+# so running a launcher repeatedly starts COEXISTING instances instead of the new one evicting the
+# previous same-named container. $1 = base name -> sets NAME.
+mp_common_pick_name() {
+    if [ -n "${NAME:-}" ]; then
+        "$MP_RUNTIME" rm -f "$NAME" >/dev/null 2>&1 || true
+        return
+    fi
+    NAME="$1"
+    local i=1
+    while "$MP_RUNTIME" ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$NAME"; do
+        i=$((i + 1)); NAME="$1-$i"
+    done
+}
+
+# Build the run flags for a RENDERING client (a real window): GPU + X11 display + audio.
+# GPU is auto-detected (nvidia if /dev/nvidia0 exists, else mesa); override with GPU=mesa|nvidia.
+# Sets MP_RENDER (array of run flags) and MP_GPU (the chosen mode).
+mp_common_gpu_render() {
+    local disp="${DISPLAY:-:0}"
+    xhost +local: >/dev/null 2>&1 || echo "warning: xhost failed — if no window appears, run 'xhost +local:' yourself" >&2
+    MP_RENDER=(-e DISPLAY="$disp" -e SDL_VIDEODRIVER=x11 -v /tmp/.X11-unix:/tmp/.X11-unix)
+    [ -e /dev/dri ] && MP_RENDER+=(--device /dev/dri)
+
+    MP_GPU="${GPU:-auto}"
+    [ "$MP_GPU" = auto ] && { [ -e /dev/nvidia0 ] && MP_GPU=nvidia || MP_GPU=mesa; }
+    if [ "$MP_GPU" = nvidia ]; then
+        # The image ships only mesa GL; stage the host's NVIDIA GL/GLX userspace into a dir we
+        # bind-mount, and route GLVND to it. Library dir differs by distro (Fedora vs Debian/Ubuntu).
+        local libdir=/usr/lib64
+        [ -e "$libdir/libGLX_nvidia.so.0" ] || libdir=/usr/lib/x86_64-linux-gnu
+        local stage=/tmp/openmw-mp-nvidia/lib
+        rm -rf /tmp/openmw-mp-nvidia; mkdir -p "$stage"
+        cp -a "$libdir"/libnvidia-*.so*   "$stage/" 2>/dev/null || true
+        cp -a "$libdir"/libEGL_nvidia.so* "$stage/" 2>/dev/null || true
+        cp -a "$libdir"/libGLX_nvidia.so* "$stage/" 2>/dev/null || true
+        local d
+        for d in /dev/nvidia0 /dev/nvidiactl /dev/nvidia-modeset /dev/nvidia-uvm /dev/nvidia-uvm-tools; do
+            [ -e "$d" ] && MP_RENDER+=(--device "$d")
+        done
+        MP_RENDER+=(-e LD_LIBRARY_PATH=/nvidia/lib -e __GLX_VENDOR_LIBRARY_NAME=nvidia -v "$stage:/nvidia/lib:ro")
+    fi
+
+    local rt="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    if [ -S "$rt/pulse/native" ]; then
+        MP_RENDER+=(-v "$rt/pulse/native:$rt/pulse/native" -e PULSE_SERVER="unix:$rt/pulse/native")
+    else
+        echo "warning: no PulseAudio socket at $rt/pulse/native — client will be silent" >&2
+    fi
+}

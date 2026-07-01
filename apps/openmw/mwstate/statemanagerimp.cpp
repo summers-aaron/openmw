@@ -26,6 +26,7 @@
 
 #include "../mwbase/dialoguemanager.hpp"
 #include "../mwbase/environment.hpp"
+#include "../mwbase/worldrendering.hpp"
 #include "../mwbase/inputmanager.hpp"
 #include "../mwbase/journal.hpp"
 #include "../mwbase/luamanager.hpp"
@@ -196,6 +197,43 @@ void MWState::StateManager::newGame(bool bypass)
     }
 }
 
+void MWState::StateManager::newGameMultiplayer(const std::string& startCell)
+{
+    cleanup();
+
+    try
+    {
+        Log(Debug::Info) << "Starting a multiplayer character in " << startCell;
+        // Add the standard startup scripts (the `main` global script and every StartScript). These are
+        // the normal new-game globals — unrelated to the prison-ship chargen scripts we deliberately skip
+        // — and are needed for a playable world.
+        MWBase::Environment::get().getScriptManager()->getGlobalScripts().addStartup();
+        // setNewGame(true) rebuilds the CharacterCreation controller and disallows the in-game windows;
+        // it must run before startNewGameMultiplayer pushes the first chargen mode so the controller
+        // exists to receive it.
+        MWBase::Environment::get().getWindowManager()->setNewGame(true);
+        MWBase::Environment::get().getWorld()->startNewGameMultiplayer(startCell);
+
+        mState = State_Running;
+        MWBase::Environment::get().getLuaManager()->gameLoaded();
+
+        MWBase::Environment::get().getWindowManager()->fadeScreenOut(0);
+        MWBase::Environment::get().getWindowManager()->fadeScreenIn(1);
+    }
+    catch (std::exception& e)
+    {
+        std::stringstream error;
+        error << "Failed to start multiplayer character: " << e.what();
+
+        Log(Debug::Error) << error.str();
+        cleanup(true);
+
+        std::vector<std::string> buttons;
+        buttons.emplace_back("#{Interface:OK}");
+        MWBase::Environment::get().getWindowManager()->interactiveMessageBox(error.str(), buttons);
+    }
+}
+
 void MWState::StateManager::endGame()
 {
     mState = State_Ended;
@@ -278,7 +316,11 @@ void MWState::StateManager::saveGame(std::string_view description, const Slot* s
         for (const std::string& contentFile : MWBase::Environment::get().getWorld()->getContentFiles())
             writer.addMaster(contentFile, 0); // not using the size information anyway -> use value of 0
 
-        writer.setFormatVersion(ESM::CurrentSaveGameFormatVersion);
+        // Single-player saves keep the older format version for backwards compatibility; only
+        // bump it when the save actually carries more than one player (REC_PLAYER_EXTRA records).
+        writer.setFormatVersion(MWBase::Environment::get().getWorld()->getPlayerCount() > 1
+                ? ESM::CurrentSaveGameFormatVersion
+                : ESM::MaxSinglePlayerFormatVersion);
 
         // all unused
         writer.setVersion(0);
@@ -533,6 +575,7 @@ void MWState::StateManager::loadGame(const Character* character, const std::file
                 case ESM::REC_WEAP:
                 case ESM::REC_GLOB:
                 case ESM::REC_PLAY:
+                case ESM::REC_PLAYER_EXTRA:
                 case ESM::REC_CSTA:
                 case ESM::REC_WTHR:
                 case ESM::REC_DYNA:
@@ -640,6 +683,14 @@ void MWState::StateManager::loadGame(const Character* character, const std::file
             pos.rot[1] = 0;
             pos.rot[2] = 0;
             MWBase::Environment::get().getWorld()->changeToCell(cell.getCell()->getId(), pos, true, false);
+        }
+
+        // Re-activate the cells occupied by any additional players restored from the save, so
+        // their surroundings are simulated as they were before saving.
+        {
+            MWBase::World* world = MWBase::Environment::get().getWorld();
+            for (std::size_t i = 1; i < world->getPlayerCount(); ++i)
+                MWBase::Environment::get().getWorldScene()->addExtraPlayer(world->getPlayerPtr(i));
         }
 
         MWBase::Environment::get().getWorld()->updateProjectilesCasters();
@@ -857,7 +908,7 @@ void MWState::StateManager::writeScreenshot(std::vector<char>& imageData) const
 
     osg::ref_ptr<osg::Image> screenshot(new osg::Image);
 
-    MWBase::Environment::get().getWorld()->screenshot(screenshot.get(), screenshotW, screenshotH);
+    MWBase::Environment::get().getWorldRendering()->screenshot(screenshot.get(), screenshotW, screenshotH);
 
     osgDB::ReaderWriter* readerwriter = osgDB::Registry::instance()->getReaderWriterForExtension("jpg");
     if (!readerwriter)

@@ -16,22 +16,22 @@ PLAYER: scripts/omw/skillhandlers.lua
 PLAYER: scripts/omw/mechanics/playercontroller.lua
 MENU: scripts/omw/camera/settings.lua
 MENU: scripts/omw/input/settings.lua
-PLAYER: scripts/omw/input/playercontrols.lua
-PLAYER: scripts/omw/camera/camera.lua
-PLAYER: scripts/omw/input/actionbindings.lua
-PLAYER: scripts/omw/input/smoothmovement.lua
-PLAYER: scripts/omw/input/gamepadcontrols.lua
+PLAYER, LOCAL_PLAYER: scripts/omw/input/playercontrols.lua
+PLAYER, LOCAL_PLAYER: scripts/omw/camera/camera.lua
+PLAYER, LOCAL_PLAYER: scripts/omw/input/actionbindings.lua
+PLAYER, LOCAL_PLAYER: scripts/omw/input/smoothmovement.lua
+PLAYER, LOCAL_PLAYER: scripts/omw/input/gamepadcontrols.lua
 NPC,CREATURE: scripts/omw/ai.lua
 GLOBAL: scripts/omw/mechanics/globalcontroller.lua
 CREATURE, NPC, PLAYER: scripts/omw/mechanics/actorcontroller.lua
 NPC,CREATURE,PLAYER: scripts/omw/combat/interface.lua
 
 # User interface
-PLAYER: scripts/omw/ui.lua
+PLAYER, LOCAL_PLAYER: scripts/omw/ui.lua
 
 # Lua console
 MENU: scripts/omw/console/menu.lua
-PLAYER: scripts/omw/console/player.lua
+PLAYER, LOCAL_PLAYER: scripts/omw/console/player.lua
 GLOBAL: scripts/omw/console/global.lua
 CUSTOM: scripts/omw/console/local.lua
 

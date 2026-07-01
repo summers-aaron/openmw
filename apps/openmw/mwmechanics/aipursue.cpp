@@ -7,6 +7,8 @@
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
 
+#include "../mwnet/replicator.hpp"
+
 #include "../mwworld/class.hpp"
 
 #include "actorutil.hpp"
@@ -65,8 +67,21 @@ namespace MWMechanics
 
         if (reached)
         {
-            if (!MWBase::Environment::get().getWorld()->getLOS(target, actor))
+            MWBase::World* world = MWBase::Environment::get().getWorld();
+            if (!world->getLOS(target, actor))
                 return false;
+            // Multiplayer: the criminal may be a remote player's avatar rather than this peer's own
+            // (primary) player. Opening the dialogue here would pull the HOST's player into the
+            // conversation, not the avatar's owner — so route the arrest to that owner's client, which
+            // opens the dialogue with its local copy of the guard. Only fall through to the local
+            // dialogue when the target is this peer's own player (single-player's only case).
+            if (target != world->getPlayerPtr())
+            {
+                if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+                    if (replicator->reportArrest(target, actor))
+                        return true; // handed off to the avatar's client
+                return true; // a non-primary player we can't route (shouldn't happen) — don't grab host UI
+            }
             MWBase::Environment::get().getWindowManager()->pushGuiMode(
                 MWGui::GM_Dialogue, actor); // Arrest player when reached
             return true;

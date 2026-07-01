@@ -10,9 +10,19 @@ file(GLOB UNITTEST_SRC_FILES
     mwworld/testduration.cpp
     mwworld/testtimestamp.cpp
     mwworld/testptr.cpp
+    mwworld/testplayers.cpp
     mwworld/testweather.cpp
 
     mwdialogue/testkeywordsearch.cpp
+
+    mwnet/testloopback.cpp
+    mwnet/testsnapshot.cpp
+    mwnet/testevents.cpp
+    mwnet/testnetworktransport.cpp
+    mwnet/testsession.cpp
+    mwnet/testactions.cpp
+
+    mwnull/testnullmanagers.cpp
 
     mwgui/tooltips.cpp
     mwgui/weightedsearch.cpp

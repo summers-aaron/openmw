@@ -51,6 +51,7 @@
 #include <components/vfs/manager.hpp>
 
 #include "../mwbase/environment.hpp"
+#include "../mwbase/worldrendering.hpp"
 #include "../mwbase/luamanager.hpp"
 #include "../mwbase/mechanicsmanager.hpp"
 #include "../mwbase/scriptmanager.hpp"
@@ -413,7 +414,7 @@ namespace MWScript
         public:
             void execute(Interpreter::Runtime& runtime) override
             {
-                bool enabled = MWBase::Environment::get().getWorld()->toggleRenderMode(MWRender::Render_CollisionDebug);
+                bool enabled = MWBase::Environment::get().getWorldRendering()->toggleRenderMode(MWRender::Render_CollisionDebug);
 
                 runtime.getContext().report(
                     enabled ? "Collision Mesh Rendering -> On" : "Collision Mesh Rendering -> Off");
@@ -425,7 +426,7 @@ namespace MWScript
         public:
             void execute(Interpreter::Runtime& runtime) override
             {
-                bool enabled = MWBase::Environment::get().getWorld()->toggleRenderMode(MWRender::Render_CollisionDebug);
+                bool enabled = MWBase::Environment::get().getWorldRendering()->toggleRenderMode(MWRender::Render_CollisionDebug);
 
                 runtime.getContext().report(
                     enabled ? "Collision Mesh Rendering -> On" : "Collision Mesh Rendering -> Off");
@@ -437,7 +438,7 @@ namespace MWScript
         public:
             void execute(Interpreter::Runtime& runtime) override
             {
-                bool enabled = MWBase::Environment::get().getWorld()->toggleRenderMode(MWRender::Render_Wireframe);
+                bool enabled = MWBase::Environment::get().getWorldRendering()->toggleRenderMode(MWRender::Render_Wireframe);
 
                 runtime.getContext().report(enabled ? "Wireframe Rendering -> On" : "Wireframe Rendering -> Off");
             }
@@ -459,7 +460,7 @@ namespace MWScript
         public:
             void execute(Interpreter::Runtime& runtime) override
             {
-                bool enabled = MWBase::Environment::get().getWorld()->toggleRenderMode(MWRender::Render_Pathgrid);
+                bool enabled = MWBase::Environment::get().getWorldRendering()->toggleRenderMode(MWRender::Render_Pathgrid);
 
                 runtime.getContext().report(enabled ? "Path Grid rendering -> On" : "Path Grid Rendering -> Off");
             }
@@ -1672,7 +1673,7 @@ namespace MWScript
         public:
             void execute(Interpreter::Runtime& runtime) override
             {
-                bool enabled = MWBase::Environment::get().getWorld()->toggleRenderMode(MWRender::Render_NavMesh);
+                bool enabled = MWBase::Environment::get().getWorldRendering()->toggleRenderMode(MWRender::Render_NavMesh);
 
                 runtime.getContext().report(
                     enabled ? "Navigation Mesh Rendering -> On" : "Navigation Mesh Rendering -> Off");
@@ -1684,7 +1685,7 @@ namespace MWScript
         public:
             void execute(Interpreter::Runtime& runtime) override
             {
-                bool enabled = MWBase::Environment::get().getWorld()->toggleRenderMode(MWRender::Render_ActorsPaths);
+                bool enabled = MWBase::Environment::get().getWorldRendering()->toggleRenderMode(MWRender::Render_ActorsPaths);
 
                 runtime.getContext().report(enabled ? "Agents Paths Rendering -> On" : "Agents Paths Rendering -> Off");
             }
@@ -1725,7 +1726,7 @@ namespace MWScript
         public:
             void execute(Interpreter::Runtime& runtime) override
             {
-                bool enabled = MWBase::Environment::get().getWorld()->toggleRenderMode(MWRender::Render_RecastMesh);
+                bool enabled = MWBase::Environment::get().getWorldRendering()->toggleRenderMode(MWRender::Render_RecastMesh);
 
                 runtime.getContext().report(enabled ? "Recast Mesh Rendering -> On" : "Recast Mesh Rendering -> Off");
             }

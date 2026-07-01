@@ -35,6 +35,7 @@
 #include "../mwmechanics/weapontype.hpp"
 
 #include "../mwbase/environment.hpp"
+#include "../mwbase/worldrendering.hpp"
 #include "../mwbase/mechanicsmanager.hpp"
 #include "../mwbase/soundmanager.hpp"
 #include "../mwbase/world.hpp"
@@ -543,7 +544,7 @@ namespace MWRender
         {
             mObjectRoot->setNodeMask(Mask_FirstPerson);
             mObjectRoot->addCullCallback(new OverrideFieldOfViewCallback(
-                mFirstPersonFieldOfView, MWBase::Environment::get().getWorld()->getRenderingManager()));
+                mFirstPersonFieldOfView, MWBase::Environment::get().getWorldRendering()->getRenderingManager()));
         }
 
         mWeaponAnimationTime->updateStartTime();
@@ -1068,9 +1069,9 @@ namespace MWRender
         updateQuiver();
     }
 
-    void NpcAnimation::releaseArrow(float attackStrength)
+    void NpcAnimation::releaseArrow(float attackStrength, bool cosmetic)
     {
-        WeaponAnimation::releaseArrow(mPtr, attackStrength);
+        WeaponAnimation::releaseArrow(mPtr, attackStrength, cosmetic);
         updateQuiver();
     }
 

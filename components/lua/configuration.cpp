@@ -20,6 +20,7 @@ namespace LuaUtil
             { "GLOBAL", ESM::LuaScriptCfg::sGlobal },
             { "CUSTOM", ESM::LuaScriptCfg::sCustom },
             { "PLAYER", ESM::LuaScriptCfg::sPlayer },
+            { "LOCAL_PLAYER", ESM::LuaScriptCfg::sLocalPlayer },
             { "MENU", ESM::LuaScriptCfg::sMenu },
             { "LOAD", ESM::LuaScriptCfg::sLoad },
         };
@@ -152,6 +153,18 @@ namespace LuaUtil
         {
             const ESM::LuaScriptCfg& script = mScripts[id];
             if (script.mFlags & flag)
+                res[static_cast<int>(id)] = script.mInitializationData;
+        }
+        return res;
+    }
+
+    ScriptIdsWithInitializationData ScriptsConfiguration::getExtraPlayerConf() const
+    {
+        ScriptIdsWithInitializationData res;
+        for (size_t id = 0; id < mScripts.size(); ++id)
+        {
+            const ESM::LuaScriptCfg& script = mScripts[id];
+            if ((script.mFlags & ESM::LuaScriptCfg::sPlayer) && !(script.mFlags & ESM::LuaScriptCfg::sLocalPlayer))
                 res[static_cast<int>(id)] = script.mInitializationData;
         }
         return res;

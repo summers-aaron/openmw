@@ -150,6 +150,10 @@ namespace MWBase
 
         virtual void clear() = 0;
         virtual void setupPlayer(const MWWorld::Ptr&) = 0;
+        // Set up / tear down Lua scripting for an additional (non-local) player added or removed at
+        // runtime. The local player is handled by setupPlayer.
+        virtual void addPlayer(const MWWorld::Ptr&) = 0;
+        virtual void removePlayer(const MWWorld::Ptr&) = 0;
 
         // Saving
         size_t countSavedGameRecords() const { return 1; }

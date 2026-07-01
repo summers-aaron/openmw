@@ -317,6 +317,10 @@ namespace MWMechanics
         bool isRunning() const;
         bool isTurning() const;
         bool isAttackingOrSpell() const;
+        // The attack segment the controller actually chose for the current swing (slash/chop/thrust,
+        // or shoot/self/touch/target for ranged/spells). Unlike CreatureStats::getAttackType this is
+        // the resolved type even when the request was "Any" (the player's default melee attack).
+        std::string_view getActiveAttackType() const { return mAttackType; }
 
         void setVisibility(float visibility) const;
         void castSpell(const ESM::RefId& spellId, bool scriptedSpell = false);

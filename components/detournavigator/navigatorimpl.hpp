@@ -57,11 +57,11 @@ namespace DetourNavigator
 
         void removePathgrid(const ESM::Pathgrid& pathgrid) override;
 
-        void update(const osg::Vec3f& playerPosition, const UpdateGuard* guard) override;
+        void update(std::span<const PlayerPosition> playerPositions, const UpdateGuard* guard) override;
 
         void wait(WaitConditionType waitConditionType, Loading::Listener* listener) override;
 
-        SharedNavMeshCacheItem getNavMesh(const AgentBounds& agentBounds) const override;
+        SharedNavMeshCacheItem getNavMesh(const AgentBounds& agentBounds, ESM::RefId worldspace) const override;
 
         std::map<AgentBounds, SharedNavMeshCacheItem> getNavMeshes() const override;
 
@@ -76,6 +76,7 @@ namespace DetourNavigator
     private:
         Settings mSettings;
         NavMeshManager mNavMeshManager;
+        ESM::RefId mWorldspace; // this navigator's single worldspace, set from updateBounds
         std::optional<TilePosition> mLastPlayerPosition;
         std::map<AgentBounds, std::size_t> mAgents;
         std::unordered_map<ObjectId, ObjectId> mAvoidIds;

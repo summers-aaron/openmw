@@ -190,13 +190,16 @@ namespace MWMechanics
             storage.stopAttack();
             stats.setAttackingOrSpell(false);
             storage.mActionCooldown = 0.f;
-            // Continue combat if target is player or player follower/escorter and an attack has been attempted
+            // Continue combat if target is a player or player follower/escorter and an attack has been
+            // attempted. Any player, not just the primary one: an NPC fighting a network peer's avatar
+            // must keep pursuing it the same way it would the local player, or it silently drops combat
+            // (and never retaliates) the moment that avatar is briefly unreachable.
             const auto& playerFollowersAndEscorters
                 = MWBase::Environment::get().getMechanicsManager()->getActorsSidingWith(MWMechanics::getPlayer());
             bool targetSidesWithPlayer
                 = (std::find(playerFollowersAndEscorters.begin(), playerFollowersAndEscorters.end(), target)
                     != playerFollowersAndEscorters.end());
-            if ((target == MWMechanics::getPlayer() || targetSidesWithPlayer)
+            if ((MWBase::Environment::get().getWorld()->isPlayer(target) || targetSidesWithPlayer)
                 && (hitAttemptMatchesTarget(actor, target) || hitAttemptMatchesTarget(target, actor)))
                 forceFlee = true;
             else // Otherwise end combat
@@ -311,8 +314,9 @@ namespace MWMechanics
                 // If there is no path, try to find a point on a line from the actor position to target projected
                 // on navmesh to attack the target from there.
                 const auto navigator = world->getNavigator();
-                const auto hit
-                    = DetourNavigator::raycast(*navigator, agentBounds, vActorPos, vTargetPos, navigatorFlags);
+                const ESM::RefId worldspace = actor.getCell()->getCell()->getWorldSpace();
+                const auto hit = DetourNavigator::raycast(
+                    *navigator, agentBounds, worldspace, vActorPos, vTargetPos, navigatorFlags);
 
                 if (hit.has_value() && (*hit - vTargetPos).length() <= rangeAttack)
                 {

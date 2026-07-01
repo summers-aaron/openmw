@@ -286,9 +286,16 @@ namespace MWLua
 
                   std::vector<osg::Vec3f> path;
 
+                  const ESM::RefId worldspace = MWBase::Environment::get()
+                                                    .getWorld()
+                                                    ->getPlayerPtr()
+                                                    .getCell()
+                                                    ->getCell()
+                                                    ->getWorldSpace();
                   const DetourNavigator::Status status = DetourNavigator::findPath(
-                      *MWBase::Environment::get().getWorld()->getNavigator(), agentBounds, source, destination,
-                      includeFlags, areaCosts, destinationTolerance, checkpoints, std::back_inserter(path));
+                      *MWBase::Environment::get().getWorld()->getNavigator(), agentBounds, worldspace, source,
+                      destination, includeFlags, areaCosts, destinationTolerance, checkpoints,
+                      std::back_inserter(path));
 
                   sol::table result(lua, sol::create);
                   LuaUtil::copyVectorToTable(path, result);
@@ -316,8 +323,10 @@ namespace MWLua
             constexpr auto getRandom
                 = [] { return Misc::Rng::rollProbability(MWBase::Environment::get().getWorld()->getPrng()); };
 
+            const ESM::RefId worldspace
+                = MWBase::Environment::get().getWorld()->getPlayerPtr().getCell()->getCell()->getWorldSpace();
             return DetourNavigator::findRandomPointAroundCircle(*MWBase::Environment::get().getWorld()->getNavigator(),
-                agentBounds, position, maxRadius, includeFlags, getRandom);
+                agentBounds, worldspace, position, maxRadius, includeFlags, getRandom);
         };
 
         api["castNavigationRay"]
@@ -338,8 +347,14 @@ namespace MWLua
                           includeFlags = *v;
                   }
 
-                  return DetourNavigator::raycast(
-                      *MWBase::Environment::get().getWorld()->getNavigator(), agentBounds, from, to, includeFlags);
+                  const ESM::RefId worldspace = MWBase::Environment::get()
+                                                    .getWorld()
+                                                    ->getPlayerPtr()
+                                                    .getCell()
+                                                    ->getCell()
+                                                    ->getWorldSpace();
+                  return DetourNavigator::raycast(*MWBase::Environment::get().getWorld()->getNavigator(), agentBounds,
+                      worldspace, from, to, includeFlags);
               };
 
         api["findNearestNavMeshPosition"] = [](const osg::Vec3f& position, const sol::optional<sol::table>& options) {
@@ -371,8 +386,10 @@ namespace MWLua
                 searchAreaHalfExtents = osg::Vec3f(halfExtents, halfExtents, halfExtents);
             }
 
+            const ESM::RefId worldspace
+                = MWBase::Environment::get().getWorld()->getPlayerPtr().getCell()->getCell()->getWorldSpace();
             return DetourNavigator::findNearestNavMeshPosition(*MWBase::Environment::get().getWorld()->getNavigator(),
-                agentBounds, position, *searchAreaHalfExtents, includeFlags);
+                agentBounds, worldspace, position, *searchAreaHalfExtents, includeFlags);
         };
 
         return LuaUtil::makeReadOnly(api);

@@ -45,6 +45,8 @@
 #include "../mwscript/extensions.hpp"
 #include "../mwscript/interpretercontext.hpp"
 
+#include "../mwnet/replicator.hpp"
+
 #include "../mwmechanics/actorutil.hpp"
 #include "../mwmechanics/creaturestats.hpp"
 #include "../mwmechanics/npcstats.hpp"
@@ -655,7 +657,14 @@ namespace MWDialogue
             if (Settings::gui().mSubtitles)
                 winMgr->messageBox(info->mResponse);
             if (!info->mSound.empty())
+            {
+                // Multiplayer: stage this line's subtitle so the host replicates it alongside the voice
+                // (say() carries only the sound file). Sent regardless of the host's own subtitle
+                // setting; each client decides whether to show it. No-op off the network.
+                if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+                    replicator->setPendingSpeechSubtitle(info->mResponse);
                 sndMgr->say(actor, Misc::ResourceHelpers::correctSoundPath(VFS::Path::Normalized(info->mSound)));
+            }
             if (!info->mResultScript.empty())
                 executeScript(info->mResultScript, actor);
             MWBase::Environment::get().getLuaManager()->onDialogueResponse(actor, *info, *dial);

@@ -6,6 +6,7 @@
 #include <components/settings/values.hpp>
 
 #include "../mwbase/environment.hpp"
+#include "../mwbase/worldrendering.hpp"
 #include "../mwbase/world.hpp"
 #include "../mwrender/camera.hpp"
 #include "../mwrender/renderingmanager.hpp"
@@ -18,8 +19,8 @@ namespace MWLua
     {
         using Misc::FiniteFloat;
 
-        MWRender::Camera* camera = MWBase::Environment::get().getWorld()->getCamera();
-        MWRender::RenderingManager* renderingManager = MWBase::Environment::get().getWorld()->getRenderingManager();
+        MWRender::Camera* camera = MWBase::Environment::get().getWorldRendering()->getCamera();
+        MWRender::RenderingManager* renderingManager = MWBase::Environment::get().getWorldRendering()->getRenderingManager();
 
         sol::table api(lua, sol::create);
         api["MODE"] = LuaUtil::makeStrictReadOnly(

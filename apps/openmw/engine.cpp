@@ -1,7 +1,10 @@
 #include "engine.hpp"
 
+#include <random>
+#include <atomic>
 #include <cerrno>
 #include <chrono>
+#include <csignal>
 #include <future>
 #include <system_error>
 
@@ -81,12 +84,32 @@
 
 #include "mwmechanics/mechanicsmanagerimp.hpp"
 
+#include "mwnet/actions.hpp"
+#include "mwnet/events.hpp"
+#include "mwnet/replicator.hpp"
+#include "mwnet/session.hpp"
+#include "mwnet/snapshot.hpp"
+
+#include "mwnull/nullinputmanager.hpp"
+#include "mwnull/nullsoundmanager.hpp"
+#include "mwnull/nullwindowmanager.hpp"
+
 #include "mwstate/statemanagerimp.hpp"
 
 #include "profile.hpp"
 
 namespace
 {
+    // Set by the SIGINT/SIGTERM handler installed for the dedicated server so the main loop can
+    // shut down gracefully (docker stop / systemd stop / Ctrl+C). Only an async-signal-safe
+    // atomic store happens in the handler; the loop does the actual teardown.
+    std::atomic_bool sShutdownRequested{ false };
+
+    void requestShutdownHandler(int)
+    {
+        sShutdownRequested.store(true, std::memory_order_relaxed);
+    }
+
     void checkSDLError(int ret)
     {
         if (ret != 0)
@@ -187,6 +210,117 @@ void OMW::Engine::executeLocalScripts()
     }
 }
 
+void OMW::Engine::pumpTransport()
+{
+    // A multiplayer client still in its join-time character generation: advance that flow (finalize the
+    // character once the chargen dialogs close, then open the replication gate). A no-op for the host,
+    // single-player, and a client whose character is already created.
+    mReplicator->updateClientStart();
+
+    // Broadcast this peer's post-tick state to the session, then apply whatever peers
+    // delivered. The session abstracts the role: single-player loops back to itself
+    // (so applyDelta/injectIncomingEvents are no-ops on the echo and SP stays byte-
+    // identical), a host fans out to every client, a client sends to its host.
+    // M9: post-tick transform delta on the Unreliable (latest-wins) channel.
+    const MWNet::SnapshotDelta delta = mReplicator->sampleDelta();
+    mSession->broadcast(MWNet::Message{ MWNet::Channel::Unreliable, MWNet::serializeSnapshot(delta) });
+
+    // Reliable channel carries two payload kinds, distinguished by a leading byte:
+    // M10 Lua events, and client-reported combat actions. (Unreliable is always the snapshot.)
+    constexpr std::byte sKindEvents{ 0 };
+    constexpr std::byte sKindActions{ 1 };
+    const auto tagged = [](std::byte kind, std::vector<std::byte> payload) {
+        payload.insert(payload.begin(), kind);
+        return payload;
+    };
+
+    const MWNet::EventBatch outgoingEvents = mLuaManager->collectOutgoingEvents();
+    if (!outgoingEvents.empty())
+        mSession->broadcast(MWNet::Message{ MWNet::Channel::Reliable, tagged(sKindEvents, MWNet::serializeEvents(outgoingEvents)) });
+
+    // This peer's reported hits on host-owned actors, for the host to resolve authoritatively.
+    const MWNet::ActionBatch outgoingActions = mReplicator->takeOutgoingActions();
+    if (!outgoingActions.empty())
+        mSession->broadcast(MWNet::Message{ MWNet::Channel::Reliable, tagged(sKindActions, MWNet::serializeActions(outgoingActions)) });
+
+    // Only a client obeys received state (the host is its authority); only the host resolves
+    // reported actions. A loopback echo is our own state, so in SP nothing is applied and it
+    // stays byte-identical.
+    const bool applyRemote = mSession->receivesAuthoritativeState();
+    const bool authority = mSession->isAuthority();
+    std::size_t receivedEntities = 0;
+    std::size_t appliedEntities = 0;
+    std::size_t receivedEvents = 0;
+    for (const MWNet::ReceivedMessage& received : mSession->poll())
+    {
+        // Never trust a payload: a real peer can send malformed bytes; drop them.
+        const MWNet::Message& message = received.mMessage;
+        if (message.mChannel == MWNet::Channel::Unreliable)
+        {
+            if (const std::optional<MWNet::SnapshotDelta> snapshot = MWNet::deserializeSnapshot(message.mPayload))
+            {
+                receivedEntities += snapshot->mEntities.size();
+                // Other peers' players always become avatars; world entities are applied
+                // only when this peer obeys the sender as an authority (a client of a host).
+                appliedEntities += mReplicator->applyDelta(*snapshot, applyRemote);
+            }
+        }
+        else if (!message.mPayload.empty()) // Reliable: leading byte selects events vs actions
+        {
+            const std::span<const std::byte> body(message.mPayload.data() + 1, message.mPayload.size() - 1);
+            if (message.mPayload.front() == sKindEvents)
+            {
+                if (const std::optional<MWNet::EventBatch> events = MWNet::deserializeEvents(body))
+                {
+                    receivedEvents += events->mGlobal.size() + events->mLocal.size();
+                    if (applyRemote)
+                        mLuaManager->injectIncomingEvents(*events);
+                }
+            }
+            else if (message.mPayload.front() == sKindActions)
+            {
+                if (const std::optional<MWNet::ActionBatch> actions = MWNet::deserializeActions(body))
+                {
+                    // Host resolves clients' reported hits; a client applies the host's report
+                    // that its own player was hit by the shared world.
+                    if (authority)
+                    {
+                        mReplicator->applyActions(*actions);
+                        mReplicator->applyContainerChanges(*actions); // resolve clients' take/put requests
+                        mReplicator->applyAvatarBounty(*actions); // a client cleared its avatar's bounty
+                        mReplicator->applyCombatRequests(*actions); // a client's avatar resisted arrest
+                    }
+                    else
+                    {
+                        mReplicator->applyIncomingPlayerDamage(*actions);
+                        mReplicator->applyIncomingPlayerBounty(*actions); // crime bounty the host gave our avatar
+                        mReplicator->applyContainerRevokes(*actions); // drop items we lost a take race for
+                        mReplicator->applyNpcSpeech(*actions); // replay voiced lines host NPCs spoke
+                        mReplicator->applyArrests(*actions); // open arrest dialogue a guard triggered
+                    }
+                    // Authoritative lootable contents flow host -> clients; the host relays them onward.
+                    mReplicator->applyContainers(*actions, /*relay=*/authority);
+                }
+            }
+        }
+    }
+
+    // Re-assert every remote-owned actor's locomotion intent for this frame, before the mechanics
+    // pass (which zeroes the movement vector each frame) runs. applyDelta only records the intent on
+    // snapshot-receipt frames; driving it here every frame keeps remote avatars' walk cycles
+    // continuous and lets them dead-reckon between snapshots instead of sliding under an idle pose.
+    mReplicator->driveRemoteActors();
+
+    // Verbose-only replication throughput (off by default), throttled to ~once per 300 ticks
+    // but always logged on any tick that carried Lua events or with peers connected.
+    if (delta.mTick % 300 == 0 || !outgoingEvents.empty() || mSession->peerCount() > 0)
+        Log(Debug::Verbose) << "Replication tick " << delta.mTick << " [" << mSession->peerCount()
+                            << " peer(s)]: sent " << delta.mEntities.size() << " changed-entity delta(s) [recv "
+                            << receivedEntities << ", applied " << appliedEntities << "], "
+                            << (outgoingEvents.mGlobal.size() + outgoingEvents.mLocal.size())
+                            << " Lua event(s) [recv " << receivedEvents << "]";
+}
+
 bool OMW::Engine::frame(unsigned frameNumber, float frametime)
 {
     const osg::Timer_t frameStart = mViewer->getStartTick();
@@ -194,6 +328,8 @@ bool OMW::Engine::frame(unsigned frameNumber, float frametime)
     osg::Stats* const stats = mViewer->getViewerStats();
 
     mEnvironment.setFrameDuration(frametime);
+
+    pumpTransport();
 
     try
     {
@@ -210,7 +346,10 @@ bool OMW::Engine::frame(unsigned frameNumber, float frametime)
         {
             ScopedProfile<UserStatsType::Sound> profile(frameStart, frameNumber, *timer, *stats);
 
-            if (!mWindowManager->isWindowVisible())
+            // The dedicated server's window is intentionally hidden (so isWindowVisible() is
+            // false). Don't let that pause the simulation — the whole point is to keep ticking
+            // the world without a visible window.
+            if (!isDedicated() && !mWindowManager->isWindowVisible())
             {
                 mSoundManager->pausePlayback();
                 return false;
@@ -339,19 +478,28 @@ bool OMW::Engine::frame(unsigned frameNumber, float frametime)
 
     mStereoManager->updateSettings(Settings::camera().mNearClip, Settings::camera().mViewingDistance);
 
-    mViewer->eventTraversal();
-    mViewer->updateTraversal();
+    // A dedicated server never presents frames: skip the OSG viewer traversals (event/update/
+    // rendering) and the crosshair-focus update, which are pure client presentation. The Lua
+    // worker below is part of the simulation, not rendering, so it always runs.
+    const bool dedicated = isDedicated();
 
-    // update focus object for GUI
+    if (!dedicated)
     {
-        ScopedProfile<UserStatsType::Focus> profile(frameStart, frameNumber, *timer, *stats);
-        mWorld->updateFocusObject();
+        mViewer->eventTraversal();
+        mViewer->updateTraversal();
+
+        // update focus object for GUI
+        {
+            ScopedProfile<UserStatsType::Focus> profile(frameStart, frameNumber, *timer, *stats);
+            mWorld->updateFocusObject();
+        }
     }
 
     // if there is a separate Lua thread, it starts the update now
     mLuaWorker->allowUpdate(frameStart, frameNumber, *stats);
 
-    mViewer->renderingTraversals();
+    if (!dedicated)
+        mViewer->renderingTraversals();
 
     mLuaWorker->finishUpdate(frameStart, frameNumber, *stats);
 
@@ -365,6 +513,7 @@ OMW::Engine::Engine(Files::ConfigurationManager& configurationManager)
     , mSelectDepthFormatOperation(new SceneUtil::SelectDepthFormatOperation())
     , mSelectColorFormatOperation(new SceneUtil::Color::SelectColorFormatOperation())
     , mStereoManager(nullptr)
+    , mRunMode(RunMode::Integrated)
     , mSkipMenu(false)
     , mUseSound(true)
     , mCompileAll(false)
@@ -418,6 +567,8 @@ OMW::Engine::~Engine()
     mLuaWorker = nullptr;
     mLuaManager = nullptr;
     mL10nManager = nullptr;
+    mReplicator = nullptr;
+    mSession = nullptr;
 
     mScriptContext = nullptr;
 
@@ -506,7 +657,10 @@ void OMW::Engine::createWindow()
         posY = SDL_WINDOWPOS_UNDEFINED_DISPLAY(screen);
     }
 
-    Uint32 flags = SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
+    // A dedicated server keeps the window hidden (a GL context is still required for the
+    // OSG rendering pipeline at this milestone, but no frames are ever presented).
+    Uint32 flags = SDL_WINDOW_OPENGL | (isDedicated() ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN)
+        | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
     if (windowMode == Settings::WindowMode::Fullscreen)
         flags |= SDL_WINDOW_FULLSCREEN;
     else if (windowMode == Settings::WindowMode::WindowedFullscreen)
@@ -722,8 +876,57 @@ void OMW::Engine::setWindowIcon()
 
 void OMW::Engine::prepareEngine()
 {
+    mEnvironment.setRunMode(mRunMode);
+
     mStateManager = std::make_unique<MWState::StateManager>(mCfgMgr.getUserDataPath() / "saves", mContentFiles);
     mEnvironment.setStateManager(*mStateManager);
+
+    // Pick the session role (M11). A connect address joins a host as a client; a listen
+    // port hosts; neither is single-player, which loops back to itself in-process (no
+    // serialization round-trip changes nothing, so SP stays byte-identical).
+    if (!mConnectHost.empty())
+    {
+        Log(Debug::Info) << "Joining host " << mConnectHost << ":" << mConnectPort << " as a network client";
+        std::unique_ptr<MWNet::ClientSession> client = MWNet::ClientSession::connect(mConnectHost, mConnectPort);
+        if (!client)
+            throw std::runtime_error("Failed to connect to host " + mConnectHost + ":" + std::to_string(mConnectPort));
+        mSession = std::move(client);
+    }
+    else if (mListenPort != 0)
+    {
+        auto host = std::make_unique<MWNet::HostSession>(mListenPort);
+        Log(Debug::Info) << "Hosting a network session on port " << host->port();
+        mSession = std::move(host);
+    }
+    else
+    {
+        mSession = std::make_unique<MWNet::LoopbackSession>();
+    }
+    mReplicator = std::make_unique<MWNet::Replicator>();
+    mEnvironment.setReplicator(*mReplicator);
+    // Give this peer's player a network identity so other peers can show it as an avatar.
+    // The host is the fixed authority (id 0); each client self-assigns a random non-zero id
+    // so any number of clients get distinct identities without a handshake (collision is ~1 in
+    // 4 billion). The host also relays clients' players to one another so they see each other.
+    // Single-player leaves the id unset (no player is replicated).
+    if (!mConnectHost.empty())
+    {
+        std::uint32_t id = std::random_device{}();
+        if (id == 0)
+            id = 1; // never collide with the host's id 0
+        mReplicator->setLocalPlayerNetId(ESM::RefNum{ id, MWNet::sNetPlayerContentFile });
+        // A client joining without a save runs character generation before it has a character to
+        // replicate; hold its player back until chargen finalizes so peers never see a half-built
+        // avatar. A client that loads a save already has its character, so it replicates immediately.
+        if (mSaveGameFile.empty())
+            mReplicator->setLocalPlayerReady(false);
+    }
+    else if (mListenPort != 0)
+    {
+        mReplicator->setLocalPlayerNetId(ESM::RefNum{ 0, MWNet::sNetPlayerContentFile });
+        mReplicator->setRelayAvatars(true);
+        mReplicator->setAuthority(true);
+    }
 
     const bool stereoEnabled = Settings::stereo().mStereoEnabled || osg::DisplaySettings::instance().get()->getStereo();
     mStereoManager = std::make_unique<Stereo::Manager>(
@@ -820,23 +1023,39 @@ void OMW::Engine::prepareEngine()
     mStereoManager->disableStereoForNode(guiRoot);
     rootNode->addChild(guiRoot);
 
-    mWindowManager = std::make_unique<MWGui::WindowManager>(mWindow, mViewer, guiRoot, mResourceSystem.get(),
-        mWorkQueue.get(), mCfgMgr.getLogPath(), mScriptConsoleMode, mTranslationDataStorage, mEncoding, mExportFonts,
-        Version::getOpenmwVersionDescription(), mCfgMgr);
+    // Headless dedicated server: the client subsystems (MyGUI, SDL input, OpenAL) are
+    // replaced by inert null managers. The server-half simulation still runs in full.
+    // The WindowManager must be registered before the InputManager is constructed —
+    // MWInput::MouseManager reads getWindowManager()->getScalingFactor() in its ctor.
+    if (isDedicated())
+        mWindowManager = std::make_unique<MWNull::NullWindowManager>();
+    else
+        mWindowManager = std::make_unique<MWGui::WindowManager>(mWindow, mViewer, guiRoot, mResourceSystem.get(),
+            mWorkQueue.get(), mCfgMgr.getLogPath(), mScriptConsoleMode, mTranslationDataStorage, mEncoding,
+            mExportFonts, Version::getOpenmwVersionDescription(), mCfgMgr);
     mEnvironment.setWindowManager(*mWindowManager);
 
-    mInputManager = std::make_unique<MWInput::InputManager>(mWindow, mViewer, mScreenCaptureHandler, keybinderUser,
-        keybinderUserExists, userGameControllerdb, gameControllerdb, mGrab);
-    mEnvironment.setInputManager(*mInputManager);
+    if (isDedicated())
+    {
+        mInputManager = std::make_unique<MWNull::NullInputManager>();
+        mSoundManager = std::make_unique<MWNull::NullSoundManager>();
+    }
+    else
+    {
+        mInputManager = std::make_unique<MWInput::InputManager>(mWindow, mViewer, mScreenCaptureHandler, keybinderUser,
+            keybinderUserExists, userGameControllerdb, gameControllerdb, mGrab);
 
-    // Create sound system
-    mSoundManager = std::make_unique<MWSound::SoundManager>(mVFS.get(), mUseSound);
+        mSoundManager = std::make_unique<MWSound::SoundManager>(mVFS.get(), mUseSound);
+    }
+    mEnvironment.setInputManager(*mInputManager);
     mEnvironment.setSoundManager(*mSoundManager);
 
     // Create the world
     mWorld = std::make_unique<MWWorld::World>(
         mResourceSystem.get(), mActivationDistanceOverride, mCellName, mCfgMgr.getUserDataPath());
+    mWorld->setDedicatedServer(isDedicated());
     mEnvironment.setWorld(*mWorld);
+    mEnvironment.setWorldRendering(*mWorld);
     mEnvironment.setWorldModel(mWorld->getWorldModel());
     mEnvironment.setESMStore(mWorld->getStore());
 
@@ -995,7 +1214,14 @@ void OMW::Engine::go()
         Resource::collectStatistics(*mViewer);
 
     // Start the game
-    if (!mSaveGameFile.empty())
+    if (!mConnectHost.empty() && mSaveGameFile.empty())
+    {
+        // A multiplayer client that joined without a save creates its character on the spot: run
+        // character generation, then spawn in the start cell (the Census and Excise Office by default,
+        // or a --start override). The dedicated server still boots from a save via --load.
+        mStateManager->newGameMultiplayer(mCellName.empty() ? "Seyda Neen, Census and Excise Office" : mCellName);
+    }
+    else if (!mSaveGameFile.empty())
     {
         mStateManager->loadGame(mSaveGameFile);
     }
@@ -1023,12 +1249,38 @@ void OMW::Engine::go()
         mWindowManager->executeInConsole(mStartupScript);
     }
 
+    // A dedicated server has no window to close, so let SIGINT/SIGTERM (Ctrl+C, docker stop,
+    // systemd stop) request a graceful shutdown. Installed only for the dedicated server so
+    // singleplayer keeps the default signal behaviour.
+    if (isDedicated())
+    {
+        std::signal(SIGINT, &requestShutdownHandler);
+        std::signal(SIGTERM, &requestShutdownHandler);
+    }
+
     // Start the main rendering loop
     MWWorld::DateTimeManager& timeManager = *mWorld->getTimeManager();
     Misc::FrameRateLimiter frameRateLimiter = Misc::makeFrameRateLimiter(mEnvironment.getFrameRateLimit());
     const std::chrono::steady_clock::duration maxSimulationInterval(std::chrono::milliseconds(200));
+    unsigned simFrames = 0;
+    const double startGameTime = timeManager.getGameTime();
     while (!mViewer->done() && !mStateManager->hasQuitRequest())
     {
+        if (sShutdownRequested.load(std::memory_order_relaxed))
+        {
+            Log(Debug::Info) << "Shutdown signal received; quitting.";
+            break;
+        }
+
+        // Bounded run (--frames): tick a fixed number of simulation frames then quit. Used
+        // for headless/dedicated runs and automated testing where there is no window to close.
+        if (mMaxFrames != 0 && simFrames >= mMaxFrames)
+        {
+            Log(Debug::Info) << "Reached frame limit (" << mMaxFrames << "); game time advanced "
+                             << (timeManager.getGameTime() - startGameTime) << "s over the run. Quitting.";
+            break;
+        }
+
         const double dt = std::chrono::duration_cast<std::chrono::duration<double>>(
                               std::min(frameRateLimiter.getLastFrameDuration(), maxSimulationInterval))
                               .count()
@@ -1049,6 +1301,7 @@ void OMW::Engine::go()
             timeManager.setSimulationTime(timeManager.getSimulationTime() + dt);
             timeManager.setRenderingSimulationTime(timeManager.getRenderingSimulationTime() + dt);
         }
+        ++simFrames;
 
         if (stats)
         {

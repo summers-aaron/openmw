@@ -3,6 +3,8 @@
 
 #include <components/misc/notnullptr.hpp>
 
+#include "../runmode.hpp"
+
 #include <memory>
 
 namespace Resource
@@ -22,9 +24,15 @@ namespace MWWorld
     class Scene;
 }
 
+namespace MWNet
+{
+    class Replicator;
+}
+
 namespace MWBase
 {
     class World;
+    class WorldRendering;
     class ScriptManager;
     class DialogueManager;
     class Journal;
@@ -44,6 +52,7 @@ namespace MWBase
         static Environment* sThis;
 
         World* mWorld = nullptr;
+        WorldRendering* mWorldRendering = nullptr;
         MWWorld::WorldModel* mWorldModel = nullptr;
         MWWorld::Scene* mWorldScene = nullptr;
         MWWorld::ESMStore* mESMStore = nullptr;
@@ -60,6 +69,8 @@ namespace MWBase
         L10n::Manager* mL10nManager = nullptr;
         float mFrameRateLimit = 0;
         float mFrameDuration = 0;
+        OMW::RunMode mRunMode = OMW::RunMode::Integrated;
+        MWNet::Replicator* mReplicator = nullptr;
 
     public:
         Environment();
@@ -71,6 +82,7 @@ namespace MWBase
         Environment& operator=(const Environment&) = delete;
 
         void setWorld(World& value) { mWorld = &value; }
+        void setWorldRendering(WorldRendering& value) { mWorldRendering = &value; }
         void setWorldModel(MWWorld::WorldModel& value) { mWorldModel = &value; }
         void setWorldScene(MWWorld::Scene& value) { mWorldScene = &value; }
         void setESMStore(MWWorld::ESMStore& value) { mESMStore = &value; }
@@ -97,7 +109,13 @@ namespace MWBase
 
         void setL10nManager(L10n::Manager& value) { mL10nManager = &value; }
 
+        /// The network replicator, or nullptr outside a running session (e.g. before init).
+        /// Combat code reports hits on host-owned actors through it.
+        void setReplicator(MWNet::Replicator& value) { mReplicator = &value; }
+        MWNet::Replicator* getReplicator() const { return mReplicator; }
+
         Misc::NotNullPtr<World> getWorld() const { return mWorld; }
+        Misc::NotNullPtr<WorldRendering> getWorldRendering() const { return mWorldRendering; }
         Misc::NotNullPtr<MWWorld::WorldModel> getWorldModel() const { return mWorldModel; }
         Misc::NotNullPtr<MWWorld::Scene> getWorldScene() const { return mWorldScene; }
         Misc::NotNullPtr<MWWorld::ESMStore> getESMStore() const { return mESMStore; }
@@ -129,6 +147,11 @@ namespace MWBase
         void setFrameRateLimit(float value) { mFrameRateLimit = value; }
 
         float getFrameDuration() const { return mFrameDuration; }
+
+        void setRunMode(OMW::RunMode value) { mRunMode = value; }
+        OMW::RunMode getRunMode() const { return mRunMode; }
+        /// True when running as a headless dedicated server (no rendering/GUI/audio client).
+        bool isDedicated() const { return OMW::isDedicated(mRunMode); }
 
         void setFrameDuration(float value) { mFrameDuration = value; }
 

@@ -1,5 +1,7 @@
 #include "aipackage.hpp"
 
+#include <limits>
+
 #include <components/detournavigator/agentbounds.hpp>
 #include <components/detournavigator/navigator.hpp>
 #include <components/esm3/loadcell.hpp>
@@ -110,7 +112,7 @@ bool MWMechanics::AiPackage::pathTo(const MWWorld::Ptr& actor, const osg::Vec3f&
     //... At current time, the first test is unnecessary. AI shuts down when actor is more than
     //... "actors processing range" setting value units from player, and exterior cells are 8192 units long and wide.
     //... But AI processing distance may increase in the future.
-    if (isNearInactiveCell(position)
+    if (isNearInactiveCell(actor, position)
         || MWBase::Environment::get().getMechanicsManager()->checkScriptedAnimationPlaying(actor))
     {
         actor.getClass().getMovementSettings(actor).mPosition[0] = 0;
@@ -403,9 +405,35 @@ bool MWMechanics::AiPackage::doesPathNeedRecalc(const osg::Vec3f& newDest, const
         || mPathFinder.getPathCell() != actor.getCell();
 }
 
-bool MWMechanics::AiPackage::isNearInactiveCell(osg::Vec3f position)
+bool MWMechanics::AiPackage::isNearInactiveCell(const MWWorld::ConstPtr& actor, osg::Vec3f position)
 {
-    const MWWorld::Cell* playerCell = getPlayer().getCell()->getCell();
+    // Anchor the loaded-cell-grid check on the nearest player that shares THIS actor's worldspace, not
+    // always the primary player. On a dedicated multiplayer server the primary player is a stationary
+    // placeholder that is often in a different worldspace than the actor (it stays in the exterior
+    // while this actor is in an interior pursuing an avatar). Using its exterior cell to interpret an
+    // interior position put every interior actor "off the 3x3 grid", which zeroed its movement and
+    // stopped it pursuing. With a single player (single-player) this resolves to the primary, so
+    // behavior is unchanged there.
+    MWBase::World* world = MWBase::Environment::get().getWorld();
+    const ESM::RefId worldspace = actor.getCell()->getCell()->getWorldSpace();
+    MWWorld::Ptr reference;
+    float nearestSqr = std::numeric_limits<float>::max();
+    for (std::size_t i = 0; i < world->getPlayerCount(); ++i)
+    {
+        const MWWorld::Ptr player = world->getPlayerPtr(i);
+        if (!player.isInCell() || player.getCell()->getCell()->getWorldSpace() != worldspace)
+            continue;
+        const float distSqr = (player.getRefData().getPosition().asVec3() - position).length2();
+        if (distSqr < nearestSqr)
+        {
+            nearestSqr = distSqr;
+            reference = player;
+        }
+    }
+    if (reference.isEmpty())
+        return false; // no player shares this actor's worldspace: no nearby loaded-grid edge to guard
+
+    const MWWorld::Cell* playerCell = reference.getCell()->getCell();
     if (playerCell->isExterior())
     {
         // get actor's distance from origin of center cell

@@ -20,6 +20,8 @@
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
 
+#include "../mwnet/replicator.hpp"
+
 #include "../mwworld/class.hpp"
 #include "../mwworld/esmstore.hpp"
 #include "../mwworld/globals.hpp"
@@ -243,6 +245,15 @@ namespace MWMechanics
 
             if (Misc::Rng::roll0to99(world->getPrng()) >= getHitChance(attacker, victim, skillValue))
             {
+                // Remote-owned victim (shared-world actor): a client's miss still aggros a host NPC, so
+                // report a zero-damage hit; never apply locally to the replica the host owns.
+                if (victim.getRefData().isRemoteOwned())
+                {
+                    MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+                    if (replicator && !replicator->isAuthority() && attacker == getPlayer())
+                        replicator->reportHit(victim, 0.f, true);
+                    return;
+                }
                 MWBase::Environment::get().getLuaManager()->onHit(attacker, victim, weapon, projectile, 0,
                     attackStrength, damage, false, hitPosition, false, MWMechanics::DamageSourceType::Ranged);
                 MWMechanics::reduceWeaponCondition(damage, false, weapon, attacker);
@@ -290,6 +301,22 @@ namespace MWMechanics
 
         // Apply "On hit" effect of the projectile
         bool appliedEnchantment = applyOnStrikeEnchantment(attacker, victim, projectile, hitPosition, true);
+
+        // Server-authoritative ranged hit on a shared-world actor (mirrors the melee path in Npc::hit):
+        // the damage is fully resolved above, so hand it across the network rather than applying it to a
+        // remote-owned replica (which the host's snapshots would just overwrite). A client asks the host
+        // to resolve its hit; the host tells the avatar's owning client it was hit.
+        if (validVictim && victim.getRefData().isRemoteOwned())
+        {
+            if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+            {
+                if (replicator->isAuthority())
+                    replicator->reportRemotePlayerHit(victim, damage, true);
+                else if (attacker == getPlayer())
+                    replicator->reportHit(victim, damage, true);
+            }
+            return;
+        }
 
         if (validVictim)
         {

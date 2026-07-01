@@ -7,6 +7,8 @@
 #include "../mwbase/soundmanager.hpp"
 #include "../mwbase/world.hpp"
 
+#include "../mwnet/replicator.hpp"
+
 #include "../mwworld/esmstore.hpp"
 
 #include <components/esm3/loadsoun.hpp>
@@ -259,6 +261,11 @@ namespace MWLua
         api["say"] = [luaManager = context.mLuaManager](
                          std::string_view fileName, const sol::object& object, sol::optional<std::string_view> text) {
             MWWorld::Ptr ptr = getMutablePtrOrThrow(ObjectVariant(object));
+            // Multiplayer: stage the subtitle so the host replicates it with the voice (say() carries
+            // only the sound file); each client decides whether to show it. No-op off the network.
+            if (text)
+                if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+                    replicator->setPendingSpeechSubtitle(*text);
             MWBase::Environment::get().getSoundManager()->say(ptr, VFS::Path::Normalized(fileName));
             if (text && Settings::gui().mSubtitles)
                 luaManager->addUIMessage(*text);

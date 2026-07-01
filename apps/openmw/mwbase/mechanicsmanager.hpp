@@ -137,6 +137,12 @@ namespace MWBase
         /// @return false if the attack was considered a "friendly hit" and forgiven
         virtual bool actorAttacked(const MWWorld::Ptr& victim, const MWWorld::Ptr& attacker) = 0;
 
+        /// Forgive every actor currently reacting to a crime committed against the given player (the
+        /// victim it assaulted, witnesses, guards): stop their combat/pursuit and reset their aggression,
+        /// the same way single-player calms witnesses once their bounty is paid. Used when a (networked)
+        /// player resolves an arrest — its bounty is cleared, so the actors angry at it should stand down.
+        virtual void forgiveCrimesAgainst(const MWWorld::Ptr& player) = 0;
+
         /// Notify that actor was killed, add a murder bounty if applicable
         /// @note No-op for non-player attackers
         virtual void actorKilled(const MWWorld::Ptr& victim, const MWWorld::Ptr& attacker) = 0;
@@ -261,6 +267,13 @@ namespace MWBase
         virtual bool isCastingSpell(const MWWorld::Ptr& ptr) const = 0;
         virtual bool isReadyToBlock(const MWWorld::Ptr& ptr) const = 0;
         virtual bool isAttackingOrSpell(const MWWorld::Ptr& ptr) const = 0;
+        /// The attack segment the actor's controller actually chose for its current swing
+        /// (slash/chop/thrust, or shoot/self/touch/target); empty if not mid-swing.
+        virtual std::string_view getActiveAttackType(const MWWorld::Ptr& ptr) const = 0;
+
+        /// How far the actor's controller charged its current swing, 0..1 (set at release). -1 if the
+        /// actor has no controller. Used to replicate a power attack's strength to remote avatars.
+        virtual float getAttackStrength(const MWWorld::Ptr& ptr) const = 0;
 
         virtual void castSpell(const MWWorld::Ptr& ptr, const ESM::RefId& spellId, bool scriptedSpell) = 0;
 

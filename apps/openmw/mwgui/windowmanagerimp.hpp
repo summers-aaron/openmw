@@ -135,9 +135,9 @@ namespace MWGui
         virtual ~WindowManager();
 
         /// Set the ESMStore to use for retrieving of GUI-related strings.
-        void setStore(const MWWorld::ESMStore& store);
+        void setStore(const MWWorld::ESMStore& store) override;
 
-        void initUI();
+        void initUI() override;
 
         Loading::Listener* getLoadingScreen() override;
 
@@ -149,6 +149,8 @@ namespace MWGui
         void setKeyFocusWidget(MyGUI::Widget* widget) override;
 
         void setNewGame(bool newgame) override;
+
+        void startCharacterCreation() override;
 
         void pushGuiMode(GuiMode mode, const MWWorld::Ptr& arg) override;
         void pushGuiMode(GuiMode mode) override;
@@ -278,7 +280,7 @@ namespace MWGui
         int readPressedButton() override; ///< returns the index of the pressed button or -1 if no button was pressed
                                           ///< (->MessageBoxmanager->InteractiveMessageBox)
 
-        void update(float duration);
+        void update(float duration) override;
 
         /**
          * Fetches a GMST string from the store, if there is no setting with the given

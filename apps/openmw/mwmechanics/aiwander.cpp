@@ -388,6 +388,7 @@ namespace MWMechanics
         MWBase::World& world = *MWBase::Environment::get().getWorld();
         const auto agentBounds = world.getPathfindingAgentBounds(actor);
         const auto navigator = world.getNavigator();
+        const ESM::RefId worldspace = actor.getCell()->getCell()->getWorldSpace();
         const DetourNavigator::Flags navigatorFlags = getNavigatorFlags(actor);
         const DetourNavigator::AreaCosts areaCosts = getAreaCosts(actor, navigatorFlags);
         Misc::Rng::Generator& prng = world.getPrng();
@@ -403,7 +404,7 @@ namespace MWMechanics
                 const auto getRandom
                     = []() { return Misc::Rng::rollProbability(MWBase::Environment::get().getWorld()->getPrng()); };
                 auto destination = DetourNavigator::findRandomPointAroundCircle(
-                    *navigator, agentBounds, mInitialActorPosition, wanderRadius, navigatorFlags, getRandom);
+                    *navigator, agentBounds, worldspace, mInitialActorPosition, wanderRadius, navigatorFlags, getRandom);
                 if (destination.has_value())
                 {
                     osg::Vec3f direction = *destination - mInitialActorPosition;
@@ -412,7 +413,7 @@ namespace MWMechanics
                         direction.normalize();
                         const osg::Vec3f adjustedDestination = mInitialActorPosition + direction * wanderRadius;
                         destination = DetourNavigator::raycast(
-                            *navigator, agentBounds, currentPosition, adjustedDestination, navigatorFlags);
+                            *navigator, agentBounds, worldspace, currentPosition, adjustedDestination, navigatorFlags);
                         if (destination.has_value() && (*destination - mInitialActorPosition).length() > wanderDistance)
                             continue;
                     }

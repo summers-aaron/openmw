@@ -2,6 +2,7 @@
 
 #include <osg/MatrixTransform>
 
+#include <components/misc/constants.hpp>
 #include <components/resource/resourcesystem.hpp>
 #include <components/resource/scenemanager.hpp>
 
@@ -99,7 +100,7 @@ namespace MWRender
         mAmmunition.reset();
     }
 
-    void WeaponAnimation::releaseArrow(MWWorld::Ptr actor, float attackStrength)
+    void WeaponAnimation::releaseArrow(MWWorld::Ptr actor, float attackStrength, bool cosmetic)
     {
         MWWorld::InventoryStore& inv = actor.getClass().getInventoryStore(actor);
         MWWorld::ContainerStoreIterator weapon = inv.getSlot(MWWorld::InventoryStore::Slot_CarriedRight);
@@ -118,17 +119,35 @@ namespace MWRender
 
         MWMechanics::applyFatigueLoss(actor, *weapon, attackStrength);
 
+        // On a headless dedicated server there is no live skeleton to read the bow/ammo bone
+        // world-transform from (the scene graph is never traversed), so derive the launch point
+        // from the actor's position and weapon-hold height — same approach as magic bolts. The
+        // orientation above is already sim-derived, so the projectile's trajectory matches.
+        const bool headless = MWBase::Environment::get().isDedicated();
+        const auto simLaunchPos = [&] {
+            osg::Vec3f pos = actor.getRefData().getPosition().asVec3();
+            pos.z() += MWBase::Environment::get().getWorld()->getHalfExtents(actor, true).z() * 2.f
+                * Constants::TorsoHeight;
+            return pos;
+        };
+
         if (MWMechanics::getWeaponType(weapon->get<ESM::Weapon>()->mBase->mData.mType)->mWeaponClass
             == ESM::WeaponType::Thrown)
         {
-            // Thrown weapons get detached now
-            osg::Node* weaponNode = getWeaponNode();
-            if (!weaponNode)
-                return;
-            osg::NodePathList nodepaths = weaponNode->getParentalNodePaths();
-            if (nodepaths.empty())
-                return;
-            osg::Vec3f launchPos = osg::computeLocalToWorld(nodepaths[0]).getTrans();
+            osg::Vec3f launchPos;
+            if (headless)
+                launchPos = simLaunchPos();
+            else
+            {
+                // Thrown weapons get detached now
+                osg::Node* weaponNode = getWeaponNode();
+                if (!weaponNode)
+                    return;
+                osg::NodePathList nodepaths = weaponNode->getParentalNodePaths();
+                if (nodepaths.empty())
+                    return;
+                launchPos = osg::computeLocalToWorld(nodepaths[0]).getTrans();
+            }
 
             float fThrownWeaponMinSpeed = gmst.find("fThrownWeaponMinSpeed")->mValue.getFloat();
             float fThrownWeaponMaxSpeed = gmst.find("fThrownWeaponMaxSpeed")->mValue.getFloat();
@@ -136,7 +155,10 @@ namespace MWRender
 
             MWWorld::Ptr weaponPtr = *weapon;
             MWBase::Environment::get().getWorld()->launchProjectile(
-                actor, weaponPtr, launchPos, orient, weaponPtr, speed, attackStrength);
+                actor, weaponPtr, launchPos, orient, weaponPtr, speed, attackStrength, cosmetic);
+
+            if (cosmetic)
+                return; // a mirrored shot launches the visual only; never detach/consume the real weapon
 
             showWeapon(false);
 
@@ -149,14 +171,20 @@ namespace MWRender
             if (ammo == inv.end())
                 return;
 
-            if (!mAmmunition)
-                return;
+            osg::Vec3f launchPos;
+            if (headless)
+                launchPos = simLaunchPos();
+            else
+            {
+                if (!mAmmunition)
+                    return;
 
-            osg::ref_ptr<osg::Node> ammoNode = mAmmunition->getNode();
-            osg::NodePathList nodepaths = ammoNode->getParentalNodePaths();
-            if (nodepaths.empty())
-                return;
-            osg::Vec3f launchPos = osg::computeLocalToWorld(nodepaths[0]).getTrans();
+                osg::ref_ptr<osg::Node> ammoNode = mAmmunition->getNode();
+                osg::NodePathList nodepaths = ammoNode->getParentalNodePaths();
+                if (nodepaths.empty())
+                    return;
+                launchPos = osg::computeLocalToWorld(nodepaths[0]).getTrans();
+            }
 
             float fProjectileMinSpeed = gmst.find("fProjectileMinSpeed")->mValue.getFloat();
             float fProjectileMaxSpeed = gmst.find("fProjectileMaxSpeed")->mValue.getFloat();
@@ -165,7 +193,10 @@ namespace MWRender
             MWWorld::Ptr weaponPtr = *weapon;
             MWWorld::Ptr ammoPtr = *ammo;
             MWBase::Environment::get().getWorld()->launchProjectile(
-                actor, ammoPtr, launchPos, orient, weaponPtr, speed, attackStrength);
+                actor, ammoPtr, launchPos, orient, weaponPtr, speed, attackStrength, cosmetic);
+
+            if (cosmetic)
+                return; // a mirrored shot launches the visual only; never consume the avatar's ammo
 
             inv.remove(ammoPtr, 1);
             mAmmunition.reset();

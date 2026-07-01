@@ -39,6 +39,7 @@ namespace MWWorld
         mEnabled = refData.mEnabled;
         mPosition = refData.mPosition;
         mChanged = refData.mChanged;
+        mRemoteOwned = refData.mRemoteOwned;
         mDeletedByContentFile = refData.mDeletedByContentFile;
         mFlags = refData.mFlags;
         mPhysicsPostponed = refData.mPhysicsPostponed;
@@ -64,6 +65,7 @@ namespace MWWorld
         , mEnabled(true)
         , mPhysicsPostponed(false)
         , mChanged(false)
+        , mRemoteOwned(false)
     {
         for (int i = 0; i < 3; ++i)
         {
@@ -81,6 +83,7 @@ namespace MWWorld
         , mEnabled(true)
         , mPhysicsPostponed(false)
         , mChanged(false)
+        , mRemoteOwned(false)
     {
     }
 
@@ -93,6 +96,7 @@ namespace MWWorld
         , mEnabled(!(ref.mFlags & ESM4::Rec_Disabled))
         , mPhysicsPostponed(false)
         , mChanged(false)
+        , mRemoteOwned(false)
     {
     }
 
@@ -105,6 +109,7 @@ namespace MWWorld
         , mEnabled(!(ref.mFlags & ESM4::Rec_Disabled))
         , mPhysicsPostponed(false)
         , mChanged(false)
+        , mRemoteOwned(false)
     {
     }
 
@@ -118,6 +123,7 @@ namespace MWWorld
         , mEnabled(objectState.mEnabled != 0)
         , mPhysicsPostponed(false)
         , mChanged(true)
+        , mRemoteOwned(false)
     {
         // "Note that the ActivationFlag_UseEnabled is saved to the reference,
         // which will result in permanently suppressed activation if the reference script is removed.
@@ -183,9 +189,9 @@ namespace MWWorld
     RefData::RefData(RefData&& other) = default;
     RefData& RefData::operator=(RefData&& other) = default;
 
-    void RefData::setBaseNode(osg::ref_ptr<SceneUtil::PositionAttitudeTransform> base)
+    void RefData::setBaseNode(SceneUtil::PositionAttitudeTransform* base)
     {
-        mBaseNode = std::move(base);
+        mBaseNode = base;
     }
 
     SceneUtil::PositionAttitudeTransform* RefData::getBaseNode()

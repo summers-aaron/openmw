@@ -1197,6 +1197,37 @@ namespace MWMechanics
         }
     }
 
+    void Actors::forgiveCrimesAgainst(const MWWorld::Ptr& player) const
+    {
+        const ESM::RefNum playerRef = player.getCellRef().getRefNum();
+        for (const Actor& actor : mActors)
+        {
+            const MWWorld::Ptr ptr = actor.getPtr();
+            if (ptr == player || !ptr.getClass().isNpc())
+                continue;
+            CreatureStats& creatureStats = ptr.getClass().getCreatureStats(ptr);
+            NpcStats& npcStats = ptr.getClass().getNpcStats(ptr);
+            // Only NPCs reacting to a crime (a victim or witness gets a crime id) and still set against
+            // THIS player — fighting it, or with it pinned as the actor it tried to hit (pinAvatarAttacker).
+            // This scopes the forgiveness to the player who resolved its arrest, not unrelated combat.
+            if (npcStats.getCrimeId() == -1)
+                continue;
+            if (!creatureStats.getAiSequence().isInCombat(player) && creatureStats.getHitAttemptActor() != playerRef)
+                continue;
+
+            // Same reset as the single-player forgiveness in updateCrimePursuit.
+            if (ptr.getClass().isClass(ptr, "Guard"))
+                creatureStats.getAiSequence().stopPursuit();
+            stopCombat(ptr);
+            creatureStats.setAttacked(false);
+            creatureStats.setAlarmed(false);
+            creatureStats.setAiSetting(AiSetting::Fight, ptr.getClass().getBaseFightRating(ptr));
+            npcStats.setCrimeDispositionModifier(0);
+            npcStats.setCrimeId(-1);
+            creatureStats.setHitAttemptActor(ESM::RefNum());
+        }
+    }
+
     void Actors::addActor(const MWWorld::Ptr& ptr, bool updateImmediately)
     {
         removeActor(ptr, true);
@@ -1518,6 +1549,13 @@ namespace MWMechanics
             const MWWorld::Ptr player = getPlayer();
             const osg::Vec3f playerPos = player.getRefData().getPosition().asVec3();
 
+            // Actors are processed within range of any player, not just the primary one.
+            std::vector<osg::Vec3f> playerPositions;
+            playerPositions.reserve(world->getPlayerCount());
+            playerPositions.push_back(playerPos);
+            for (std::size_t i = 1; i < world->getPlayerCount(); ++i)
+                playerPositions.push_back(world->getPlayerPtr(i).getRefData().getPosition().asVec3());
+
             /// \todo move update logic to Actor class where appropriate
 
             SidingCache cachedAllies{ *this, true }; // will be filled as engageCombat iterates
@@ -1539,13 +1577,23 @@ namespace MWMechanics
             {
                 if (actor.isInvalid())
                     continue;
+                // Cease-remote-sim (M11): an actor owned by the host on a network client is
+                // driven purely by applied snapshots, so skip its local AI/movement/character
+                // update — otherwise the local simulation fights the authoritative pose and the
+                // actor jitters. In single-player nothing is ever flagged remote-owned, so this
+                // is byte-identical.
+                if (actor.getPtr().getRefData().isRemoteOwned())
+                    continue;
                 const bool isPlayer = actor.getPtr() == player;
                 CharacterController& ctrl = actor.getCharacterController();
                 MWBase::LuaManager::ActorControls* luaControls
                     = MWBase::Environment::get().getLuaManager()->getActorControls(actor.getPtr());
 
-                const float distSqr = (playerPos - actor.getPtr().getRefData().getPosition().asVec3()).length2();
-                // AI processing is only done within given distance to the player.
+                const osg::Vec3f actorPos = actor.getPtr().getRefData().getPosition().asVec3();
+                float distSqr = (playerPositions[0] - actorPos).length2();
+                for (std::size_t i = 1; i < playerPositions.size(); ++i)
+                    distSqr = std::min(distSqr, (playerPositions[i] - actorPos).length2());
+                // AI processing is only done within given distance to the nearest player.
                 const bool inProcessingRange = distSqr <= actorsProcessingRange * actorsProcessingRange;
 
                 // If dead or no longer in combat, no longer store any actors who attempted to hit us. Also remove for
@@ -1604,8 +1652,12 @@ namespace MWMechanics
                                     continue;
                                 if (otherActor.getPtr() == actor.getPtr() || isPlayer) // player is not AI-controlled
                                     continue;
-                                engageCombat(
-                                    actor.getPtr(), otherActor.getPtr(), cachedAllies, otherActor.getPtr() == player);
+                                // "against a player" gates the spontaneous on-sight aggression check, and
+                                // must hold for EVERY player (each network peer), not just the primary one —
+                                // otherwise NPCs only ever turn hostile to the first/host player and ignore
+                                // the others sharing the cell.
+                                engageCombat(actor.getPtr(), otherActor.getPtr(), cachedAllies,
+                                    world->isPlayer(otherActor.getPtr()));
                             }
                         }
                         if (mTimerUpdateHeadTrack == 0)
@@ -1661,7 +1713,15 @@ namespace MWMechanics
             {
                 if (actor.isInvalid())
                     continue;
-                const float dist = (playerPos - actor.getPtr().getRefData().getPosition().asVec3()).length();
+                // Distance to the NEAREST player, not just the primary one: an actor around any
+                // player (e.g. a network peer far from the dedicated server's own player) must still
+                // get its character/animation/movement update, or it freezes mid-pose while its AI
+                // keeps deciding to move — matching the multi-player range test in the AI loop above.
+                const osg::Vec3f animActorPos = actor.getPtr().getRefData().getPosition().asVec3();
+                float distSqr = (playerPositions[0] - animActorPos).length2();
+                for (std::size_t i = 1; i < playerPositions.size(); ++i)
+                    distSqr = std::min(distSqr, (playerPositions[i] - animActorPos).length2());
+                const float dist = std::sqrt(distSqr);
                 const bool isPlayer = actor.getPtr() == player;
                 CreatureStats& stats = actor.getPtr().getClass().getCreatureStats(actor.getPtr());
                 // Actors with active AI should be able to move.
@@ -1792,6 +1852,12 @@ namespace MWMechanics
             if (!stats.isDead())
                 continue;
 
+            // A remote-owned actor died in the shared world: the host already resolved the
+            // authoritative consequences (soul trap, kill counts, the actorDied Lua hook), so
+            // here we only play the death animation and do the local visual/physics cleanup —
+            // re-running the consequences on every client would double-count and double-fire.
+            const bool remoteOwned = actor.getPtr().getRefData().isRemoteOwned();
+
             MWBase::Environment::get().getWorld()->removeActorPath(actor.getPtr());
             CharacterController::KillResult killResult = actor.getCharacterController().kill();
             if (killResult == CharacterController::Result_DeathAnimStarted)
@@ -1801,17 +1867,21 @@ namespace MWMechanics
                 // for NPCs since some of the npc death animation files are missing them.
                 MWBase::Environment::get().getDialogueManager()->say(actor.getPtr(), ESM::RefId::stringRefId("hit"));
 
-                // Apply soultrap
-                if (actor.getPtr().getType() == ESM::Creature::sRecordId)
-                    soulTrap(actor.getPtr());
+                if (!remoteOwned)
+                {
+                    // Apply soultrap
+                    if (actor.getPtr().getType() == ESM::Creature::sRecordId)
+                        soulTrap(actor.getPtr());
 
-                if (cls.isEssential(actor.getPtr()))
-                    MWBase::Environment::get().getWindowManager()->messageBox("#{sKilledEssential}");
+                    if (cls.isEssential(actor.getPtr()))
+                        MWBase::Environment::get().getWindowManager()->messageBox("#{sKilledEssential}");
+                }
             }
             else if (killResult == CharacterController::Result_DeathAnimJustFinished)
             {
                 const bool isPlayer = actor.getPtr() == getPlayer();
-                notifyDied(actor.getPtr());
+                if (!remoteOwned)
+                    notifyDied(actor.getPtr());
 
                 // Reset magic effects and recalculate derived effects
                 // One case where we need this is to make sure bound items are removed upon death
@@ -2357,6 +2427,24 @@ namespace MWMechanics
             return false;
 
         return it->second->getCharacterController().isAttackingOrSpell();
+    }
+
+    std::string_view Actors::getActiveAttackType(const MWWorld::Ptr& ptr) const
+    {
+        const auto it = mIndex.find(ptr.mRef);
+        if (it == mIndex.end())
+            return {};
+
+        return it->second->getCharacterController().getActiveAttackType();
+    }
+
+    float Actors::getAttackStrength(const MWWorld::Ptr& ptr) const
+    {
+        const auto it = mIndex.find(ptr.mRef);
+        if (it == mIndex.end())
+            return -1.f;
+
+        return it->second->getCharacterController().getAttackStrength();
     }
 
     int Actors::getGreetingTimer(const MWWorld::Ptr& ptr) const

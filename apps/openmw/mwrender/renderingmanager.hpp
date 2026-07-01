@@ -2,7 +2,9 @@
 #define OPENMW_MWRENDER_RENDERINGMANAGER_H
 
 #include "objects.hpp"
+#include "rayresult.hpp"
 #include "renderinginterface.hpp"
+#include "renderingmanagerinterface.hpp"
 #include "rendermode.hpp"
 
 #include <components/settings/settings.hpp>
@@ -107,184 +109,177 @@ namespace MWRender
     class Groundcover;
     class PostProcessor;
 
-    class RenderingManager : public MWRender::RenderingInterface
+    class RenderingManager final : public MWRender::RenderingManagerInterface
     {
     public:
+        using RayResult = MWRender::RayResult;
+
         RenderingManager(osgViewer::Viewer* viewer, osg::ref_ptr<osg::Group> rootNode,
             Resource::ResourceSystem* resourceSystem, SceneUtil::WorkQueue* workQueue,
             DetourNavigator::Navigator& navigator, const MWWorld::GroundcoverStore& groundcoverStore,
             SceneUtil::UnrefQueue& unrefQueue);
         ~RenderingManager();
 
-        osgUtil::IncrementalCompileOperation* getIncrementalCompileOperation();
+        osgUtil::IncrementalCompileOperation* getIncrementalCompileOperation() override;
 
         MWRender::Objects& getObjects() override;
 
-        Resource::ResourceSystem* getResourceSystem();
+        Resource::ResourceSystem* getResourceSystem() override;
 
-        SceneUtil::WorkQueue* getWorkQueue();
-        Terrain::World* getTerrain();
+        SceneUtil::WorkQueue* getWorkQueue() override;
+        Terrain::World* getTerrain() override;
 
-        void preloadCommonAssets();
+        void preloadCommonAssets() override;
 
-        double getReferenceTime() const;
+        double getReferenceTime() const override;
 
-        SceneUtil::LightManager* getLightRoot();
+        SceneUtil::LightManager* getLightRoot() override;
 
-        void setNightEyeFactor(float factor);
+        void setNightEyeFactor(float factor) override;
 
-        void setAmbientColour(const osg::Vec4f& colour);
+        void setAmbientColour(const osg::Vec4f& colour) override;
 
-        int skyGetMasserPhase() const;
-        int skyGetSecundaPhase() const;
-        void skySetMoonColour(bool red);
+        int skyGetMasserPhase() const override;
+        int skyGetSecundaPhase() const override;
+        void skySetMoonColour(bool red) override;
 
-        const osg::Vec4f& getSunLightPosition() const { return mSunLight->getPosition(); }
-        void setSunDirection(const osg::Vec3f& direction);
-        void setSunColour(const osg::Vec4f& diffuse, const osg::Vec4f& specular, float sunVis);
-        void setNight(bool isNight) { mNight = isNight; }
+        const osg::Vec4f& getSunLightPosition() const override { return mSunLight->getPosition(); }
+        void setSunDirection(const osg::Vec3f& direction) override;
+        void setSunColour(const osg::Vec4f& diffuse, const osg::Vec4f& specular, float sunVis) override;
+        void setNight(bool isNight) override { mNight = isNight; }
 
-        void configureAmbient(const MWWorld::Cell& cell);
-        void configureFog(const MWWorld::Cell& cell);
+        void configureAmbient(const MWWorld::Cell& cell) override;
+        void configureFog(const MWWorld::Cell& cell) override;
         void configureFog(
-            float fogDepth, float underwaterFog, float dlFactor, float dlOffset, const osg::Vec4f& colour);
+            float fogDepth, float underwaterFog, float dlFactor, float dlOffset, const osg::Vec4f& colour) override;
 
-        void addCell(const MWWorld::CellStore* store);
-        void removeCell(const MWWorld::CellStore* store);
+        void addCell(const MWWorld::CellStore* store) override;
+        void removeCell(const MWWorld::CellStore* store) override;
 
-        void enableTerrain(bool enable, ESM::RefId worldspace);
+        void enableTerrain(bool enable, ESM::RefId worldspace) override;
 
-        void updatePtr(const MWWorld::Ptr& old, const MWWorld::Ptr& updated);
+        void updatePtr(const MWWorld::Ptr& old, const MWWorld::Ptr& updated) override;
 
-        void rotateObject(const MWWorld::Ptr& ptr, const osg::Quat& rot);
-        void moveObject(const MWWorld::Ptr& ptr, const osg::Vec3f& pos);
-        void scaleObject(const MWWorld::Ptr& ptr, const osg::Vec3f& scale);
+        void rotateObject(const MWWorld::Ptr& ptr, const osg::Quat& rot) override;
+        void moveObject(const MWWorld::Ptr& ptr, const osg::Vec3f& pos) override;
+        void scaleObject(const MWWorld::Ptr& ptr, const osg::Vec3f& scale) override;
 
-        void removeObject(const MWWorld::Ptr& ptr);
+        void removeObject(const MWWorld::Ptr& ptr) override;
 
-        void setWaterEnabled(bool enabled);
-        void setWaterHeight(float level);
+        void setWaterEnabled(bool enabled) override;
+        void setWaterHeight(float level) override;
 
         /// Take a screenshot of w*h onto the given image, not including the GUI.
-        void screenshot(osg::Image* image, int w, int h);
-
-        struct RayResult
-        {
-            bool mHit;
-            osg::Vec3f mHitNormalWorld;
-            osg::Vec3f mHitPointWorld;
-            MWWorld::Ptr mHitObject;
-            ESM::RefNum mHitRefnum;
-            float mRatio;
-        };
+        void screenshot(osg::Image* image, int w, int h) override;
 
         RayResult castRay(const osg::Vec3f& origin, const osg::Vec3f& dest, bool ignorePlayer,
-            bool ignoreActors = false, std::span<const MWWorld::Ptr> ignoreList = {});
+            bool ignoreActors = false, std::span<const MWWorld::Ptr> ignoreList = {}) override;
 
         /// Return the object under the mouse cursor / crosshair position, given by nX and nY normalized screen
         /// coordinates, where (0,0) is the top left corner.
         RayResult castCameraToViewportRay(
-            const float nX, const float nY, float maxDistance, bool ignorePlayer, bool ignoreActors = false);
+            const float nX, const float nY, float maxDistance, bool ignorePlayer, bool ignoreActors = false) override;
 
         /// Get normalized screen coordinates of the bounding box's summit, where (0,0) is the top left corner
-        osg::Vec2f getScreenCoords(const osg::BoundingBox& bb);
+        osg::Vec2f getScreenCoords(const osg::BoundingBox& bb) override;
 
-        void setSkyEnabled(bool enabled);
+        void setSkyEnabled(bool enabled) override;
 
-        bool toggleRenderMode(RenderMode mode);
+        bool toggleRenderMode(RenderMode mode) override;
 
-        SkyManager* getSkyManager();
+        SkyManager* getSkyManager() override;
 
         void spawnEffect(VFS::Path::NormalizedView model, std::string_view texture, const osg::Vec3f& worldPosition,
             float scale = 1.f, bool isMagicVFX = true, bool useAmbientLight = true, std::string_view effectId = {},
-            bool loop = false);
+            bool loop = false) override;
 
-        void removeEffect(std::string_view effectId);
+        void removeEffect(std::string_view effectId) override;
 
         /// Clear all savegame-specific data
-        void clear();
+        void clear() override;
 
         /// Clear all worldspace-specific data
-        void notifyWorldSpaceChanged();
+        void notifyWorldSpaceChanged() override;
 
-        void update(float dt, bool paused);
+        void update(float dt, bool paused) override;
 
-        Animation* getAnimation(const MWWorld::Ptr& ptr);
-        const Animation* getAnimation(const MWWorld::ConstPtr& ptr) const;
+        Animation* getAnimation(const MWWorld::Ptr& ptr) override;
+        const Animation* getAnimation(const MWWorld::ConstPtr& ptr) const override;
 
-        PostProcessor* getPostProcessor();
+        PostProcessor* getPostProcessor() override;
 
-        void addWaterRippleEmitter(const MWWorld::Ptr& ptr);
-        void removeWaterRippleEmitter(const MWWorld::Ptr& ptr);
-        void emitWaterRipple(const osg::Vec3f& pos);
+        void addWaterRippleEmitter(const MWWorld::Ptr& ptr) override;
+        void removeWaterRippleEmitter(const MWWorld::Ptr& ptr) override;
+        void emitWaterRipple(const osg::Vec3f& pos) override;
 
-        void updatePlayerPtr(const MWWorld::Ptr& ptr);
+        void updatePlayerPtr(const MWWorld::Ptr& ptr) override;
 
-        void removePlayer(const MWWorld::Ptr& player);
-        void setupPlayer(const MWWorld::Ptr& player);
-        void renderPlayer(const MWWorld::Ptr& player);
+        void removePlayer(const MWWorld::Ptr& player) override;
+        void setupPlayer(const MWWorld::Ptr& player) override;
+        void renderPlayer(const MWWorld::Ptr& player) override;
 
-        void rebuildPtr(const MWWorld::Ptr& ptr);
+        void rebuildPtr(const MWWorld::Ptr& ptr) override;
 
-        void processChangedSettings(const Settings::CategorySettingVector& settings);
+        void processChangedSettings(const Settings::CategorySettingVector& settings) override;
 
-        float getNearClipDistance() const { return mNearClip; }
-        float getViewDistance() const { return mViewDistance; }
+        float getNearClipDistance() const override { return mNearClip; }
+        float getViewDistance() const override { return mViewDistance; }
 
-        void setViewDistance(float distance, bool delay = false);
+        void setViewDistance(float distance, bool delay = false) override;
 
-        float getTerrainHeightAt(const osg::Vec3f& pos, ESM::RefId worldspace);
+        float getTerrainHeightAt(const osg::Vec3f& pos, ESM::RefId worldspace) override;
 
         // camera stuff
-        Camera* getCamera() { return mCamera.get(); }
+        Camera* getCamera() override { return mCamera.get(); }
 
         /// temporarily override the field of view with given value.
-        void overrideFieldOfView(float val);
-        void setFieldOfView(float val);
-        float getFieldOfView() const;
+        void overrideFieldOfView(float val) override;
+        void setFieldOfView(float val) override;
+        float getFieldOfView() const override;
         /// reset a previous overrideFieldOfView() call, i.e. revert to field of view specified in the settings file.
-        void resetFieldOfView();
+        void resetFieldOfView() override;
 
-        osg::Vec3f getHalfExtents(const MWWorld::ConstPtr& object) const;
+        osg::Vec3f getHalfExtents(const MWWorld::ConstPtr& object) const override;
 
         // Return local bounding box. Safe to be called in parallel with cull thread.
-        osg::BoundingBox getCullSafeBoundingBox(const MWWorld::Ptr& ptr) const;
+        osg::BoundingBox getCullSafeBoundingBox(const MWWorld::Ptr& ptr) const override;
 
         void exportSceneGraph(
-            const MWWorld::Ptr& ptr, const std::filesystem::path& filename, const std::string& format);
+            const MWWorld::Ptr& ptr, const std::filesystem::path& filename, const std::string& format) override;
 
-        Debug::DebugDrawer& getDebugDrawer() const { return *mDebugDraw; }
+        Debug::DebugDrawer& getDebugDrawer() const override { return *mDebugDraw; }
 
-        LandManager* getLandManager() const;
+        LandManager* getLandManager() const override;
 
-        bool toggleBorders();
+        bool toggleBorders() override;
 
         void updateActorPath(const MWWorld::ConstPtr& actor, const std::deque<osg::Vec3f>& path,
-            const DetourNavigator::AgentBounds& agentBounds, const osg::Vec3f& start, const osg::Vec3f& end) const;
+            const DetourNavigator::AgentBounds& agentBounds, const osg::Vec3f& start, const osg::Vec3f& end)
+            const override;
 
-        void removeActorPath(const MWWorld::ConstPtr& actor) const;
+        void removeActorPath(const MWWorld::ConstPtr& actor) const override;
 
-        void setNavMeshNumber(const std::size_t value);
+        void setNavMeshNumber(const std::size_t value) override;
 
-        void setActiveGrid(const osg::Vec4i& grid);
+        void setActiveGrid(const osg::Vec4i& grid) override;
 
-        bool pagingEnableObject(int type, const MWWorld::ConstPtr& ptr, bool enabled);
-        void pagingBlacklistObject(int type, const MWWorld::ConstPtr& ptr);
-        bool pagingUnlockCache();
-        void getPagedRefnums(const osg::Vec4i& activeGrid, std::vector<ESM::RefNum>& out);
+        bool pagingEnableObject(int type, const MWWorld::ConstPtr& ptr, bool enabled) override;
+        void pagingBlacklistObject(int type, const MWWorld::ConstPtr& ptr) override;
+        bool pagingUnlockCache() override;
+        void getPagedRefnums(const osg::Vec4i& activeGrid, std::vector<ESM::RefNum>& out) override;
 
-        void updateProjectionMatrix();
+        void updateProjectionMatrix() override;
 
-        void setScreenRes(int width, int height);
+        void setScreenRes(int width, int height) override;
 
-        void setNavMeshMode(Settings::NavMeshRenderMode value);
+        void setNavMeshMode(Settings::NavMeshRenderMode value) override;
 
-        void setProjectionOffset(const osg::Vec2f& offset)
+        void setProjectionOffset(const osg::Vec2f& offset) override
         {
             mProjectionOffset = offset;
             mUpdateProjectionMatrix = true;
         }
-        osg::Vec2f getProjectionOffset() const { return mProjectionOffset; }
+        osg::Vec2f getProjectionOffset() const override { return mProjectionOffset; }
 
     private:
         void updateTextureFiltering();

@@ -11,12 +11,14 @@
 #include <components/vfs/pathutil.hpp>
 
 #include "../mwbase/world.hpp"
+#include "../mwbase/worldrendering.hpp"
 
 #include "contentloader.hpp"
 #include "esmstore.hpp"
 #include "globals.hpp"
 #include "groundcoverstore.hpp"
 #include "localscripts.hpp"
+#include "players.hpp"
 #include "ptr.hpp"
 #include "scene.hpp"
 #include "timestamp.hpp"
@@ -82,7 +84,7 @@ namespace MWWorld
 
     /// \brief The game world and its visual representation
 
-    class World final : public MWBase::World
+    class World final : public MWBase::World, public MWBase::WorldRendering
     {
     private:
         Resource::ResourceSystem* mResourceSystem;
@@ -98,7 +100,18 @@ namespace MWWorld
 
         std::string mCurrentWorldSpace;
 
-        std::unique_ptr<MWWorld::Player> mPlayer;
+        MWWorld::Players mPlayers;
+        // Monotonic source of unique RefNum indices for non-primary (network) players. A new index
+        // every time, never reused, so a freshly added avatar can never collide with one still
+        // referenced by an in-flight AiCombat target (which tracks its quarry purely by RefNum).
+        std::uint32_t mNextNetworkPlayerRefNum = 1;
+        // Monotonic source of unique RefNum indices for host-spawned summoned creatures, in a reserved
+        // content file so they never collide with a client's locally-generated refs (its avatars and
+        // instantiated items use the normal generated space, which a host summon would otherwise share).
+        std::uint32_t mNextNetworkSummonRefNum = 1;
+        // Dedicated server: the primary player is a stationary placeholder (no human controls it), so
+        // the navmesh must follow the network avatars instead of it. Set by the engine at startup.
+        bool mDedicatedServer = false;
         std::unique_ptr<MWPhysics::PhysicsSystem> mPhysics;
         std::unique_ptr<DetourNavigator::Navigator> mNavigator;
         std::unique_ptr<MWRender::RenderingManager> mRendering;
@@ -211,6 +224,8 @@ namespace MWWorld
         void startNewGame(bool bypass) override;
         ///< \param bypass Bypass regular game start.
 
+        void startNewGameMultiplayer(const std::string& startCell) override;
+
         void clear() override;
 
         size_t countSavedGameRecords() const override;
@@ -236,6 +251,23 @@ namespace MWWorld
         Player& getPlayer() override;
         MWWorld::Ptr getPlayerPtr() override;
         MWWorld::ConstPtr getPlayerConstPtr() const override;
+
+        bool isPlayer(const MWWorld::ConstPtr& ptr) const override;
+
+        std::size_t getPlayerCount() const override;
+        MWWorld::Player& getPlayer(std::size_t index) override;
+        MWWorld::Ptr getPlayerPtr(std::size_t index) override;
+        MWWorld::Player& getPlayer(const MWWorld::ConstPtr& ptr) override;
+        MWWorld::Ptr addPlayer() override;
+        MWWorld::Ptr addPlayer(
+            MWWorld::CellStore& cell, const ESM::Position& position, const ESM::NPC* record = nullptr) override;
+        MWWorld::Ptr placeNetworkPlayer(
+            const MWWorld::Ptr& ptr, MWWorld::CellStore& cell, const osg::Vec3f& position) override;
+        void removePlayer(std::size_t index) override;
+        ESM::RefNum reserveNetworkSummonRefNum() override;
+        // Mark this World as belonging to a dedicated server (no local human player), so the navmesh
+        // follows the network avatars rather than the stationary primary placeholder.
+        void setDedicatedServer(bool value) { mDedicatedServer = value; }
 
         MWWorld::ESMStore& getStore() override { return mStore; }
 
@@ -402,6 +434,7 @@ namespace MWWorld
 
         void setActorCollisionMode(const Ptr& ptr, bool internal, bool external) override;
         bool isActorCollisionEnabled(const Ptr& ptr) override;
+        void setActorOnGround(const Ptr& ptr, bool onGround) override;
 
         bool toggleCollisionMode() override;
         ///< Toggle collision mode for player. If disabled player object should ignore
@@ -564,9 +597,10 @@ namespace MWWorld
         void castSpell(const MWWorld::Ptr& actor, bool manualSpell = false) override;
 
         void launchMagicBolt(const ESM::RefId& spellId, const MWWorld::Ptr& caster, const osg::Vec3f& fallbackDirection,
-            ESM::RefNum item) override;
+            ESM::RefNum item, bool cosmetic = false) override;
         void launchProjectile(MWWorld::Ptr& actor, MWWorld::Ptr& projectile, const osg::Vec3f& worldPos,
-            const osg::Quat& orient, MWWorld::Ptr& bow, float speed, float attackStrength) override;
+            const osg::Quat& orient, MWWorld::Ptr& bow, float speed, float attackStrength,
+            bool cosmetic = false) override;
         void updateProjectilesCasters() override;
 
         void applyLoopingParticles(const MWWorld::Ptr& ptr) const override;

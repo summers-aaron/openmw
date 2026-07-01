@@ -36,6 +36,7 @@ namespace DetourNavigator
     void NavigatorImpl::updateBounds(ESM::RefId worldspace, const std::optional<CellGridBounds>& cellGridBounds,
         const osg::Vec3f& playerPosition, const UpdateGuard* guard)
     {
+        mWorldspace = worldspace;
         mNavMeshManager.updateBounds(worldspace, cellGridBounds, playerPosition, guard);
     }
 
@@ -144,10 +145,24 @@ namespace DetourNavigator
         mNavMeshManager.removeOffMeshConnections(ObjectId(&pathgrid));
     }
 
-    void NavigatorImpl::update(const osg::Vec3f& playerPosition, const UpdateGuard* guard)
+    void NavigatorImpl::update(std::span<const PlayerPosition> playerPositions, const UpdateGuard* guard)
     {
+        // This navigator owns a single worldspace; pick the first focus point that belongs to it.
+        // When mWorldspace is unset (updateBounds never called, e.g. in unit tests) fall back to the
+        // first position so behavior matches the legacy single-position API.
+        const PlayerPosition* focus = nullptr;
+        for (const PlayerPosition& position : playerPositions)
+        {
+            if (mWorldspace.empty() || position.mWorldspace == mWorldspace)
+            {
+                focus = &position;
+                break;
+            }
+        }
+        if (focus == nullptr)
+            return;
         removeUnusedNavMeshes();
-        mNavMeshManager.update(playerPosition, guard);
+        mNavMeshManager.update(focus->mPosition, guard);
     }
 
     void NavigatorImpl::wait(WaitConditionType waitConditionType, Loading::Listener* listener)
@@ -155,8 +170,9 @@ namespace DetourNavigator
         mNavMeshManager.wait(waitConditionType, listener);
     }
 
-    SharedNavMeshCacheItem NavigatorImpl::getNavMesh(const AgentBounds& agentBounds) const
+    SharedNavMeshCacheItem NavigatorImpl::getNavMesh(const AgentBounds& agentBounds, ESM::RefId /*worldspace*/) const
     {
+        // This navigator is its own single worldspace; the facade already routed us here.
         return mNavMeshManager.getNavMesh(agentBounds);
     }
 

@@ -29,6 +29,7 @@
 #include "../mwrender/postprocessor.hpp"
 
 #include "../mwbase/environment.hpp"
+#include "../mwbase/worldrendering.hpp"
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
 
@@ -138,7 +139,7 @@ namespace MWGui
 
         if (selected != MyGUI::ITEM_NONE)
         {
-            auto* processor = MWBase::Environment::get().getWorld()->getPostProcessor();
+            auto* processor = MWBase::Environment::get().getWorldRendering()->getPostProcessor();
             mOverrideHint = list->getItemNameAt(selected);
 
             auto technique = getTechnique(*list, selected);
@@ -165,7 +166,7 @@ namespace MWGui
 
     void PostProcessorHud::moveShader(Direction direction)
     {
-        auto* processor = MWBase::Environment::get().getWorld()->getPostProcessor();
+        auto* processor = MWBase::Environment::get().getWorldRendering()->getPostProcessor();
 
         size_t selected = mActiveList->getIndexSelected();
 
@@ -296,7 +297,7 @@ namespace MWGui
     {
         Settings::ShaderManager::get().setMode(mode);
 
-        MWBase::Environment::get().getWorld()->getPostProcessor()->toggleMode();
+        MWBase::Environment::get().getWorldRendering()->getPostProcessor()->toggleMode();
 
         if (!isVisible())
             return;
@@ -309,7 +310,7 @@ namespace MWGui
 
     void PostProcessorHud::updateConfigView(VFS::Path::NormalizedView path)
     {
-        auto* processor = MWBase::Environment::get().getWorld()->getPostProcessor();
+        auto* processor = MWBase::Environment::get().getWorldRendering()->getPostProcessor();
 
         auto technique = processor->loadTechnique(path);
 
@@ -432,7 +433,7 @@ namespace MWGui
         mInactiveList->removeAllItems();
         mActiveList->removeAllItems();
 
-        auto* processor = MWBase::Environment::get().getWorld()->getPostProcessor();
+        auto* processor = MWBase::Environment::get().getWorldRendering()->getPostProcessor();
 
         std::vector<VFS::Path::NormalizedView> techniques;
         for (const auto& vfsPath : processor->getTechniqueFiles())

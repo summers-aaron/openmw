@@ -9,9 +9,10 @@
 namespace DetourNavigator
 {
     std::optional<osg::Vec3f> findRandomPointAroundCircle(const Navigator& navigator, const AgentBounds& agentBounds,
-        const osg::Vec3f& start, const float maxRadius, const Flags includeFlags, float (*prng)())
+        ESM::RefId worldspace, const osg::Vec3f& start, const float maxRadius, const Flags includeFlags,
+        float (*prng)())
     {
-        const auto navMesh = navigator.getNavMesh(agentBounds);
+        const auto navMesh = navigator.getNavMesh(agentBounds, worldspace);
         if (!navMesh)
             return std::nullopt;
         const Settings& settings = navigator.getSettings();
@@ -25,10 +26,10 @@ namespace DetourNavigator
         return std::optional<osg::Vec3f>(fromNavMeshCoordinates(settings.mRecast, *result));
     }
 
-    std::optional<osg::Vec3f> raycast(const Navigator& navigator, const AgentBounds& agentBounds,
+    std::optional<osg::Vec3f> raycast(const Navigator& navigator, const AgentBounds& agentBounds, ESM::RefId worldspace,
         const osg::Vec3f& start, const osg::Vec3f& end, const Flags includeFlags)
     {
-        const auto navMesh = navigator.getNavMesh(agentBounds);
+        const auto navMesh = navigator.getNavMesh(agentBounds, worldspace);
         if (navMesh == nullptr)
             return std::nullopt;
         const Settings& settings = navigator.getSettings();
@@ -42,9 +43,10 @@ namespace DetourNavigator
     }
 
     std::optional<osg::Vec3f> findNearestNavMeshPosition(const Navigator& navigator, const AgentBounds& agentBounds,
-        const osg::Vec3f& position, const osg::Vec3f& searchAreaHalfExtents, const Flags includeFlags)
+        ESM::RefId worldspace, const osg::Vec3f& position, const osg::Vec3f& searchAreaHalfExtents,
+        const Flags includeFlags)
     {
-        const auto navMesh = navigator.getNavMesh(agentBounds);
+        const auto navMesh = navigator.getNavMesh(agentBounds, worldspace);
         if (navMesh == nullptr)
             return std::nullopt;
 

@@ -9,9 +9,7 @@
 #include <string>
 #include <vector>
 
-#include <MyGUI_KeyCode.h>
-
-#include "../mwgui/mode.hpp"
+#include "guimode.hpp"
 
 #include <components/sdlutil/events.hpp>
 
@@ -35,6 +33,11 @@ namespace MyGUI
     class Gui;
     class Widget;
     class UString;
+    // KeyCode is a struct in MyGUI; forward-declared so this interface header
+    // does not pull in <MyGUI_KeyCode.h>. The two inject* methods below use it
+    // only by value in their declarations; overrides that define them include
+    // the MyGUI header in their .cpp.
+    struct KeyCode;
 }
 
 namespace ESM
@@ -54,6 +57,7 @@ namespace MWMechanics
 namespace MWWorld
 {
     class CellStore;
+    class ESMStore;
     class Ptr;
 }
 
@@ -119,6 +123,17 @@ namespace MWBase
         virtual void playVideo(std::string_view name, bool allowSkipping, bool overrideSounds = true) = 0;
 
         virtual void setNewGame(bool newgame) = 0;
+
+        /// Begin character generation as a standalone, self-advancing sequence (used by the multiplayer
+        /// start path, where there is no census-office intro to push each menu). Requires setNewGame(true)
+        /// to have created the chargen controller first.
+        virtual void startCharacterCreation() = 0;
+
+        /// Engine bootstrap + per-frame hooks. Promoted to the interface so the engine can
+        /// drive any WindowManager (real or null) through a base pointer; the null no-ops them.
+        virtual void setStore(const MWWorld::ESMStore& store) = 0;
+        virtual void initUI() = 0;
+        virtual void update(float duration) = 0;
 
         virtual void pushGuiMode(MWGui::GuiMode mode, const MWWorld::Ptr& arg) = 0;
         virtual void pushGuiMode(MWGui::GuiMode mode) = 0;

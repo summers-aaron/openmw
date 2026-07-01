@@ -65,6 +65,8 @@
 #include "../mwbase/statemanager.hpp"
 #include "../mwbase/windowmanager.hpp"
 
+#include "../mwnet/replicator.hpp"
+
 #include "../mwmechanics/actorutil.hpp"
 #include "../mwmechanics/aiavoiddoor.hpp" //Used to tell actors to avoid doors
 #include "../mwmechanics/combat.hpp"
@@ -351,6 +353,79 @@ namespace MWWorld
         mPrng.seed(mRandomSeed);
     }
 
+    void World::startNewGameMultiplayer(const std::string& startCell)
+    {
+        // A connecting multiplayer client builds a fresh character on join: set up the world and player
+        // like a bypassed new game (no prison-ship intro), drop the player into startCell, then run the
+        // regular character-generation dialogs in place of the intro. Mirrors startNewGame(bypass=true)
+        // except chargen stays active (sCharGenState = 1) and the menus are driven directly.
+        mGoToJail = false;
+        mLevitationEnabled = true;
+        mTeleportEnabled = true;
+
+        mGodMode = false;
+        mScriptsEnabled = true;
+        mSky = true;
+
+        // Rebuild player
+        setupPlayer();
+
+        renderPlayer();
+        mRendering->getCamera()->reset();
+
+        // we don't want old weather to persist on a new game
+        mWeatherManager.reset();
+        mWeatherManager = std::make_unique<MWWorld::WeatherManager>(*mRendering.get(), mStore);
+
+        // Chargen is in progress (1), not bypassed (-1): the chargen-finished guards stay closed until
+        // the client finalizes the character (MWNet::Replicator::updateClientStart).
+        mGlobalVariables[Globals::sCharGenState].setInteger(1);
+
+        MWBase::Environment::get().getLuaManager()->newGameStarted();
+
+        // Place the player in the requested start cell. Reuse the same exterior-then-interior probe as
+        // the bypass path so a configurable exterior --start still works while the multiplayer default
+        // (the Census and Excise Office) resolves as an interior.
+        ESM::Position pos;
+        ESM::RefId cellId = findExteriorPosition(startCell, pos);
+        if (!cellId.empty())
+        {
+            changeToCell(cellId, pos, true);
+            adjustPosition(getPlayerPtr(), false);
+        }
+        else
+        {
+            findInteriorPosition(startCell, pos);
+            changeToInteriorCell(startCell, pos, true);
+        }
+
+        // The Census and Excise Office intro normally hands the player their Hospitality Papers to give
+        // to Sellus Gravius. We skip that scripted sequence, so add the papers directly to the fresh
+        // character (survives chargen — buildPlayer resets stats/skills but not the inventory).
+        {
+            const MWWorld::Ptr player = getPlayerPtr();
+            player.getClass().getContainerStore(player).add(ESM::RefId::stringRefId("bk_hospitality_papers"), 1);
+        }
+
+        // enable collision
+        if (!mPhysics->toggleCollisionMode())
+            mPhysics->toggleCollisionMode();
+
+        MWBase::Environment::get().getWindowManager()->updatePlayer();
+        mTimeManager->setup(mGlobalVariables);
+
+        // Initial seed.
+        mPrng.seed(mRandomSeed);
+
+        Log(Debug::Info) << "Multiplayer start: placed new character in cell '" << startCell << "' at "
+                         << pos.pos[0] << ", " << pos.pos[1] << ", " << pos.pos[2];
+
+        // Kick off character generation now that the player exists and is in a cell (the race dialog's
+        // live preview needs both). startCharacterCreation() runs the sequence standalone, chaining
+        // Name -> Race -> Class -> Birth -> Review without the census-office intro scripts.
+        MWBase::Environment::get().getWindowManager()->startCharacterCreation();
+    }
+
     void World::clear()
     {
         mWeatherManager->clear();
@@ -363,10 +438,11 @@ namespace MWWorld
 
         mStore.clearDynamic();
 
-        if (mPlayer)
+        if (!mPlayers.empty())
         {
-            mPlayer->clear();
-            mPlayer->set(mStore.get<ESM::NPC>().find(ESM::RefId::stringRefId("Player")));
+            mPlayers.keepOnlyPrimary();
+            mPlayers.primary().clear();
+            mPlayers.primary().set(mStore.get<ESM::NPC>().find(ESM::RefId::stringRefId("Player")));
         }
 
         mDoorStates.clear();
@@ -385,7 +461,7 @@ namespace MWWorld
     {
         return mWorldModel.countSavedGameRecords() + mStore.countSavedGameRecords()
             + mGlobalVariables.countSavedGameRecords() + mProjectileManager->countSavedGameRecords()
-            + 1 // player record
+            + getPlayerCount() // player records (REC_PLAY for the primary, REC_PLAYER_EXTRA for the rest)
             + 1 // weather record
             + 1 // levitation/teleport enabled state
             + 1 // camera
@@ -412,7 +488,10 @@ namespace MWWorld
         mStore.write(writer, progress); // dynamic Store must be written (and read) before Cells, so that
                                         // references to custom made records will be recognized
         mWorldModel.write(writer, progress); // the player's cell needs to be loaded before the player
-        mPlayer->write(writer, progress);
+        // The primary player (index 0) is written first as REC_PLAY; any additional players follow
+        // as REC_PLAYER_EXTRA records. With a single player this is byte-identical to before.
+        for (std::size_t i = 0; i < mPlayers.size(); ++i)
+            mPlayers.get(i).write(writer, progress, i);
         mGlobalVariables.write(writer, progress);
         mWeatherManager->write(writer, progress);
         mProjectileManager->write(writer, progress);
@@ -452,8 +531,18 @@ namespace MWWorld
                 }
 
                 mStore.checkPlayer();
-                mPlayer->readRecord(reader, type);
+                mPlayers.primary().readRecord(reader, type);
                 break;
+            case ESM::REC_PLAYER_EXTRA:
+            {
+                // Additional players always follow the primary REC_PLAY in the stream, so the id
+                // index and player setup are already in place by the time we get here.
+                uint32_t index = 0;
+                reader.getHNT(index, "PLIX");
+                const ESM::NPC* playerNpc = mStore.get<ESM::NPC>().find(ESM::RefId::stringRefId("Player"));
+                mPlayers.loadExtra(index, playerNpc).readRecord(reader, type);
+                break;
+            }
             case ESM::REC_CSTA:
                 // We need to rebuild the ESMStore index in order to be able to lookup dynamic records while loading the
                 // WorldModel and, afterwards, the player.
@@ -514,7 +603,7 @@ namespace MWWorld
 
     MWWorld::Player& World::getPlayer()
     {
-        return *mPlayer;
+        return mPlayers.primary();
     }
 
     const std::vector<int>& World::getESMVersions() const
@@ -603,7 +692,7 @@ namespace MWWorld
         // the player is always in an active cell.
         if (name == "Player")
         {
-            return mPlayer->getPlayer();
+            return mPlayers.primary().getPlayer();
         }
 
         for (CellStore* cellstore : mWorldScene->getActiveCells())
@@ -633,7 +722,7 @@ namespace MWWorld
             }
         }
 
-        Ptr ptr = mPlayer->getPlayer().getClass().getContainerStore(mPlayer->getPlayer()).search(name);
+        Ptr ptr = mPlayers.primary().getPlayer().getClass().getContainerStore(mPlayers.primary().getPlayer()).search(name);
 
         return ptr;
     }
@@ -907,7 +996,7 @@ namespace MWWorld
         else
             maxDistance = getMaxActivationDistance();
 
-        const MWWorld::Ptr player = mPlayer->getPlayer();
+        const MWWorld::Ptr player = mPlayers.primary().getPlayer();
         const float telekinesisMagnitude = player.getClass()
                                                .getCreatureStats(player)
                                                .getMagicEffects()
@@ -951,6 +1040,28 @@ namespace MWWorld
             if (ptr == getPlayerPtr())
                 throw std::runtime_error("can not delete player object");
 
+            // Multiplayer: a shared world object leaving the world must stay in sync across peers.
+            // This covers a loose item (picked up / dropped) and a CORPSE being disposed — both are
+            // host-owned refs that, when deleted, must vanish for everyone.
+            //  - On the host, broadcast the removal so every client deletes its copy (covers a
+            //    client-reported pickup/dispose applied here, and host-side script/NPC deletes).
+            //  - On a client, deleting one means this peer picked it up or disposed it; tell the host
+            //    so it removes the shared instance and relays that to the others. We still delete our
+            //    own copy below, so the actor sees it gone at once.
+            const bool isLooseItem = ptr.getClass().isItem(ptr);
+            const bool isCorpse = ptr.getClass().isActor() && ptr.getClass().getCreatureStats(ptr).isDead();
+            if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+                replicator != nullptr && ptr.getCellRef().getRefNum().isSet() && (isLooseItem || isCorpse))
+            {
+                if (replicator->isAuthority())
+                    replicator->reportItemRemoved(ptr.getCellRef().getRefNum());
+                // The handoff guard excludes a drop we're handing off (its local RefNum is meaningless
+                // on the host) so it isn't mistaken for a pickup. Save items (a pre-placed floor item
+                // or a content NPC's corpse) share a RefNum across peers, so the host resolves them.
+                else if (replicator->isNetworkClient() && !replicator->isHandingOffDrop())
+                    replicator->reportItemTaken(ptr.getCellRef().getRefNum());
+            }
+
             ptr.getCellRef().setCount(0);
 
             if (ptr.isInCell()
@@ -993,7 +1104,7 @@ namespace MWWorld
         CellStore* currCell = ptr.isInCell()
             ? ptr.getCell()
             : nullptr; // currCell == nullptr should only happen for player, during initial startup
-        bool isPlayer = ptr == mPlayer->getPlayer();
+        bool isPlayer = ptr == mPlayers.primary().getPlayer();
         bool haveToMove = isPlayer || (currCell && mWorldScene->isCellActive(*currCell));
         MWWorld::Ptr newPtr = ptr;
 
@@ -1391,7 +1502,24 @@ namespace MWWorld
             if (const auto object = mPhysics->getObject(door.first))
                 updateNavigatorObject(*object, navigatorUpdateGuard.get());
 
-        mNavigator->update(getPlayerPtr().getRefData().getPosition().asVec3(), navigatorUpdateGuard.get());
+        // Feed every player's focus point, tagged with its worldspace. The multi-worldspace navigator
+        // facade routes each to the sub-navigator for that worldspace, so avatars in different cells
+        // (interiors + exterior) each get navmesh built around them. Index 0 is the primary player, so
+        // single-player collapses to one focus point in one worldspace — identical to the old behavior.
+        //
+        // On a dedicated server the primary player is a stationary placeholder with no human behind it.
+        // Skip it: a single worldspace currently builds navmesh around its FIRST focus only, so a primary
+        // placeholder sharing the exterior with an avatar would steal the focus and starve the avatar's
+        // NPCs of navmesh. (Once a worldspace supports multiple foci this skip can go.)
+        std::vector<DetourNavigator::PlayerPosition> playerPositions;
+        for (std::size_t i = mDedicatedServer ? 1 : 0; i < mPlayers.size(); ++i)
+        {
+            const MWWorld::Ptr player = mPlayers.get(i).getPlayer();
+            if (player.isInCell())
+                playerPositions.push_back(DetourNavigator::PlayerPosition{
+                    player.getCell()->getCell()->getWorldSpace(), player.getRefData().getPosition().asVec3() });
+        }
+        mNavigator->update(playerPositions, navigatorUpdateGuard.get());
     }
 
     void World::updateNavigatorObject(
@@ -1528,6 +1656,12 @@ namespace MWWorld
         return physicActor && physicActor->getCollisionMode();
     }
 
+    void World::setActorOnGround(const MWWorld::Ptr& ptr, bool onGround)
+    {
+        if (MWPhysics::Actor* physicActor = mPhysics->getActor(ptr))
+            physicActor->setOnGround(onGround);
+    }
+
     bool World::toggleCollisionMode()
     {
         if (mPhysics->toggleCollisionMode())
@@ -1561,6 +1695,8 @@ namespace MWWorld
         // The same thing for "in jail" flag: reset it if:
         // 1. Player was in jail
         // 2. Jailing window was closed
+        // The jail window is a client flow; a headless server reports containsMode(GM_Jail) == false
+        // (no GUI), which simply clears the flag — jail "serving" is driven by the client.
         if (mPlayerInJail && !mGoToJail && !MWBase::Environment::get().getWindowManager()->containsMode(MWGui::GM_Jail))
             mPlayerInJail = false;
 
@@ -1568,7 +1704,7 @@ namespace MWWorld
 
         updateNavigator();
 
-        mPlayer->update();
+        mPlayers.primary().update();
 
         mPhysics->debugDraw();
 
@@ -1927,6 +2063,21 @@ namespace MWWorld
         // only the player place items in the world, so no need to check actor
         PCDropped(dropped);
 
+        // Multiplayer: this is the cursor-placed drop path the inventory UI normally takes (it only
+        // falls back to dropObjectOnGround when the cursor isn't over a placeable spot), so it needs
+        // the same handling — hand a client's drop to the host and remove the local copy. See
+        // dropObjectOnGround for the full rationale.
+        if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+            replicator != nullptr && replicator->isNetworkClient() && !dropped.isEmpty() && dropped.isInCell()
+            && dropped.getClass().isItem(dropped))
+        {
+            replicator->reportDrop(dropped.getCellRef().getRefId().serializeText(), dropped.getCellRef().getCount(),
+                dropped.getRefData().getPosition().asVec3(), dropped.getCell()->getCell()->getId().serializeText());
+            replicator->setHandingOffDrop(true);
+            deleteObject(dropped);
+            replicator->setHandingOffDrop(false);
+        }
+
         return dropped;
     }
 
@@ -2046,8 +2197,23 @@ namespace MWWorld
         Ptr dropped
             = copy ? copyObjectToCell(object, cell, pos, amount, true) : moveObjectToCell(object, cell, pos, true);
 
-        if (actor == mPlayer->getPlayer()) // Only call if dropped by player
+        if (actor == mPlayers.primary().getPlayer()) // Only call if dropped by player
             PCDropped(dropped);
+
+        // Multiplayer: a client doesn't own the shared world, so hand its player's drop to the host
+        // — report it, then remove our just-made local copy. The host places the item authoritatively
+        // (its own RefNum) and replicates it back to every peer, the dropper included; that echo is
+        // the instance everyone then shares (no duplicate, no divergent identity).
+        if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+            replicator != nullptr && replicator->isNetworkClient() && actor == mPlayers.primary().getPlayer()
+            && !dropped.isEmpty() && dropped.isInCell() && dropped.getClass().isItem(dropped))
+        {
+            replicator->reportDrop(dropped.getCellRef().getRefId().serializeText(), dropped.getCellRef().getCount(),
+                dropped.getRefData().getPosition().asVec3(), dropped.getCell()->getCell()->getId().serializeText());
+            replicator->setHandingOffDrop(true);
+            deleteObject(dropped);
+            replicator->setHandingOffDrop(false);
+        }
         return dropped;
     }
 
@@ -2220,8 +2386,8 @@ namespace MWWorld
     void World::setupPlayer()
     {
         const ESM::NPC* player = mStore.get<ESM::NPC>().find(ESM::RefId::stringRefId("Player"));
-        if (!mPlayer)
-            mPlayer = std::make_unique<MWWorld::Player>(player);
+        if (mPlayers.empty())
+            mPlayers.setupPrimary(player);
         else
         {
             // Remove the old CharacterController
@@ -2231,10 +2397,10 @@ namespace MWWorld
             mRendering->removePlayer(getPlayerPtr());
             MWBase::Environment::get().getLuaManager()->objectRemovedFromScene(getPlayerPtr());
 
-            mPlayer->set(player);
+            mPlayers.primary().set(player);
         }
 
-        Ptr ptr = mPlayer->getPlayer();
+        Ptr ptr = mPlayers.primary().getPlayer();
         mRendering->setupPlayer(ptr);
         MWBase::Environment::get().getLuaManager()->setupPlayer(ptr);
     }
@@ -2272,7 +2438,7 @@ namespace MWWorld
 
         CellStore* currentCell = mWorldScene->getCurrentCell();
 
-        Ptr player = mPlayer->getPlayer();
+        Ptr player = mPlayers.primary().getPlayer();
 
         const MWPhysics::Actor* actor = mPhysics->getActor(player);
         if (!actor)
@@ -2288,7 +2454,7 @@ namespace MWWorld
             || isFlying(player))
             result |= Rest_PlayerIsInAir;
 
-        if (mPlayer->enemiesNearby())
+        if (mPlayers.primary().enemiesNearby())
             result |= Rest_EnemiesAreNearby;
 
         if (!currentCell->getCell()->noSleep() && !player.getClass().getNpcStats(player).isWerewolf())
@@ -2384,6 +2550,9 @@ namespace MWWorld
 
     void World::hurtStandingActors(const ConstPtr& object, float healthPerSecond)
     {
+        // Hazard damage is suppressed while the local client has a GUI open. On a headless
+        // dedicated server NullWindowManager reports isGuiMode() == false, so hazard damage
+        // applies because the shared world is running — which is the correct server behaviour.
         if (MWBase::Environment::get().getWindowManager()->isGuiMode())
             return;
 
@@ -2418,6 +2587,8 @@ namespace MWWorld
 
     void World::hurtCollidingActors(const ConstPtr& object, float healthPerSecond)
     {
+        // See hurtStandingActors: headless servers report isGuiMode() == false, so the shared
+        // world's hazard damage applies correctly.
         if (MWBase::Environment::get().getWindowManager()->isGuiMode())
             return;
 
@@ -2970,7 +3141,7 @@ namespace MWWorld
     }
 
     void World::launchProjectile(MWWorld::Ptr& actor, MWWorld::Ptr& projectile, const osg::Vec3f& worldPos,
-        const osg::Quat& orient, MWWorld::Ptr& bow, float speed, float attackStrength)
+        const osg::Quat& orient, MWWorld::Ptr& bow, float speed, float attackStrength, bool cosmetic)
     {
         // An initial position of projectile can be outside shooter's collision box, so any object between shooter and
         // launch position will be ignored. To avoid this issue, we should check for impact immediately before launch
@@ -2991,25 +3162,28 @@ namespace MWWorld
 
         if (result.mHit)
         {
-            MWMechanics::projectileHit(actor, result.mHitObject, bow, projectile, result.mHitPos, attackStrength);
+            // A cosmetic mirror resolves no hit — a point-blank shot just has no visible flight.
+            if (!cosmetic)
+                MWMechanics::projectileHit(actor, result.mHitObject, bow, projectile, result.mHitPos, attackStrength);
             return;
         }
 
         // Bail out if the launch position is underwater
         if (isUnderwater(MWMechanics::getPlayer().getCell(), worldPos))
         {
-            MWMechanics::projectileHit(actor, Ptr(), bow, projectile, worldPos, attackStrength);
+            if (!cosmetic)
+                MWMechanics::projectileHit(actor, Ptr(), bow, projectile, worldPos, attackStrength);
             mRendering->emitWaterRipple(worldPos);
             return;
         }
 
-        mProjectileManager->launchProjectile(actor, projectile, worldPos, orient, bow, speed, attackStrength);
+        mProjectileManager->launchProjectile(actor, projectile, worldPos, orient, bow, speed, attackStrength, cosmetic);
     }
 
-    void World::launchMagicBolt(
-        const ESM::RefId& spellId, const MWWorld::Ptr& caster, const osg::Vec3f& fallbackDirection, ESM::RefNum item)
+    void World::launchMagicBolt(const ESM::RefId& spellId, const MWWorld::Ptr& caster,
+        const osg::Vec3f& fallbackDirection, ESM::RefNum item, bool cosmetic)
     {
-        mProjectileManager->launchMagicBolt(spellId, caster, fallbackDirection, item);
+        mProjectileManager->launchMagicBolt(spellId, caster, fallbackDirection, item, cosmetic);
     }
 
     void World::updateProjectilesCasters()
@@ -3056,7 +3230,7 @@ namespace MWWorld
         // If we are in exterior, check the weather manager.
         // In interiors there are no precipitations and sun, so check the ambient
         // Looks like pseudo-exteriors considered as interiors in this case
-        MWWorld::CellStore* cell = mPlayer->getPlayer().getCell();
+        MWWorld::CellStore* cell = mPlayers.primary().getPlayer().getCell();
         if (cell->isExterior())
         {
             float hour = getTimeStamp().getHour();
@@ -3143,7 +3317,7 @@ namespace MWWorld
     {
         if (ptr.getCell()->isExterior())
         {
-            return getClosestMarkerFromExteriorPosition(mPlayer->getLastKnownExteriorPosition(), id);
+            return getClosestMarkerFromExteriorPosition(mPlayers.primary().getLastKnownExteriorPosition(), id);
         }
 
         // Search for a 'nearest' marker, counting each cell between the starting
@@ -3303,9 +3477,9 @@ namespace MWWorld
     void World::updateWeather(float duration, bool paused)
     {
         bool isExterior = isCellExterior() || isCellQuasiExterior();
-        if (mPlayer->wasTeleported())
+        if (mPlayers.primary().wasTeleported())
         {
-            mPlayer->setTeleported(false);
+            mPlayers.primary().setTeleported(false);
 
             const ESM::RefId& playerRegion = getPlayerPtr().getCell()->getCell()->getRegion();
             mWeatherManager->playerTeleported(playerRegion, isExterior);
@@ -3439,12 +3613,138 @@ namespace MWWorld
 
     MWWorld::Ptr World::getPlayerPtr()
     {
-        return mPlayer->getPlayer();
+        return mPlayers.primary().getPlayer();
     }
 
     MWWorld::ConstPtr World::getPlayerConstPtr() const
     {
-        return mPlayer->getConstPlayer();
+        return mPlayers.primary().getConstPlayer();
+    }
+
+    bool World::isPlayer(const MWWorld::ConstPtr& ptr) const
+    {
+        return mPlayers.isPlayer(ptr);
+    }
+
+    std::size_t World::getPlayerCount() const
+    {
+        return mPlayers.size();
+    }
+
+    MWWorld::Player& World::getPlayer(std::size_t index)
+    {
+        return mPlayers.get(index);
+    }
+
+    MWWorld::Ptr World::getPlayerPtr(std::size_t index)
+    {
+        return mPlayers.get(index).getPlayer();
+    }
+
+    MWWorld::Player& World::getPlayer(const MWWorld::ConstPtr& ptr)
+    {
+        MWWorld::Player* player = mPlayers.findPlayer(ptr);
+        if (player == nullptr)
+            throw std::runtime_error("getPlayer: object is not a player");
+        return *player;
+    }
+
+    MWWorld::Ptr World::addPlayer()
+    {
+        // Place the new player where the primary player is, so it has a valid cell to be saved in.
+        const MWWorld::Ptr primary = mPlayers.primary().getPlayer();
+        return addPlayer(*primary.getCell(), primary.getRefData().getPosition());
+    }
+
+    MWWorld::Ptr World::addPlayer(MWWorld::CellStore& cell, const ESM::Position& position, const ESM::NPC* record)
+    {
+        if (record == nullptr)
+            record = mStore.get<ESM::NPC>().find(ESM::RefId::stringRefId("Player"));
+        MWWorld::Player& player = mPlayers.addPlayer(record);
+        player.setCell(&cell);
+
+        MWWorld::Ptr ptr = player.getPlayer();
+        ptr.getRefData().setPosition(position);
+        // Give this non-primary player a stable, unique RefNum BEFORE registering it. A player ref
+        // is born blank (Player::makePlayerCellRef calls blank()); left to the registry's lazy
+        // getOrAssignRefNum it could resolve to a blank/colliding identity, so an NPC's AiCombat —
+        // which stores and resolves its target purely by RefNum — could not aim its retaliation at
+        // the right avatar (every avatar looked like the same player). A dedicated negative content
+        // file keeps these clear of real content (>= 0), generated refs (count down from -1) and the
+        // net-player wire id (-1000); the index is monotonic so it is never reused.
+        constexpr std::int32_t sNetworkPlayerRefNumContentFile = -2000;
+        ptr.getCellRef().setRefNum(ESM::RefNum{ mNextNetworkPlayerRefNum++, sNetworkPlayerRefNumContentFile });
+        mWorldModel.registerPtr(ptr);
+
+        // Load and keep the player's cell active so the cell that this player occupies is simulated.
+        mWorldScene->addExtraPlayer(ptr);
+        // Give the avatar a real presence in the world — a collision body and a mechanics slot — so
+        // NPCs can perceive, target and melee it. Without this it is an invisible ghost: combat code
+        // (AiCombat's LOS/reach checks, hit detection) has nothing to act on, so a struck NPC takes
+        // the damage but can never actually fight back.
+        mWorldScene->addObjectToScene(ptr);
+        MWBase::Environment::get().getLuaManager()->addPlayer(ptr);
+        return ptr;
+    }
+
+    ESM::RefNum World::reserveNetworkSummonRefNum()
+    {
+        // A reserved content file, clear of real content (>= 0), generated refs (count down from -1),
+        // the net-player wire id (-1000) and network-player avatars (-2000). Clients never generate
+        // into it, so a host summon's RefNum can't collide with a client's local refs.
+        constexpr std::int32_t sNetworkSummonRefNumContentFile = -3000;
+        return ESM::RefNum{ mNextNetworkSummonRefNum++, sNetworkSummonRefNumContentFile };
+    }
+
+    MWWorld::Ptr World::placeNetworkPlayer(const MWWorld::Ptr& ptr, MWWorld::CellStore& cell, const osg::Vec3f& position)
+    {
+        MWWorld::Player* player = mPlayers.findPlayer(ptr);
+        if (player == nullptr)
+            throw std::runtime_error("World::placeNetworkPlayer: Ptr is not one of the players");
+
+        ESM::Position pos = ptr.getRefData().getPosition();
+        pos.pos[0] = position.x();
+        pos.pos[1] = position.y();
+        pos.pos[2] = position.z();
+        ptr.getRefData().setPosition(pos);
+
+        if (ptr.getCell() != &cell)
+        {
+            // A network avatar lives only in its Player wrapper and the world-model registry — never
+            // in a CellStore's reference list. So cross cells by re-pointing the wrapper and re-keying
+            // the registry to the new-cell Ptr, NOT through moveObject: moveObject's moved-ref
+            // bookkeeping is built for placed refs and, on an avatar's SECOND move, tries to send it
+            // "back to its original cell" first — stranding it in its previous cell. That left every
+            // migrated avatar un-findable where it actually was, so an NPC could only be made to fight
+            // an avatar still sitting in the cell it was first placed in (the "first player in the
+            // cell" symptom). Re-pointing directly keeps getPtr(refNum) resolving to the right place.
+            // Carry the avatar's scene presence (collision body + mechanics slot) to the new cell:
+            // drop it from the old cell, re-point the wrapper, load/keep the destination, then re-add
+            // it there. Keeps NPCs able to perceive and fight it wherever its owner walks.
+            mWorldScene->removeObjectFromScene(ptr, false);
+            player->setCell(&cell);
+            mWorldModel.registerPtr(player->getPlayer());
+            mWorldScene->addExtraPlayer(player->getPlayer());
+            mWorldScene->addObjectToScene(player->getPlayer());
+        }
+        // Teleport the avatar's PHYSICS body to the authoritative position too — not just its ref
+        // data. Without this, the very next physics/mechanics step reads the body's stale (drifted)
+        // position, re-applies the replicated control input on top of it, and overwrites our
+        // correction: the avatar would track its owner's INPUT but not its POSITION, drifting out of
+        // sync. updatePosition snaps the body here and skips its next simulation, so the snapshot
+        // position is what holds while the control input only drives the walk animation.
+        mPhysics->updatePosition(player->getPlayer());
+        return player->getPlayer();
+    }
+
+    void World::removePlayer(std::size_t index)
+    {
+        if (index == MWWorld::Players::sPrimaryIndex)
+            throw std::out_of_range("World::removePlayer: the primary player cannot be removed");
+        const MWWorld::Ptr ptr = mPlayers.get(index).getPlayer();
+        MWBase::Environment::get().getLuaManager()->removePlayer(ptr);
+        mWorldModel.deregisterLiveCellRef(*ptr.getBase());
+        mPlayers.remove(index);
     }
 
     void World::updateDialogueGlobals()
@@ -3513,7 +3813,7 @@ namespace MWWorld
 
             int bounty = player.getClass().getNpcStats(player).getBounty();
             player.getClass().getNpcStats(player).setBounty(0);
-            mPlayer->recordCrimeId();
+            mPlayers.primary().recordCrimeId();
             confiscateStolenItems(player);
 
             static int iDaysinPrisonMod = mStore.get<ESM::GameSetting>().find("iDaysinPrisonMod")->mValue.getInteger();
@@ -3528,7 +3828,7 @@ namespace MWWorld
                 player.getClass().getCreatureStats(player).setAttackingOrSpell(false);
             }
 
-            mPlayer->setDrawState(MWMechanics::DrawState::Nothing);
+            mPlayers.primary().setDrawState(MWMechanics::DrawState::Nothing);
             mGoToJail = false;
 
             MWBase::Environment::get().getWindowManager()->removeGuiMode(MWGui::GM_Dialogue);

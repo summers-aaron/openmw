@@ -87,6 +87,24 @@ namespace OpenMW
 
         addOption("no-grab", bpo::value<bool>()->implicit_value(true)->default_value(false), "Don't grab mouse cursor");
 
+        addOption("frames", bpo::value<unsigned int>()->default_value(0),
+            "Run at most this many simulation frames then quit (0 = unlimited). Useful for "
+            "headless/dedicated bounded runs and automated testing.");
+
+        addOption("dedicated", bpo::value<bool>()->implicit_value(true)->default_value(false),
+            "Run as a headless dedicated server: install null window/input/sound managers, never "
+            "present frames, and skip viewer traversal, so the world simulation (time, AI, physics, "
+            "scripts) runs without a GUI/audio/input client. Still constructs the OSG rendering "
+            "pipeline and needs a GL context (zero-GL is a later milestone).");
+
+        addOption("listen", bpo::value<int>()->default_value(0),
+            "Host a multiplayer session on this TCP port (0 = single-player, no networking). Accepts "
+            "clients and broadcasts the replication stream to them.");
+
+        addOption("connect", bpo::value<std::string>()->default_value(""),
+            "Join a multiplayer host as a client, given as host:port. Receives the host's "
+            "authoritative replication stream instead of looping back.");
+
         addOption("export-fonts", bpo::value<bool>()->implicit_value(true)->default_value(false),
             "Export Morrowind .fnt fonts to PNG image and XML file in current directory");
 
