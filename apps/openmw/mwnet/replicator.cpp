@@ -1766,6 +1766,13 @@ namespace MWNet
         ContainerState state;
         state.mId = id;
         MWWorld::ContainerStore& store = ptr.getClass().getContainerStore(ptr);
+        // Expand leveled lists first (deterministically, from the RefNum-derived seed) so we capture the
+        // container's FULL contents. Without this, a freshly-materialized container on the host is still
+        // unresolved, so we'd read only the base non-leveled items — a thin subset — and broadcasting that
+        // back would wipe every other peer's crate down to it. A peer that opened the loot window already
+        // resolved the same way, so the resolved contents match across peers.
+        if (isContainer && !store.isResolved())
+            store.resolve();
         for (const MWWorld::Ptr& item : store)
         {
             if (item.getCellRef().getCount() <= 0)
@@ -1837,7 +1844,28 @@ namespace MWNet
                 mAuthoritativeContainers[state.mId] = state;
                 mDirtyContainers.insert(state.mId);
             }
+            else
+            {
+                // Client: cache the authoritative contents so that if this container's cell isn't loaded
+                // yet (applyContainerState above was a no-op), we still apply it the moment the container
+                // materializes — see syncContainerFromCache. Latest broadcast wins.
+                mCachedContainerStates[state.mId] = state;
+            }
         }
+    }
+
+    void Replicator::syncContainerFromCache(const MWWorld::Ptr& container)
+    {
+        if (mCachedContainerStates.empty())
+            return; // host / single-player, or nothing cached yet
+        const ESM::RefNum id = container.getCellRef().getRefNum();
+        if (!id.isSet())
+            return;
+        // The container just loaded (its custom data was set right before this call), so applyContainerState
+        // — which re-fetches the ref by RefNum and overwrites its store — now succeeds. No recursion: the
+        // getContainerStore it triggers finds the custom data already present.
+        if (auto it = mCachedContainerStates.find(id); it != mCachedContainerStates.end())
+            applyContainerState(it->second);
     }
 
     void Replicator::reportContainerChange(ESM::RefNum container, const MWWorld::Ptr& item, int count, bool take)

@@ -11,8 +11,11 @@
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
 
+#include "../mwnet/replicator.hpp"
+
 #include "../mwrender/animation.hpp"
 
+#include "cellref.hpp"
 #include "class.hpp"
 #include "containerstore.hpp"
 
@@ -33,6 +36,15 @@ namespace MWWorld
         MWWorld::ContainerStore& store = target.getClass().getContainerStore(target);
         store.resolve();
         MWWorld::ContainerStore& actorStore = actor.getClass().getContainerStore(actor);
+
+        // Multiplayer: harvesting bypasses the loot window, so route the take through the host the same
+        // way the loot UI does (see containeritemmodel.cpp). On a client, report each taken stack so the
+        // host resolves it authoritatively (and can revoke an over-take if a peer already harvested it);
+        // on the host, mark the container dirty so its new contents are broadcast. A no-op in SP.
+        MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+        const ESM::RefNum containerRefNum = target.getCellRef().getRefNum();
+        const bool reportToNet = replicator != nullptr && containerRefNum.isSet();
+
         std::map<std::string, int> takenMap;
         for (MWWorld::ContainerStoreIterator it = store.begin(); it != store.end(); ++it)
         {
@@ -44,11 +56,15 @@ namespace MWWorld
             // not work for a last item in the container - empty harvested containers are considered as "allowed to
             // use".
             MWBase::Environment::get().getMechanicsManager()->itemTaken(actor, *it, target, itemCount);
+            if (reportToNet && replicator->isNetworkClient())
+                replicator->reportContainerChange(containerRefNum, *it, itemCount, /*take=*/true);
             actorStore.add(*it, itemCount);
             store.remove(*it, itemCount);
             std::string name{ it->getClass().getName(*it) };
             takenMap[name] += itemCount;
         }
+        if (reportToNet && !replicator->isNetworkClient())
+            replicator->markContainerDirty(containerRefNum); // host's own change (or single-player no-op)
 
         // Spawn a messagebox (only for items added to player's inventory)
         if (actor == MWBase::Environment::get().getWorld()->getPlayerPtr())
