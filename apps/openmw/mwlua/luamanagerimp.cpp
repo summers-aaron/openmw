@@ -501,7 +501,15 @@ namespace MWLua
         if (!mInitialized)
             return;
         if (!mPlayer.isEmpty())
-            throw std::logic_error("Player is initialized twice");
+        {
+            // Setting up the SAME player ref again means its RefData was rebuilt in place by an
+            // in-place record reload (adopting a server-served character over the running player,
+            // World::adoptNetworkCharacter). The reload dropped the RefData's Lua scripts, so fall
+            // through to rebind and recreate them. A different player is still a logic error.
+            if (mPlayer.mRef != ptr.mRef)
+                throw std::logic_error("Player is initialized twice");
+            mPlayer = MWWorld::Ptr(); // rebound below
+        }
         mObjectLists.objectAddedToScene(ptr);
         mObjectLists.setPlayer(ptr);
         mPlayer = ptr; // the local player drives this client's input/UI/camera

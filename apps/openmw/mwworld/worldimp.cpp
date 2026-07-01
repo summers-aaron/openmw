@@ -3714,6 +3714,9 @@ namespace MWWorld
         const MWWorld::Ptr player = getPlayerPtr();
         if (player.isInCell())
             changeToCell(player.getCell()->getCell()->getId(), player.getRefData().getPosition(), false, false);
+        else
+            Log(Debug::Warning)
+                << "adoptNetworkCharacter: character's cell is not available here; player left in place";
         return true;
     }
 
