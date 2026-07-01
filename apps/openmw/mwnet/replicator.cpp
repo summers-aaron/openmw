@@ -451,6 +451,12 @@ namespace MWNet
         if (mLocalPlayerReady)
             return;
 
+        // Never auto-open the gate on the authority: a dedicated server clears ready to keep its
+        // engine-required placeholder player off the wire, and a save-booted server would otherwise
+        // re-open it here on the first tick (a loaded game has chargenstate == -1 already).
+        if (mIsAuthority)
+            return;
+
         if (MWBase::Environment::get().getWorld()->getGlobalFloat(MWWorld::Globals::sCharGenState) == -1)
         {
             mLocalPlayerReady = true;

@@ -1032,6 +1032,12 @@ void OMW::Engine::prepareEngine()
         mReplicator->setLocalPlayerNetId(ESM::RefNum{ 0, MWNet::sNetPlayerContentFile });
         mReplicator->setRelayAvatars(true);
         mReplicator->setAuthority(true);
+        // A dedicated server's primary player is an engine-required placeholder, not a person —
+        // never advertise it, or every client sees a ghost avatar standing at the placeholder's
+        // spawn point (with --new-game, the chargen prison ship). A playing listen-server (no
+        // --dedicated) does replicate its player.
+        if (isDedicated())
+            mReplicator->setLocalPlayerReady(false);
     }
 
     const bool stereoEnabled = Settings::stereo().mStereoEnabled || osg::DisplaySettings::instance().get()->getStereo();
