@@ -617,9 +617,31 @@ namespace MWNet
             }
             delta.mRemovedItems = std::move(mPendingItemRemovals);
             mPendingItemRemovals.clear();
+            // Periodically re-assert every removal so a peer that joined (or reloaded a cell) after the
+            // original pickup learns the item is gone. Receivers skip any whose item isn't loaded/present
+            // (and purge it themselves on cell load), so this is cheap; it only carries stable RefNums.
+            constexpr std::uint32_t sItemRefreshInterval = 300;
+            if ((delta.mTick % sItemRefreshInterval) == 0)
+                for (const ESM::RefNum& id : mRemovedWorldItems)
+                    delta.mRemovedItems.push_back(id);
         }
 
         return delta;
+    }
+
+    void Replicator::purgeRemovedItems()
+    {
+        if (mRemovedWorldItems.empty())
+            return; // nothing removed yet, or single-player
+        MWWorld::WorldModel& worldModel = *MWBase::Environment::get().getWorldModel();
+        MWBase::World& world = *MWBase::Environment::get().getWorld();
+        for (const ESM::RefNum& id : mRemovedWorldItems)
+        {
+            const MWWorld::Ptr item = worldModel.getPtr(id);
+            if (item.isEmpty() || item.getCellRef().getCount() <= 0)
+                continue; // its cell isn't loaded, or it's already gone here
+            world.deleteObject(item); // the just-loaded cell brought a removed item back from the save
+        }
     }
 
     void Replicator::recordMotion(const ESM::RefNum& id, const MWWorld::Ptr& actor, const osg::Vec3f& target,
@@ -1462,6 +1484,9 @@ namespace MWNet
         // deleted its copy, so the echo is then a no-op (count already 0).
         for (const ESM::RefNum& removed : delta.mRemovedItems)
         {
+            // Remember every removal, even one we can't apply yet (its cell isn't loaded here): purge it
+            // when that cell loads, so an item taken while we were away doesn't reappear on the shelf.
+            mRemovedWorldItems.insert(removed);
             mReplicatedItems.erase(removed); // cleanup if it was a floor item we spawned
             // Was this one a summon WE instantiated? (Distinguishes a summon despawn from any other
             // removed actor, e.g. a disposed corpse, which must not play the summon VFX.)

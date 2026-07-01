@@ -34,6 +34,8 @@
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
 
+#include "../mwnet/replicator.hpp"
+
 #include "../mwrender/landmanager.hpp"
 #include "../mwrender/postprocessor.hpp"
 #include "../mwrender/renderingmanager.hpp"
@@ -529,6 +531,12 @@ namespace MWWorld
             mRendering.configureAmbient(cellVariant);
 
         mPreloader->notifyLoaded(&cell);
+
+        // Multiplayer: the cell is fully loaded, including any save items that were already picked up on
+        // another peer while it was unloaded here. Delete those now so they don't reappear on the shelf.
+        // No-op on a peer that has seen no removals, and in single-player.
+        if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+            replicator->purgeRemovedItems();
     }
 
     bool Scene::isCellOccupiedByNonPrimaryPlayer(const CellStore* cell) const

@@ -215,6 +215,12 @@ namespace MWNet
         // script/NPC delete), to broadcast as removals. Covers save items too — every peer holds a
         // save item under the same RefNum, so the removal deletes their copy as well.
         std::vector<ESM::RefNum> mPendingItemRemovals;
+        // The persistent record of every loose item removed from the shared world this session (a save
+        // item picked up, or a session drop taken). On the host it is the authoritative removed set,
+        // periodically re-broadcast so a late-joiner learns about earlier pickups; on a client it is the
+        // set of removals received so far. Both purge these from a cell as it loads (purgeRemovedItems),
+        // so an item taken while a peer's cell was unloaded doesn't reappear on the shelf when it loads.
+        std::set<ESM::RefNum> mRemovedWorldItems;
         // Client only: loose items spawned from the host's replication, keyed by their (host) RefNum.
         // Used to tell a host-owned floor item apart from anything else when this peer deletes one
         // (picks it up), so only those are reported back to the host.
@@ -360,7 +366,13 @@ namespace MWNet
         {
             mNetworkItems.erase(item);
             mPendingItemRemovals.push_back(item);
+            mRemovedWorldItems.insert(item); // remember it, so late-joiners and cell reloads stay in sync
         }
+
+        /// Called as a cell loads (on any peer): delete every loose item in it that has already been
+        /// removed from the shared world, so a save item picked up while this cell was unloaded here
+        /// doesn't reappear on the shelf. A no-op with nothing removed / in single-player.
+        void purgeRemovedItems();
 
         /// Mark a lootable inventory (a world container or a corpse) as changed, so this tick's
         /// action batch carries its new contents. Called by the loot UI on whichever peer made the
