@@ -11,10 +11,10 @@
 #include <osg/Vec2i>
 
 #include <filesystem>
+#include <list>
 #include <map>
 #include <memory>
 #include <mutex>
-#include <set>
 #include <unordered_map>
 
 namespace DetourNavigator
@@ -88,7 +88,10 @@ namespace DetourNavigator
         std::filesystem::path mUserDataPath;
         ESM::RefId mCurrentWorldspace;
         std::map<ESM::RefId, std::unique_ptr<Navigator>> mNavigators;
-        std::set<AgentBounds> mAgents;
+        // Live agents, ref-counted by bounds: many actors (and avatars) share the same pathfinding
+        // bounds, so a plain set would drop the shared agent the moment ONE of them leaves — and a
+        // sub-navigator later (re)seeded from it would build a navmesh with no agent (an empty navmesh).
+        std::map<AgentBounds, std::size_t> mAgents;
 
         // Key -> worldspace mappings so update/remove route to the worldspace that owns the geometry.
         std::unordered_map<ObjectId, ESM::RefId> mObjectWorldspace;
@@ -97,8 +100,15 @@ namespace DetourNavigator
         std::unordered_map<const ESM::Pathgrid*, ESM::RefId> mPathgridWorldspace;
 
         // Per-worldspace count of live geometry (objects + water + heightfields). When it drops to
-        // zero we destroy the sub-navigator to join its updater threads and avoid a thread leak.
+        // zero the sub-navigator is retired: kept alive (its in-memory tile cache stays warm, so
+        // re-entering the cell is a cache hit rather than a full recast rebuild) but eligible for
+        // eviction once too many are idle.
         std::map<ESM::RefId, std::size_t> mLiveGeometry;
+
+        // Retired (zero-geometry) worldspaces whose sub-navigators are kept warm, least-recently-idled
+        // first. Bounded by sMaxIdleNavigators so a session that visits many interiors doesn't
+        // accumulate updater threads without limit.
+        std::list<ESM::RefId> mIdleWorldspaces;
 
         // makeUpdateGuard returns a no-op guard; the facade ignores it and lets each sub-call self-lock.
         std::mutex mDummyMutex;
@@ -108,6 +118,8 @@ namespace DetourNavigator
         Navigator* findNavigator(ESM::RefId worldspace) const;
         void incrementLiveGeometry(ESM::RefId worldspace);
         void decrementLiveGeometry(ESM::RefId worldspace);
+        void retireNavigator(ESM::RefId worldspace);
+        void activateNavigator(ESM::RefId worldspace);
     };
 }
 

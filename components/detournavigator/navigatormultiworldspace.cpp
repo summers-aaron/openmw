@@ -49,8 +49,10 @@ namespace DetourNavigator
         }
 
         auto navigator = std::make_unique<NavigatorImpl>(mSettings, nullptr);
-        // A freshly created sub-navigator must learn about every known agent before use.
-        for (const AgentBounds& agentBounds : mAgents)
+        // A freshly created sub-navigator must learn about every live agent before use (one add per
+        // distinct bounds — the sub-navigator ref-counts its own agents, and NavMeshManager::addAgent
+        // is idempotent per bounds, so a single add per bounds is exactly right).
+        for (const auto& [agentBounds, count] : mAgents)
             navigator->addAgent(agentBounds);
 
         Navigator* const result = navigator.get();
@@ -61,6 +63,7 @@ namespace DetourNavigator
     void NavigatorMultiWorldspace::incrementLiveGeometry(ESM::RefId worldspace)
     {
         ++mLiveGeometry[worldspace];
+        activateNavigator(worldspace); // geometry is back — no longer idle
     }
 
     void NavigatorMultiWorldspace::decrementLiveGeometry(ESM::RefId worldspace)
@@ -70,27 +73,55 @@ namespace DetourNavigator
             return;
         if (it->second > 0)
             --it->second;
-        // Destroy an empty worldspace's sub-navigator to join its updater threads. Never destroy the
+        // Retire an empty worldspace's sub-navigator (keep it warm, capped). Never retire the
         // worldspace currently being loaded into (mCurrentWorldspace) to avoid tearing down mid-load.
         if (it->second == 0 && worldspace != mCurrentWorldspace)
+            retireNavigator(worldspace);
+    }
+
+    void NavigatorMultiWorldspace::retireNavigator(ESM::RefId worldspace)
+    {
+        // Cap how many idle sub-navigators are kept warm; each still owns updater threads, so an
+        // unbounded set would leak them over a long session that visits many worldspaces.
+        constexpr std::size_t sMaxIdleNavigators = 8;
+
+        mIdleWorldspaces.remove(worldspace); // re-touch: move to the most-recently-idled end
+        mIdleWorldspaces.push_back(worldspace);
+        while (mIdleWorldspaces.size() > sMaxIdleNavigators)
         {
-            mNavigators.erase(worldspace);
-            mLiveGeometry.erase(it);
+            const ESM::RefId oldest = mIdleWorldspaces.front();
+            mIdleWorldspaces.pop_front();
+            mNavigators.erase(oldest); // joins its updater threads
+            mLiveGeometry.erase(oldest);
         }
+    }
+
+    void NavigatorMultiWorldspace::activateNavigator(ESM::RefId worldspace)
+    {
+        mIdleWorldspaces.remove(worldspace);
     }
 
     bool NavigatorMultiWorldspace::addAgent(const AgentBounds& agentBounds)
     {
-        mAgents.insert(agentBounds);
-        // Broadcast to every existing sub-navigator so all worldspaces gain this agent's navmesh.
-        for (const auto& [worldspace, navigator] : mNavigators)
-            navigator->addAgent(agentBounds);
+        // Only the FIRST arrival of a given bounds registers it with the sub-navigators; later actors
+        // that share the bounds just bump the ref-count. Broadcasts to every existing sub-navigator so
+        // all worldspaces gain this agent's navmesh.
+        if (++mAgents[agentBounds] == 1)
+            for (const auto& [worldspace, navigator] : mNavigators)
+                navigator->addAgent(agentBounds);
         return true;
     }
 
     void NavigatorMultiWorldspace::removeAgent(const AgentBounds& agentBounds)
     {
-        mAgents.erase(agentBounds);
+        // Only the LAST departure removes the agent from the sub-navigators; while any actor still
+        // shares the bounds the agent — and its navmesh — must stay.
+        const auto it = mAgents.find(agentBounds);
+        if (it == mAgents.end() || it->second == 0)
+            return;
+        if (--it->second > 0)
+            return;
+        mAgents.erase(it);
         for (const auto& [worldspace, navigator] : mNavigators)
             navigator->removeAgent(agentBounds);
     }
@@ -98,7 +129,16 @@ namespace DetourNavigator
     void NavigatorMultiWorldspace::updateBounds(ESM::RefId worldspace,
         const std::optional<CellGridBounds>& cellGridBounds, const osg::Vec3f& playerPosition, const UpdateGuard*)
     {
+        // The outgoing current worldspace was protected from retirement while loading; if it emptied
+        // in the meantime, retire it now that a different one is taking over.
+        if (mCurrentWorldspace != worldspace)
+        {
+            const auto prev = mLiveGeometry.find(mCurrentWorldspace);
+            if (prev != mLiveGeometry.end() && prev->second == 0)
+                retireNavigator(mCurrentWorldspace);
+        }
         mCurrentWorldspace = worldspace;
+        activateNavigator(worldspace); // about to load into it — no longer idle
         Navigator* const navigator = getOrCreateNavigator(worldspace);
         navigator->updateBounds(worldspace, cellGridBounds, playerPosition, nullptr);
     }
