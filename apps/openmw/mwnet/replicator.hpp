@@ -411,9 +411,19 @@ namespace MWNet
         /// that changed since the last tick).
         ActionBatch takeOutgoingActions();
 
-        /// Apply received actions authoritatively (host only): make each struck actor aggro
-        /// onto the reporting peer's avatar and take the reported damage.
+        /// Apply received actions authoritatively (host only): route combat hits, place dropped items,
+        /// remove taken items, and spawn/despawn routed summons. Thin dispatcher over the helpers below.
         void applyActions(const ActionBatch& batch);
+
+        /// Apply reported combat hits: route PvP damage to the victim's client, or apply an avatar's
+        /// damage to a host-owned actor (charging a fatal blow / deferring the assault reaction).
+        void applyHitActions(const ActionBatch& batch);
+        /// Place each dropped item in the shared world authoritatively and track it for replication.
+        void applyItemDropActions(const ActionBatch& batch);
+        /// Delete each host-owned loose item a peer picked up (World::deleteObject broadcasts removal).
+        void applyItemTakeActions(const ActionBatch& batch);
+        /// Spawn or despawn a client-routed summon, bound to the summoner's avatar (host only).
+        void applySummonActions(const ActionBatch& batch);
 
         /// Record the avatar as the hit-attempt actor of every host-owned actor already FIGHTING it, so
         /// their retaliation persists the way it does against the primary local player (an avatar's
@@ -445,6 +455,28 @@ namespace MWNet
         void driveRemoteActors();
 
     private:
+        /// Collect every live summoned-creature RefNum bound to any of the given actors (host only).
+        std::set<ESM::RefNum> collectSummons(const std::vector<MWWorld::Ptr>& actors) const;
+
+        /// Append this peer's own player to the delta under its network id, so other peers show it as
+        /// an avatar. No-op until a network id is assigned and the local character is ready.
+        void appendLocalPlayer(SnapshotDelta& delta, const MWWorld::Ptr& player, bool fullSnapshot);
+
+        /// Look up a remote player's avatar, returning it only if it is live (present and placed in
+        /// a cell). Returns an empty Ptr when the peer has no avatar yet or it isn't resolvable.
+        MWWorld::Ptr findLiveAvatar(const ESM::RefNum& netId) const;
+
+        /// Per-remote-actor frame drivers, called from driveRemoteActors: launch a deferred cosmetic
+        /// cast bolt at its release key, swap a weapon strike into its follow-through at impact, and
+        /// loop the turn-in-place foot-shuffle while the owner pivots in place (fraction is its speed).
+        void driveCastBolt(const MWWorld::Ptr& actor, const ESM::RefNum& id);
+        void driveFollowThrough(const MWWorld::Ptr& actor, const ESM::RefNum& id);
+        void driveTurnInPlace(const MWWorld::Ptr& actor, const ESM::RefNum& id, float fraction);
+
+        /// Host: deliver each pending avatar assault (crime + witness reaction, victim retaliation) once
+        /// the victim's cell finishes loading, re-asserting until the victim is engaged. No-op off-host.
+        void driveDeferredAssaults();
+
         /// Sample an actor's discrete swing state: bump its per-swing counter on the rising edge
         /// of attacking-or-spell (capturing the weapon group and attack type then), and return the
         /// latest {group, type, seq}. nullopt until the actor has swung at least once. Stateful
@@ -490,6 +522,15 @@ namespace MWNet
         /// Overwrite a lootable inventory's local contents to match a received ContainerState, and
         /// keep it from being re-rolled by a later lazy resolve.
         void applyContainerState(const ContainerState& state);
+
+        /// Apply one entity from a delta. Each returns true when it actually updated an entity
+        /// (so applyDelta can count it); false when it couldn't this tick (not placeable yet, our
+        /// own echo, unresolved ref). applyAvatarEntity handles another peer's player (instantiate
+        /// on first sight, then move/animate); applyWorldEntity handles a host-owned summon / loose
+        /// item / driven actor; applyRemovedItems deletes local copies of items gone from the world.
+        bool applyAvatarEntity(const EntityState& entity);
+        bool applyWorldEntity(const EntityState& entity);
+        void applyRemovedItems(const SnapshotDelta& delta);
 
     public:
         /// Apply a received delta. Other peers' players are always shown as avatars

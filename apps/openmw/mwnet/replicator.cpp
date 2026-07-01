@@ -62,6 +62,35 @@ namespace MWNet
 {
     namespace
     {
+        // Sustained stance/reaction bits carried in EntityState::mMoveFlags. Sampled from the
+        // authoritative actor (sampleMoveFlags) and replayed on its puppet (applyMoveFlags / the
+        // jump + turn drivers). Keep in sync with both ends of the wire.
+        enum MoveFlag : std::uint8_t
+        {
+            MoveFlag_Run = 1 << 0,
+            MoveFlag_Sneak = 1 << 1,
+            MoveFlag_Airborne = 1 << 2,
+            MoveFlag_KnockedDown = 1 << 3,
+            MoveFlag_TurnLeft = 1 << 4,
+            MoveFlag_TurnRight = 1 << 5,
+        };
+
+        // Indices into CreatureStats' dynamic stats (health/magicka/fatigue). Combat damage only
+        // ever targets health or fatigue.
+        constexpr int sHealthIndex = 0;
+        constexpr int sFatigueIndex = 2;
+
+        // Host re-broadcasts full item/container state every this-many ticks so a peer that missed a
+        // delta (packet loss, late join) re-converges without waiting for the next real change.
+        constexpr std::uint32_t sReplicationRefreshInterval = 300;
+
+        // A live actor we can sample from / replay onto: present, placed in a cell, and an actor
+        // (not a loose item or a stale/deleted Ptr). Guards the many per-actor loops below.
+        bool isReplicableActor(const MWWorld::Ptr& ptr)
+        {
+            return !ptr.isEmpty() && ptr.isInCell() && ptr.getClass().isActor();
+        }
+
         // Read a player/avatar NPC's body identity for replication. Empty for a non-NPC
         // (creatures keep the placeholder path). The RefIds are serialized as stable text
         // so they round-trip to the same content records on the receiving peer.
@@ -289,9 +318,9 @@ namespace MWNet
             const MWMechanics::CreatureStats& stats = actor.getClass().getCreatureStats(actor);
             std::uint8_t flags = 0;
             if (stats.getStance(MWMechanics::CreatureStats::Stance_Run))
-                flags |= 1 << 0;
+                flags |= MoveFlag_Run;
             if (stats.getStance(MWMechanics::CreatureStats::Stance_Sneak))
-                flags |= 1 << 1;
+                flags |= MoveFlag_Sneak;
             // Airborne (jumping or falling). A remote avatar is teleported onto its owner's position
             // each snapshot, so its own controller always reads "on the ground" and would never play
             // the jump. Carry the state explicitly — same condition the controller uses to enter
@@ -300,7 +329,7 @@ namespace MWNet
             MWBase::World* world = MWBase::Environment::get().getWorld();
             if (world->isActorCollisionEnabled(actor) && !world->isOnGround(actor) && !world->isSwimming(actor)
                 && !world->isFlying(actor))
-                flags |= 1 << 2;
+                flags |= MoveFlag_Airborne;
             // Knocked down / out. The controller keeps getKnockedDown() set for the whole time the
             // actor is on the floor (it clears it only when the recovery animation finishes), and a
             // knockout additionally drives off the replicated fatigue (< 0), so mirroring this flag plus
@@ -308,7 +337,7 @@ namespace MWNet
             // pose of a fatigue knockout — and makes the avatar pick the matching death-knockdown /
             // death-knockout variant if it dies while down.
             if (stats.getKnockedDown())
-                flags |= 1 << 3;
+                flags |= MoveFlag_KnockedDown;
             // Turn-in-place. The controller plays "turnleft"/"turnright" on the lower body while the
             // actor pivots without translating. The receiver's puppet has no rotation rate to re-derive
             // it from (we set its facing authoritatively), so observe the animation here and carry it as
@@ -319,9 +348,9 @@ namespace MWNet
                 // stance, ...), so match by substring rather than exact name.
                 const std::string_view lower = anim->getActiveGroup(MWRender::BoneGroup_LowerBody);
                 if (lower.find("turnleft") != std::string_view::npos)
-                    flags |= 1 << 4;
+                    flags |= MoveFlag_TurnLeft;
                 else if (lower.find("turnright") != std::string_view::npos)
-                    flags |= 1 << 5;
+                    flags |= MoveFlag_TurnRight;
             }
             return flags;
         }
@@ -334,9 +363,9 @@ namespace MWNet
             if (!actor.getClass().isActor())
                 return;
             MWMechanics::CreatureStats& stats = actor.getClass().getCreatureStats(actor);
-            stats.setMovementFlag(MWMechanics::CreatureStats::Flag_Run, (flags & (1 << 0)) != 0);
-            stats.setMovementFlag(MWMechanics::CreatureStats::Flag_Sneak, (flags & (1 << 1)) != 0);
-            stats.setKnockedDown((flags & (1 << 3)) != 0);
+            stats.setMovementFlag(MWMechanics::CreatureStats::Flag_Run, (flags & MoveFlag_Run) != 0);
+            stats.setMovementFlag(MWMechanics::CreatureStats::Flag_Sneak, (flags & MoveFlag_Sneak) != 0);
+            stats.setKnockedDown((flags & MoveFlag_KnockedDown) != 0);
         }
 
         std::optional<DynamicStats> sampleStats(const MWWorld::Ptr& actor)
@@ -380,6 +409,18 @@ namespace MWNet
             }
         }
 
+        // Subtract combat damage from an actor's health or fatigue dynamic stat and return the
+        // resulting current value. Clamps at the floor; the host is authoritative, so reaching <= 0
+        // (death) is permitted.
+        float applyDynamicDamage(MWMechanics::CreatureStats& stats, bool healthDamage, float damage)
+        {
+            const int index = healthDamage ? sHealthIndex : sFatigueIndex;
+            MWMechanics::DynamicStat<float> stat = stats.getDynamic(index);
+            stat.setCurrent(stat.getCurrent() - damage, true);
+            stats.setDynamic(index, stat);
+            return stat.getCurrent();
+        }
+
         ESM::Position toPosition(const TransformState& transform)
         {
             ESM::Position position{};
@@ -406,8 +447,56 @@ namespace MWNet
         if (MWBase::Environment::get().getWorld()->getGlobalFloat(MWWorld::Globals::sCharGenState) == -1)
         {
             mLocalPlayerReady = true;
-            Log(Debug::Info) << "Chargen complete; replicating local player " << mLocalPlayerNetId;
+            Log(Debug::Verbose) << "Chargen complete; replicating local player " << mLocalPlayerNetId;
         }
+    }
+
+    std::set<ESM::RefNum> Replicator::collectSummons(const std::vector<MWWorld::Ptr>& actors) const
+    {
+        std::set<ESM::RefNum> summons;
+        for (const MWWorld::Ptr& actor : actors)
+        {
+            if (actor.isEmpty() || !actor.getClass().isActor())
+                continue;
+            for (const auto& [effect, refNum] : actor.getClass().getCreatureStats(actor).getSummonedCreatureMap())
+                if (refNum.isSet())
+                    summons.insert(refNum);
+        }
+        return summons;
+    }
+
+    void Replicator::appendLocalPlayer(SnapshotDelta& delta, const MWWorld::Ptr& player, bool fullSnapshot)
+    {
+        // This peer's own player, under its network id, so other peers can show it as an
+        // avatar. Sent EVERY tick (not delta-filtered): it's the entity peers care about
+        // most, so they should instantiate and track it immediately rather than waiting for
+        // a full-refresh tick. Only when a network role assigned an id (SP leaves it unset).
+        // Held back while the local player isn't ready (a client still in chargen) so peers
+        // never instantiate a half-built avatar before the character is finalized.
+        if (!mLocalPlayerNetId.isSet() || !mLocalPlayerReady)
+            return;
+        const ESM::Position& pos = player.getRefData().getPosition();
+        EntityState self;
+        self.mId = mLocalPlayerNetId;
+        self.mTransform = TransformState{ pos.asVec3(), osg::Vec3f(pos.rot[0], pos.rot[1], pos.rot[2]) };
+        self.mStats = sampleStats(player);
+        self.mDrawState = sampleDrawState(player);
+        self.mMoveFlags = sampleMoveFlags(player);
+        self.mSwing = sampleSwing(player, mLocalPlayerNetId);
+        self.mSpeed = sampleSpeed(player);
+        // Carry our cell every tick so peers place our avatar in the same cell we're in
+        // (and the host loads it to simulate its NPCs). It rides with the always-sent self
+        // entity rather than the occasional appearance refresh: cell changes must apply at once.
+        self.mCellId = sampleCellId(player);
+        // Re-advertise our body identity and worn items occasionally so late-joining peers
+        // can build/dress our avatar; they barely change, so once per full-refresh interval
+        // is plenty (equip changes show within that interval).
+        if (fullSnapshot)
+        {
+            self.mAppearance = sampleAppearance(player);
+            self.mEquipment = sampleEquipment(player);
+        }
+        delta.mEntities.push_back(self);
     }
 
     SnapshotDelta Replicator::sampleDelta()
@@ -465,37 +554,7 @@ namespace MWNet
         if (player.isEmpty())
             return delta;
 
-        // This peer's own player, under its network id, so other peers can show it as an
-        // avatar. Sent EVERY tick (not delta-filtered): it's the entity peers care about
-        // most, so they should instantiate and track it immediately rather than waiting for
-        // a full-refresh tick. Only when a network role assigned an id (SP leaves it unset).
-        // Held back while the local player isn't ready (a client still in chargen) so peers
-        // never instantiate a half-built avatar before the character is finalized.
-        if (mLocalPlayerNetId.isSet() && mLocalPlayerReady)
-        {
-            const ESM::Position& pos = player.getRefData().getPosition();
-            EntityState self;
-            self.mId = mLocalPlayerNetId;
-            self.mTransform = TransformState{ pos.asVec3(), osg::Vec3f(pos.rot[0], pos.rot[1], pos.rot[2]) };
-            self.mStats = sampleStats(player);
-            self.mDrawState = sampleDrawState(player);
-            self.mMoveFlags = sampleMoveFlags(player);
-            self.mSwing = sampleSwing(player, mLocalPlayerNetId);
-            self.mSpeed = sampleSpeed(player);
-            // Carry our cell every tick so peers place our avatar in the same cell we're in
-            // (and the host loads it to simulate its NPCs). It rides with the always-sent self
-            // entity rather than the occasional appearance refresh: cell changes must apply at once.
-            self.mCellId = sampleCellId(player);
-            // Re-advertise our body identity and worn items occasionally so late-joining peers
-            // can build/dress our avatar; they barely change, so once per full-refresh interval
-            // is plenty (equip changes show within that interval).
-            if (fullSnapshot)
-            {
-                self.mAppearance = sampleAppearance(player);
-                self.mEquipment = sampleEquipment(player);
-            }
-            delta.mEntities.push_back(self);
-        }
+        appendLocalPlayer(delta, player, fullSnapshot);
 
         // All active actors near the player; an infinite radius enumerates every
         // mechanics-active actor (the authoritative set we replicate).
@@ -510,16 +569,7 @@ namespace MWNet
         // host-only). Membership marks an actor below as a summon so its descriptor + cell ride along.
         std::set<ESM::RefNum> summons;
         if (mIsAuthority)
-        {
-            for (const MWWorld::Ptr& actor : actors)
-            {
-                if (actor.isEmpty() || !actor.getClass().isActor())
-                    continue;
-                for (const auto& [effect, refNum] : actor.getClass().getCreatureStats(actor).getSummonedCreatureMap())
-                    if (refNum.isSet())
-                        summons.insert(refNum);
-            }
-        }
+            summons = collectSummons(actors);
 
         for (const MWWorld::Ptr& actor : actors)
         {
@@ -620,8 +670,7 @@ namespace MWNet
             // Periodically re-assert every removal so a peer that joined (or reloaded a cell) after the
             // original pickup learns the item is gone. Receivers skip any whose item isn't loaded/present
             // (and purge it themselves on cell load), so this is cheap; it only carries stable RefNums.
-            constexpr std::uint32_t sItemRefreshInterval = 300;
-            if ((delta.mTick % sItemRefreshInterval) == 0)
+            if ((delta.mTick % sReplicationRefreshInterval) == 0)
                 for (const ESM::RefNum& id : mRemovedWorldItems)
                     delta.mRemovedItems.push_back(id);
         }
@@ -706,7 +755,7 @@ namespace MWNet
         for (auto it = mRemoteMotion.begin(); it != mRemoteMotion.end();)
         {
             MWWorld::Ptr& actor = it->second.mActor;
-            if (actor.isEmpty() || !actor.isInCell() || !actor.getClass().isActor())
+            if (!isReplicableActor(actor))
             {
                 mWasAirborne.erase(it->first);
                 mPendingCastBolt.erase(it->first);
@@ -731,109 +780,127 @@ namespace MWNet
             const auto airborne = mWasAirborne.find(it->first);
             world.setActorOnGround(actor, airborne == mWasAirborne.end() || !airborne->second);
 
-            // Launch a deferred cosmetic bolt the moment the cast animation reaches its release key, so
-            // the bolt leaves the avatar's hands in step with the cast — not at its start. The avatar
-            // plays the same spellcast animation as the caster, so its own playhead gives the timing.
-            const auto bolt = mPendingCastBolt.find(it->first);
-            if (bolt != mPendingCastBolt.end())
-            {
-                const MWRender::Animation* anim = world.getAnimation(actor);
-                const float now = anim ? anim->getCurrentTime("spellcast") : -1.f;
-                const float release = anim ? anim->getTextKeyTime("spellcast: " + bolt->second.mType + " release") : -1.f;
-                if (now < 0.f)
-                    mPendingCastBolt.erase(bolt); // cast animation no longer playing (cancelled) — drop it
-                else if (release >= 0.f && now >= release)
-                {
-                    // launchMagicBolt resolves its own projectile effects and no-ops for self/touch
-                    // spells (no projectile); cosmetic means it flies and explodes but applies nothing.
-                    world.launchMagicBolt(
-                        ESM::RefId::deserializeText(bolt->second.mSpell), actor, osg::Vec3f(), ESM::RefNum(), true);
-                    mPendingCastBolt.erase(bolt);
-                }
-            }
-
-            // Play a weapon swing's follow-through once its strike arc lands. The strike (phase 2) is held
-            // at the impact key; when the playhead reaches it, swap in "<type> small follow start" ->
-            // "<type> small follow stop" so the weapon recovers smoothly instead of snapping back. Played
-            // as its own segment (not spanned from the strike) so only this one strength's follow runs.
-            const auto follow = mPendingFollow.find(it->first);
-            if (follow != mPendingFollow.end())
-            {
-                MWRender::Animation* anim = world.getAnimation(actor);
-                const std::string& group = follow->second.mGroup;
-                const std::string& type = follow->second.mType;
-                const std::string impact = type == "shoot" ? "shoot release" : type + " hit";
-                const float now = anim ? anim->getCurrentTime(group) : -1.f;
-                const float impactTime = anim ? anim->getTextKeyTime(group + ": " + impact) : -1.f;
-                if (now < 0.f)
-                    mPendingFollow.erase(follow); // strike animation gone (interrupted) — drop it
-                else if (impactTime >= 0.f && now >= impactTime)
-                {
-                    // Pick the follow-through by how hard the attack was charged, like the controller:
-                    // small (<1/3), medium (<2/3), large (otherwise). Ranged has a single follow.
-                    const float strength = follow->second.mStrength / 255.f;
-                    const std::string_view tier = strength < 0.33f ? "small" : strength < 0.66f ? "medium" : "large";
-                    const std::string followStart
-                        = type == "shoot" ? "shoot follow start" : type + ' ' + std::string(tier) + " follow start";
-                    const std::string followStop
-                        = type == "shoot" ? "shoot follow stop" : type + ' ' + std::string(tier) + " follow stop";
-                    // A ranged strike looses its arrow/bolt at this same release point. Launch a cosmetic
-                    // copy from the avatar's own equipped bow + ammo (replicated), so witnesses see the
-                    // shot fly without consuming ammo or resolving a hit (the shooter's peer owns that).
-                    if (type == "shoot")
-                        anim->releaseArrow(strength, /*cosmetic=*/true);
-                    anim->disable(group); // clear the held strike so play() restarts the group
-                    anim->play(group, MWRender::Animation::AnimPriority(MWMechanics::Priority_Weapon),
-                        MWRender::BlendMask_UpperBody, /*autodisable=*/true, /*speedmult=*/1.f, followStart, followStop,
-                        /*startpoint=*/0.f, /*loops=*/0);
-                    mPendingFollow.erase(follow);
-                }
-            }
-
-            // Turn-in-place foot-shuffle: while the owner pivots and the avatar is stationary, loop the
-            // turn group. The receiver's controller can't derive it (we set its facing authoritatively,
-            // so it has no rotation rate), so play it explicitly over Priority_Movement so it covers the
-            // base idle; the facing stays exact. The group name and blend mask track the controller's own
-            // weapon-aware choice (refreshMovementAnims): no weapon -> "turn<dir>" on the whole body; a
-            // weapon with its own turn variant -> "turn<dir><shortGroup>" on the whole body; a weapon
-            // without one -> "turn<dir>" on the lower body, the weapon held on the upper body. When the
-            // turn ends or the actor starts moving, disable it so idle/locomotion resumes.
-            const auto turn = mTurnState.find(it->first);
-            const std::uint8_t turnDir = turn != mTurnState.end() ? turn->second : 0;
-            if (MWRender::Animation* anim = world.getAnimation(actor))
-            {
-                const std::string_view active = anim->getActiveGroup(MWRender::BoneGroup_LowerBody);
-                const bool playing = active.find("turnleft") != std::string_view::npos
-                    || active.find("turnright") != std::string_view::npos;
-                if (it->second.mFraction <= 0.f && turnDir != 0)
-                {
-                    std::string group = turnDir == 1 ? "turnleft" : "turnright";
-                    int mask = MWRender::BlendMask_All;
-                    if (actor.getClass().getCreatureStats(actor).getDrawState() != MWMechanics::DrawState::Nothing)
-                    {
-                        int weaponType = 0;
-                        MWMechanics::getActiveWeapon(actor, &weaponType);
-                        const std::string_view shortGroup = MWMechanics::getWeaponType(weaponType)->mShortGroup;
-                        if (!shortGroup.empty())
-                        {
-                            std::string variant = group + std::string(shortGroup);
-                            if (anim->hasAnimation(variant))
-                                group = std::move(variant); // whole-body weapon turn variant
-                            else
-                                mask = MWRender::BlendMask_LowerBody; // base turn legs, weapon on the arms
-                        }
-                    }
-                    if (active != group) // don't restart the loop while it's already the right group
-                        anim->play(group, MWRender::Animation::AnimPriority(MWMechanics::Priority_Movement), mask,
-                            /*autodisable=*/false, /*speedmult=*/1.f, "start", "stop", /*startpoint=*/0.f,
-                            /*loops=*/std::numeric_limits<std::uint32_t>::max());
-                }
-                else if (playing)
-                    anim->disable(std::string(active));
-            }
+            driveCastBolt(actor, it->first);
+            driveFollowThrough(actor, it->first);
+            driveTurnInPlace(actor, it->first, it->second.mFraction);
             ++it;
         }
 
+        driveDeferredAssaults();
+    }
+
+    void Replicator::driveCastBolt(const MWWorld::Ptr& actor, const ESM::RefNum& id)
+    {
+        // Launch a deferred cosmetic bolt the moment the cast animation reaches its release key, so
+        // the bolt leaves the avatar's hands in step with the cast — not at its start. The avatar
+        // plays the same spellcast animation as the caster, so its own playhead gives the timing.
+        const auto bolt = mPendingCastBolt.find(id);
+        if (bolt == mPendingCastBolt.end())
+            return;
+        MWBase::World& world = *MWBase::Environment::get().getWorld();
+        const MWRender::Animation* anim = world.getAnimation(actor);
+        const float now = anim ? anim->getCurrentTime("spellcast") : -1.f;
+        const float release = anim ? anim->getTextKeyTime("spellcast: " + bolt->second.mType + " release") : -1.f;
+        if (now < 0.f)
+            mPendingCastBolt.erase(bolt); // cast animation no longer playing (cancelled) — drop it
+        else if (release >= 0.f && now >= release)
+        {
+            // launchMagicBolt resolves its own projectile effects and no-ops for self/touch
+            // spells (no projectile); cosmetic means it flies and explodes but applies nothing.
+            world.launchMagicBolt(
+                ESM::RefId::deserializeText(bolt->second.mSpell), actor, osg::Vec3f(), ESM::RefNum(), true);
+            mPendingCastBolt.erase(bolt);
+        }
+    }
+
+    void Replicator::driveFollowThrough(const MWWorld::Ptr& actor, const ESM::RefNum& id)
+    {
+        // Play a weapon swing's follow-through once its strike arc lands. The strike (phase 2) is held
+        // at the impact key; when the playhead reaches it, swap in "<type> small follow start" ->
+        // "<type> small follow stop" so the weapon recovers smoothly instead of snapping back. Played
+        // as its own segment (not spanned from the strike) so only this one strength's follow runs.
+        const auto follow = mPendingFollow.find(id);
+        if (follow == mPendingFollow.end())
+            return;
+        MWBase::World& world = *MWBase::Environment::get().getWorld();
+        MWRender::Animation* anim = world.getAnimation(actor);
+        const std::string& group = follow->second.mGroup;
+        const std::string& type = follow->second.mType;
+        const std::string impact = type == "shoot" ? "shoot release" : type + " hit";
+        const float now = anim ? anim->getCurrentTime(group) : -1.f;
+        const float impactTime = anim ? anim->getTextKeyTime(group + ": " + impact) : -1.f;
+        if (now < 0.f)
+            mPendingFollow.erase(follow); // strike animation gone (interrupted) — drop it
+        else if (impactTime >= 0.f && now >= impactTime)
+        {
+            // Pick the follow-through by how hard the attack was charged, like the controller:
+            // small (<1/3), medium (<2/3), large (otherwise). Ranged has a single follow.
+            const float strength = follow->second.mStrength / 255.f;
+            const std::string_view tier = strength < 0.33f ? "small" : strength < 0.66f ? "medium" : "large";
+            const std::string followStart
+                = type == "shoot" ? "shoot follow start" : type + ' ' + std::string(tier) + " follow start";
+            const std::string followStop
+                = type == "shoot" ? "shoot follow stop" : type + ' ' + std::string(tier) + " follow stop";
+            // A ranged strike looses its arrow/bolt at this same release point. Launch a cosmetic
+            // copy from the avatar's own equipped bow + ammo (replicated), so witnesses see the
+            // shot fly without consuming ammo or resolving a hit (the shooter's peer owns that).
+            if (type == "shoot")
+                anim->releaseArrow(strength, /*cosmetic=*/true);
+            anim->disable(group); // clear the held strike so play() restarts the group
+            anim->play(group, MWRender::Animation::AnimPriority(MWMechanics::Priority_Weapon),
+                MWRender::BlendMask_UpperBody, /*autodisable=*/true, /*speedmult=*/1.f, followStart, followStop,
+                /*startpoint=*/0.f, /*loops=*/0);
+            mPendingFollow.erase(follow);
+        }
+    }
+
+    void Replicator::driveTurnInPlace(const MWWorld::Ptr& actor, const ESM::RefNum& id, float fraction)
+    {
+        // Turn-in-place foot-shuffle: while the owner pivots and the avatar is stationary, loop the
+        // turn group. The receiver's controller can't derive it (we set its facing authoritatively,
+        // so it has no rotation rate), so play it explicitly over Priority_Movement so it covers the
+        // base idle; the facing stays exact. The group name and blend mask track the controller's own
+        // weapon-aware choice (refreshMovementAnims): no weapon -> "turn<dir>" on the whole body; a
+        // weapon with its own turn variant -> "turn<dir><shortGroup>" on the whole body; a weapon
+        // without one -> "turn<dir>" on the lower body, the weapon held on the upper body. When the
+        // turn ends or the actor starts moving, disable it so idle/locomotion resumes.
+        const auto turn = mTurnState.find(id);
+        const std::uint8_t turnDir = turn != mTurnState.end() ? turn->second : 0;
+        MWRender::Animation* anim = MWBase::Environment::get().getWorld()->getAnimation(actor);
+        if (anim == nullptr)
+            return;
+        const std::string_view active = anim->getActiveGroup(MWRender::BoneGroup_LowerBody);
+        const bool playing = active.find("turnleft") != std::string_view::npos
+            || active.find("turnright") != std::string_view::npos;
+        if (fraction <= 0.f && turnDir != 0)
+        {
+            std::string group = turnDir == 1 ? "turnleft" : "turnright";
+            int mask = MWRender::BlendMask_All;
+            if (actor.getClass().getCreatureStats(actor).getDrawState() != MWMechanics::DrawState::Nothing)
+            {
+                int weaponType = 0;
+                MWMechanics::getActiveWeapon(actor, &weaponType);
+                const std::string_view shortGroup = MWMechanics::getWeaponType(weaponType)->mShortGroup;
+                if (!shortGroup.empty())
+                {
+                    std::string variant = group + std::string(shortGroup);
+                    if (anim->hasAnimation(variant))
+                        group = std::move(variant); // whole-body weapon turn variant
+                    else
+                        mask = MWRender::BlendMask_LowerBody; // base turn legs, weapon on the arms
+                }
+            }
+            if (active != group) // don't restart the loop while it's already the right group
+                anim->play(group, MWRender::Animation::AnimPriority(MWMechanics::Priority_Movement), mask,
+                    /*autodisable=*/false, /*speedmult=*/1.f, "start", "stop", /*startpoint=*/0.f,
+                    /*loops=*/std::numeric_limits<std::uint32_t>::max());
+        }
+        else if (playing)
+            anim->disable(std::string(active));
+    }
+
+    void Replicator::driveDeferredAssaults()
+    {
         // Host: drive deferred assaults on host-owned actors. A struck actor's cell can still be loading
         // when its client attacks (the client has the cell; the host loads it in the background once an
         // avatar enters), so reacting on the hit frame is discarded. Here we deliver the crime + witness
@@ -841,66 +908,63 @@ namespace MWNet
         // does — the instant the victim's cell is live, and re-assert the victim's own retaliation every
         // frame so it persists across the load. Cheap: the map is empty outside the brief window after
         // an avatar strikes someone.
-        if (mIsAuthority && !mPendingAggro.empty())
+        if (!mIsAuthority || mPendingAggro.empty())
+            return;
+        MWWorld::WorldModel& worldModel = *MWBase::Environment::get().getWorldModel();
+        MWBase::MechanicsManager& mechanics = *MWBase::Environment::get().getMechanicsManager();
+        for (auto it = mPendingAggro.begin(); it != mPendingAggro.end();)
         {
-            MWWorld::WorldModel& worldModel = *MWBase::Environment::get().getWorldModel();
-            MWBase::MechanicsManager& mechanics = *MWBase::Environment::get().getMechanicsManager();
-            for (auto it = mPendingAggro.begin(); it != mPendingAggro.end();)
+            PendingAggro& e = it->second;
+            const MWWorld::Ptr victim = worldModel.getPtr(it->first);
+            const bool victimDead = !victim.isEmpty() && victim.getClass().isActor()
+                && victim.getClass().getCreatureStats(victim).isDead();
+            const MWWorld::Ptr aggressor = findLiveAvatar(e.mAggressor);
+            if (mTick >= e.mExpireTick || victimDead || aggressor.isEmpty())
             {
-                PendingAggro& e = it->second;
-                const MWWorld::Ptr victim = worldModel.getPtr(it->first);
-                const bool victimDead = !victim.isEmpty() && victim.getClass().isActor()
-                    && victim.getClass().getCreatureStats(victim).isDead();
-                const auto av = mAvatars.find(e.mAggressor);
-                const bool avGone = av == mAvatars.end() || av->second.isEmpty() || !av->second.isInCell();
-                if (mTick >= e.mExpireTick || victimDead || avGone)
-                {
-                    it = mPendingAggro.erase(it); // window elapsed, target dead, or avatar gone
-                    continue;
-                }
-                if (victim.isEmpty() || !victim.isInCell() || !victim.getClass().isActor())
-                {
-                    ++it; // not resolvable yet (cell still loading) — try again next frame
-                    continue;
-                }
-                const MWWorld::Ptr aggressor = av->second;
-                // Deliver the assault through the SAME path single-player runs when an actor is struck:
-                // actorAttacked commits the crime (so witnesses/guards react — a struck guard ARRESTS via
-                // the crime AI rather than being forced to fight) and lets the victim react NORMALLY (it
-                // fights back only if it isn't already arresting or OnPCHitMe-peaceful). We don't hard-code
-                // the retaliation; we replicate the hit and let the normal consequences play out. A struck
-                // actor's cell loads in the background on the host over several frames, so re-running this
-                // until the victim is engaged recruits bystanders (guards, faction-mates) as they come
-                // online; it is idempotent (once the victim is engaged/pursuing, canCommitCrimeAgainst is
-                // false and the fight-back is gated, so a re-run only pulls in late witnesses).
-                const bool engaged
-                    = victim.getClass().getCreatureStats(victim).getAiSequence().isInCombat(aggressor);
-                if (!engaged)
-                {
-                    const bool aggressorIsNpc = aggressor.getClass().isNpc();
-                    mechanics.actorAttacked(victim, aggressor);
-                    if (!e.mDelivered)
-                    {
-                        // First delivery: this is the avatar's real bounty for the assault; record + send it.
-                        e.mBounty = aggressorIsNpc ? aggressor.getClass().getNpcStats(aggressor).getBounty() : 0;
-                        mOutgoingBounties.push_back({ e.mAggressor, e.mBounty });
-                        e.mDelivered = true;
-                    }
-                    else if (aggressorIsNpc)
-                    {
-                        // Later runs only recruit late-loading witnesses; undo any extra bounty so the
-                        // avatar is charged for one crime, not one per settle frame.
-                        aggressor.getClass().getNpcStats(aggressor).setBounty(e.mBounty);
-                    }
-                }
-                // An avatar's damage is applied host-side bypassing Npc::onHit, so a victim never records
-                // the avatar as its hit-attempt actor — without which AiCombat drops a momentarily-
-                // unreachable player target. Pin it on everyone now FIGHTING the avatar so their
-                // retaliation persists, as the primary player gets for free. Pin only — it never starts
-                // combat, so an actor that chose to arrest or stay peaceful is untouched.
-                pinAvatarAttacker(aggressor);
-                ++it;
+                it = mPendingAggro.erase(it); // window elapsed, target dead, or avatar gone
+                continue;
             }
+            if (!isReplicableActor(victim))
+            {
+                ++it; // not resolvable yet (cell still loading) — try again next frame
+                continue;
+            }
+            // Deliver the assault through the SAME path single-player runs when an actor is struck:
+            // actorAttacked commits the crime (so witnesses/guards react — a struck guard ARRESTS via
+            // the crime AI rather than being forced to fight) and lets the victim react NORMALLY (it
+            // fights back only if it isn't already arresting or OnPCHitMe-peaceful). We don't hard-code
+            // the retaliation; we replicate the hit and let the normal consequences play out. A struck
+            // actor's cell loads in the background on the host over several frames, so re-running this
+            // until the victim is engaged recruits bystanders (guards, faction-mates) as they come
+            // online; it is idempotent (once the victim is engaged/pursuing, canCommitCrimeAgainst is
+            // false and the fight-back is gated, so a re-run only pulls in late witnesses).
+            const bool engaged
+                = victim.getClass().getCreatureStats(victim).getAiSequence().isInCombat(aggressor);
+            if (!engaged)
+            {
+                const bool aggressorIsNpc = aggressor.getClass().isNpc();
+                mechanics.actorAttacked(victim, aggressor);
+                if (!e.mDelivered)
+                {
+                    // First delivery: this is the avatar's real bounty for the assault; record + send it.
+                    e.mBounty = aggressorIsNpc ? aggressor.getClass().getNpcStats(aggressor).getBounty() : 0;
+                    mOutgoingBounties.push_back({ e.mAggressor, e.mBounty });
+                    e.mDelivered = true;
+                }
+                else if (aggressorIsNpc)
+                {
+                    // Later runs only recruit late-loading witnesses; undo any extra bounty so the
+                    // avatar is charged for one crime, not one per settle frame.
+                    aggressor.getClass().getNpcStats(aggressor).setBounty(e.mBounty);
+                }
+            }
+            // An avatar's damage is applied host-side bypassing Npc::onHit, so a victim never records
+            // the avatar as its hit-attempt actor — without which AiCombat drops a momentarily-
+            // unreachable player target. Pin it on everyone now FIGHTING the avatar so their
+            // retaliation persists, as the primary player gets for free. Pin only — it never starts
+            // combat, so an actor that chose to arrest or stay peaceful is untouched.
+            pinAvatarAttacker(aggressor);
+            ++it;
         }
     }
 
@@ -1015,6 +1079,14 @@ namespace MWNet
         return it->second;
     }
 
+    MWWorld::Ptr Replicator::findLiveAvatar(const ESM::RefNum& netId) const
+    {
+        const auto it = mAvatars.find(netId);
+        if (it == mAvatars.end() || it->second.isEmpty() || !it->second.isInCell())
+            return {};
+        return it->second;
+    }
+
     void Replicator::applyJump(const MWWorld::Ptr&, const ESM::RefNum& id, bool airborne)
     {
         // Record the authoritative airborne state; driveRemoteActors forces the puppet's grounded
@@ -1026,7 +1098,7 @@ namespace MWNet
     {
         // Record the turn-in-place direction (0 none, 1 left, 2 right) from the move-flag bits;
         // driveRemoteActors loops the matching foot-shuffle on the lower body while it is set.
-        mTurnState[id] = (flags & (1 << 4)) ? 1 : (flags & (1 << 5)) ? 2 : 0;
+        mTurnState[id] = (flags & MoveFlag_TurnLeft) ? 1 : (flags & MoveFlag_TurnRight) ? 2 : 0;
     }
 
     void Replicator::applySwing(const MWWorld::Ptr& actor, const ESM::RefNum& id, const SwingState& swing)
@@ -1249,9 +1321,6 @@ namespace MWNet
 
     std::size_t Replicator::applyDelta(const SnapshotDelta& delta, bool applyWorldEntities)
     {
-        MWBase::World& world = *MWBase::Environment::get().getWorld();
-        MWWorld::WorldModel& worldModel = *MWBase::Environment::get().getWorldModel();
-
         std::size_t applied = 0;
         for (const EntityState& entity : delta.mEntities)
         {
@@ -1260,129 +1329,188 @@ namespace MWNet
 
             if (isNetPlayer(entity.mId))
             {
-                // Another peer's player: show it as an avatar (never our own echo).
-                if (entity.mId == mLocalPlayerNetId)
-                    continue;
-
-                // Remember the peer's body identity whenever it's (re-)advertised, so the
-                // avatar is built to match it the moment we can place one.
-                if (entity.mAppearance)
-                    mAppearances[entity.mId] = *entity.mAppearance;
-
-                // The cell the owner says it's in: place and keep the avatar there so it shares
-                // its owner's cell (interiors included), not whichever cell we happen to be in.
-                // Falls back to our own cell when the peer hasn't advertised one (older peers, or
-                // an exterior where a position would suffice) or it doesn't resolve here.
-                MWWorld::CellStore* targetCell = nullptr;
-                if (entity.mCellId)
-                    targetCell = worldModel.findCell(ESM::RefId::deserializeText(*entity.mCellId));
-
-                auto found = mAvatars.find(entity.mId);
-                if (found == mAvatars.end())
-                {
-                    const auto appearance = mAppearances.find(entity.mId);
-                    if (appearance == mAppearances.end())
-                        continue; // appearance not received yet; wait for it before building the body
-
-                    const MWWorld::Ptr localPlayer = world.getPlayerPtr();
-                    if (localPlayer.isEmpty() || !localPlayer.isInCell())
-                        continue; // need a cell to place the avatar in
-                    MWWorld::CellStore* cell = targetCell ? targetCell : localPlayer.getCell();
-                    try
-                    {
-                        // Synthesize a humanoid NPC matching the peer and instantiate that, so the
-                        // avatar has the player's race/sex/head/hair instead of a placeholder body.
-                        const ESM::NPC* record = world.getStore().insert(buildAvatarRecord(appearance->second));
-                        MWWorld::Ptr avatar;
-                        if (mIsAuthority)
-                            // On the authority the avatar IS a non-primary player: that makes the host
-                            // keep its cell loaded (cells another player occupies are not unloaded) and
-                            // run the AI of the NPCs around it, which sampleDelta then replicates back to
-                            // every peer. Built from the peer's record so the host relays its true look.
-                            avatar = world.addPlayer(*cell, toPosition(*entity.mTransform), record);
-                        else
-                        {
-                            // On a client the avatar is purely cosmetic (the client simulates nothing for
-                            // it), so a plain placed reference in the right cell is enough.
-                            MWWorld::ManualRef ref(world.getStore(), record->mId);
-                            avatar = world.placeObject(ref.getPtr(), cell, toPosition(*entity.mTransform));
-                        }
-                        avatar.getRefData().setRemoteOwned(true); // driven by the network, not local AI
-                        found = mAvatars.emplace(entity.mId, avatar).first;
-                        const ESM::RefNum avRef = avatar.getCellRef().getRefNum();
-                        Log(Debug::Info) << "Instantiated avatar for remote player netId=" << entity.mId.mIndex
-                                         << " in cell " << cell->getCell()->getId() << " as refId="
-                                         << avatar.getCellRef().getRefId() << " refNum=(" << avRef.mIndex << ","
-                                         << avRef.mContentFile << ")";
-                    }
-                    catch (const std::exception&)
-                    {
-                        continue; // could not instantiate this tick; try again on the next update
-                    }
-                }
-
-                MWWorld::Ptr& avatar = found->second;
-                if (avatar.isEmpty() || !avatar.isInCell())
-                    continue;
-                if (entity.mMoveFlags)
-                {
-                    applyMoveFlags(avatar, *entity.mMoveFlags); // before record: maxSpeed depends on stance
-                    applyJump(avatar, entity.mId, (*entity.mMoveFlags & (1 << 2)) != 0);
-                    applyTurn(entity.mId, *entity.mMoveFlags);
-                }
-                recordMotion(entity.mId, avatar, entity.mTransform->mPosition, entity.mTransform->mRotation,
-                    entity.mSpeed);
-                // Move the avatar to the owner's reported position (and cell). On the authority the
-                // avatar is a player ref, so ALL of its movement — even within one cell — must go
-                // through placeNetworkPlayer, never moveObject: moveObject re-derives an exterior
-                // sub-cell from the position and would drag the player ref through the cell-ref
-                // machinery that strands it. On a client the avatar is an ordinary placed ref, so
-                // moveObject is correct (and carries it across cells when its owner does).
-                if (mIsAuthority)
-                {
-                    MWWorld::CellStore* dest = targetCell != nullptr ? targetCell : avatar.getCell();
-                    if (dest != nullptr)
-                        avatar = world.placeNetworkPlayer(avatar, *dest, entity.mTransform->mPosition);
-                }
-                else if (targetCell != nullptr && avatar.getCell() != targetCell)
-                    avatar = world.moveObject(avatar, targetCell, entity.mTransform->mPosition, true, true);
-                else
-                    world.moveObject(avatar, entity.mTransform->mPosition);
-                world.rotateObject(avatar, entity.mTransform->mRotation, MWBase::RotationFlag_none);
-                if (entity.mStats)
-                {
-                    applyStats(avatar, *entity.mStats);
-                    applyHitReaction(avatar, entity.mId, entity.mStats->mHealth, /*localPlayer=*/false);
-                }
-                if (entity.mDrawState)
-                    applyDrawState(avatar, *entity.mDrawState);
-                // Remember the locomotion exactly as received so the host relays it on verbatim
-                // (re-sampling the host puppet's own speed/stance is unreliable — see the maps' note).
-                mAvatarSwing[entity.mId] = entity.mSwing;
-                mAvatarSpeed[entity.mId] = entity.mSpeed;
-                mAvatarMoveFlags[entity.mId] = entity.mMoveFlags;
-                if (entity.mSwing)
-                    applySwing(avatar, entity.mId, *entity.mSwing);
-                else
-                    mAppliedSwingSeq.try_emplace(entity.mId, 0); // witnessed its pre-swing state: the first real swing will play
-                if (entity.mEquipment)
-                    applyEquipment(avatar, *entity.mEquipment);
-                ++applied;
+                if (applyAvatarEntity(entity))
+                    ++applied;
                 continue;
             }
 
             // Ordinary world entity: only a client obeying its host applies these.
             if (!applyWorldEntities)
                 continue;
+            if (applyWorldEntity(entity))
+                ++applied;
+        }
 
-            // A summoned creature isn't in the shared save: instantiate it the first time we see it
-            // (like a loose item), adopting the host's RefNum, then fall through to the world-entity
-            // drive below which marks it remote-owned and applies its transform/stats/animation.
-            if (entity.mCreature && worldModel.getPtr(entity.mId).isEmpty())
+        applyRemovedItems(delta);
+        return applied;
+    }
+
+    bool Replicator::applyAvatarEntity(const EntityState& entity)
+    {
+        MWBase::World& world = *MWBase::Environment::get().getWorld();
+        MWWorld::WorldModel& worldModel = *MWBase::Environment::get().getWorldModel();
+
+        // Another peer's player: show it as an avatar (never our own echo).
+        if (entity.mId == mLocalPlayerNetId)
+            return false;
+
+        // Remember the peer's body identity whenever it's (re-)advertised, so the
+        // avatar is built to match it the moment we can place one.
+        if (entity.mAppearance)
+            mAppearances[entity.mId] = *entity.mAppearance;
+
+        // The cell the owner says it's in: place and keep the avatar there so it shares
+        // its owner's cell (interiors included), not whichever cell we happen to be in.
+        // Falls back to our own cell when the peer hasn't advertised one (older peers, or
+        // an exterior where a position would suffice) or it doesn't resolve here.
+        MWWorld::CellStore* targetCell = nullptr;
+        if (entity.mCellId)
+            targetCell = worldModel.findCell(ESM::RefId::deserializeText(*entity.mCellId));
+
+        auto found = mAvatars.find(entity.mId);
+        if (found == mAvatars.end())
+        {
+            const auto appearance = mAppearances.find(entity.mId);
+            if (appearance == mAppearances.end())
+                return false; // appearance not received yet; wait for it before building the body
+
+            const MWWorld::Ptr localPlayer = world.getPlayerPtr();
+            if (localPlayer.isEmpty() || !localPlayer.isInCell())
+                return false; // need a cell to place the avatar in
+            MWWorld::CellStore* cell = targetCell ? targetCell : localPlayer.getCell();
+            try
+            {
+                // Synthesize a humanoid NPC matching the peer and instantiate that, so the
+                // avatar has the player's race/sex/head/hair instead of a placeholder body.
+                const ESM::NPC* record = world.getStore().insert(buildAvatarRecord(appearance->second));
+                MWWorld::Ptr avatar;
+                if (mIsAuthority)
+                    // On the authority the avatar IS a non-primary player: that makes the host
+                    // keep its cell loaded (cells another player occupies are not unloaded) and
+                    // run the AI of the NPCs around it, which sampleDelta then replicates back to
+                    // every peer. Built from the peer's record so the host relays its true look.
+                    avatar = world.addPlayer(*cell, toPosition(*entity.mTransform), record);
+                else
+                {
+                    // On a client the avatar is purely cosmetic (the client simulates nothing for
+                    // it), so a plain placed reference in the right cell is enough.
+                    MWWorld::ManualRef ref(world.getStore(), record->mId);
+                    avatar = world.placeObject(ref.getPtr(), cell, toPosition(*entity.mTransform));
+                }
+                avatar.getRefData().setRemoteOwned(true); // driven by the network, not local AI
+                found = mAvatars.emplace(entity.mId, avatar).first;
+                const ESM::RefNum avRef = avatar.getCellRef().getRefNum();
+                Log(Debug::Verbose) << "Instantiated avatar for remote player netId=" << entity.mId.mIndex
+                                 << " in cell " << cell->getCell()->getId() << " as refId="
+                                 << avatar.getCellRef().getRefId() << " refNum=(" << avRef.mIndex << ","
+                                 << avRef.mContentFile << ")";
+            }
+            catch (const std::exception&)
+            {
+                return false; // could not instantiate this tick; try again on the next update
+            }
+        }
+
+        MWWorld::Ptr& avatar = found->second;
+        if (avatar.isEmpty() || !avatar.isInCell())
+            return false;
+        if (entity.mMoveFlags)
+        {
+            applyMoveFlags(avatar, *entity.mMoveFlags); // before record: maxSpeed depends on stance
+            applyJump(avatar, entity.mId, (*entity.mMoveFlags & MoveFlag_Airborne) != 0);
+            applyTurn(entity.mId, *entity.mMoveFlags);
+        }
+        recordMotion(entity.mId, avatar, entity.mTransform->mPosition, entity.mTransform->mRotation,
+            entity.mSpeed);
+        // Move the avatar to the owner's reported position (and cell). On the authority the
+        // avatar is a player ref, so ALL of its movement — even within one cell — must go
+        // through placeNetworkPlayer, never moveObject: moveObject re-derives an exterior
+        // sub-cell from the position and would drag the player ref through the cell-ref
+        // machinery that strands it. On a client the avatar is an ordinary placed ref, so
+        // moveObject is correct (and carries it across cells when its owner does).
+        if (mIsAuthority)
+        {
+            MWWorld::CellStore* dest = targetCell != nullptr ? targetCell : avatar.getCell();
+            if (dest != nullptr)
+                avatar = world.placeNetworkPlayer(avatar, *dest, entity.mTransform->mPosition);
+        }
+        else if (targetCell != nullptr && avatar.getCell() != targetCell)
+            avatar = world.moveObject(avatar, targetCell, entity.mTransform->mPosition, true, true);
+        else
+            world.moveObject(avatar, entity.mTransform->mPosition);
+        world.rotateObject(avatar, entity.mTransform->mRotation, MWBase::RotationFlag_none);
+        if (entity.mStats)
+        {
+            applyStats(avatar, *entity.mStats);
+            applyHitReaction(avatar, entity.mId, entity.mStats->mHealth, /*localPlayer=*/false);
+        }
+        if (entity.mDrawState)
+            applyDrawState(avatar, *entity.mDrawState);
+        // Remember the locomotion exactly as received so the host relays it on verbatim
+        // (re-sampling the host puppet's own speed/stance is unreliable — see the maps' note).
+        mAvatarSwing[entity.mId] = entity.mSwing;
+        mAvatarSpeed[entity.mId] = entity.mSpeed;
+        mAvatarMoveFlags[entity.mId] = entity.mMoveFlags;
+        if (entity.mSwing)
+            applySwing(avatar, entity.mId, *entity.mSwing);
+        else
+            mAppliedSwingSeq.try_emplace(entity.mId, 0); // witnessed its pre-swing state: the first real swing will play
+        if (entity.mEquipment)
+            applyEquipment(avatar, *entity.mEquipment);
+        return true;
+    }
+
+    bool Replicator::applyWorldEntity(const EntityState& entity)
+    {
+        MWBase::World& world = *MWBase::Environment::get().getWorld();
+        MWWorld::WorldModel& worldModel = *MWBase::Environment::get().getWorldModel();
+
+        // A summoned creature isn't in the shared save: instantiate it the first time we see it
+        // (like a loose item), adopting the host's RefNum, then fall through to the world-entity
+        // drive below which marks it remote-owned and applies its transform/stats/animation.
+        if (entity.mCreature && worldModel.getPtr(entity.mId).isEmpty())
+        {
+            const MWWorld::Ptr localPlayer = world.getPlayerPtr();
+            if (localPlayer.isEmpty() || !localPlayer.isInCell())
+                return false;
+            MWWorld::CellStore* cell = entity.mCellId
+                ? worldModel.findCell(ESM::RefId::deserializeText(*entity.mCellId))
+                : nullptr;
+            if (cell == nullptr)
+                cell = localPlayer.getCell();
+            try
+            {
+                MWWorld::ManualRef ref(world.getStore(), ESM::RefId::deserializeText(*entity.mCreature), 1);
+                MWWorld::Ptr placed = world.placeObject(ref.getPtr(), cell, toPosition(*entity.mTransform));
+                worldModel.deregisterLiveCellRef(*placed.getBase()); // adopt the host's RefNum
+                placed.getCellRef().setRefNum(entity.mId);
+                worldModel.registerPtr(placed);
+                mInstantiatedSummons.insert(entity.mId); // so its despawn plays the end VFX
+                // Play the summon-start VFX where the host attaches it on spawn, so the creature
+                // appears with a puff rather than popping into existence.
+                if (const ESM::Static* fx
+                    = world.getStore().get<ESM::Static>().search(ESM::RefId::stringRefId("VFX_Summon_Start")))
+                    world.spawnEffect(Misc::ResourceHelpers::correctMeshPath(VFS::Path::Normalized(fx->mModel)), "",
+                        entity.mTransform->mPosition);
+            }
+            catch (const std::exception&)
+            {
+                return false; // could not instantiate this tick; try again on the next update
+            }
+        }
+
+        if (entity.mItem)
+        {
+            // A loose item the host owns. Spawn it the first time we see it, adopting the host's
+            // RefNum so the item has one shared identity across peers — future moves/removals
+            // address it by that RefNum and our own pickup reports it directly. Afterwards just
+            // keep its position in step.
+            const MWWorld::Ptr existing = worldModel.getPtr(entity.mId);
+            if (existing.isEmpty() || !existing.isInCell())
             {
                 const MWWorld::Ptr localPlayer = world.getPlayerPtr();
                 if (localPlayer.isEmpty() || !localPlayer.isInCell())
-                    continue;
+                    return false;
                 MWWorld::CellStore* cell = entity.mCellId
                     ? worldModel.findCell(ESM::RefId::deserializeText(*entity.mCellId))
                     : nullptr;
@@ -1390,93 +1518,59 @@ namespace MWNet
                     cell = localPlayer.getCell();
                 try
                 {
-                    MWWorld::ManualRef ref(world.getStore(), ESM::RefId::deserializeText(*entity.mCreature), 1);
+                    MWWorld::ManualRef ref(
+                        world.getStore(), ESM::RefId::deserializeText(entity.mItem->mRefId), entity.mItem->mCount);
                     MWWorld::Ptr placed = world.placeObject(ref.getPtr(), cell, toPosition(*entity.mTransform));
-                    worldModel.deregisterLiveCellRef(*placed.getBase()); // adopt the host's RefNum
+                    // placeObject assigns a fresh local RefNum; replace it with the host's.
+                    worldModel.deregisterLiveCellRef(*placed.getBase());
                     placed.getCellRef().setRefNum(entity.mId);
                     worldModel.registerPtr(placed);
-                    mInstantiatedSummons.insert(entity.mId); // so its despawn plays the end VFX
-                    // Play the summon-start VFX where the host attaches it on spawn, so the creature
-                    // appears with a puff rather than popping into existence.
-                    if (const ESM::Static* fx
-                        = world.getStore().get<ESM::Static>().search(ESM::RefId::stringRefId("VFX_Summon_Start")))
-                        world.spawnEffect(Misc::ResourceHelpers::correctMeshPath(VFS::Path::Normalized(fx->mModel)), "",
-                            entity.mTransform->mPosition);
+                    mReplicatedItems.insert(entity.mId);
                 }
                 catch (const std::exception&)
                 {
-                    continue; // could not instantiate this tick; try again on the next update
+                    return false; // could not instantiate this tick; try again on the next update
                 }
             }
-
-            if (entity.mItem)
-            {
-                // A loose item the host owns. Spawn it the first time we see it, adopting the host's
-                // RefNum so the item has one shared identity across peers — future moves/removals
-                // address it by that RefNum and our own pickup reports it directly. Afterwards just
-                // keep its position in step.
-                const MWWorld::Ptr existing = worldModel.getPtr(entity.mId);
-                if (existing.isEmpty() || !existing.isInCell())
-                {
-                    const MWWorld::Ptr localPlayer = world.getPlayerPtr();
-                    if (localPlayer.isEmpty() || !localPlayer.isInCell())
-                        continue;
-                    MWWorld::CellStore* cell = entity.mCellId
-                        ? worldModel.findCell(ESM::RefId::deserializeText(*entity.mCellId))
-                        : nullptr;
-                    if (cell == nullptr)
-                        cell = localPlayer.getCell();
-                    try
-                    {
-                        MWWorld::ManualRef ref(
-                            world.getStore(), ESM::RefId::deserializeText(entity.mItem->mRefId), entity.mItem->mCount);
-                        MWWorld::Ptr placed = world.placeObject(ref.getPtr(), cell, toPosition(*entity.mTransform));
-                        // placeObject assigns a fresh local RefNum; replace it with the host's.
-                        worldModel.deregisterLiveCellRef(*placed.getBase());
-                        placed.getCellRef().setRefNum(entity.mId);
-                        worldModel.registerPtr(placed);
-                        mReplicatedItems.insert(entity.mId);
-                    }
-                    catch (const std::exception&)
-                    {
-                        continue; // could not instantiate this tick; try again on the next update
-                    }
-                }
-                else
-                    world.moveObject(existing, entity.mTransform->mPosition);
-                ++applied;
-                continue;
-            }
-
-            const MWWorld::Ptr ptr = worldModel.getPtr(entity.mId);
-            if (ptr.isEmpty() || !ptr.isInCell())
-                continue; // not present / not loaded into an active cell yet — moveObject needs a cell
-
-            // The host owns this entity: drive it purely from the authority and stop the
-            // local simulation from fighting the applied pose (cease-remote-sim).
-            ptr.getRefData().setRemoteOwned(true);
-            if (entity.mMoveFlags)
-            {
-                applyMoveFlags(ptr, *entity.mMoveFlags); // before record: maxSpeed depends on stance
-                applyJump(ptr, entity.mId, (*entity.mMoveFlags & (1 << 2)) != 0);
-                applyTurn(entity.mId, *entity.mMoveFlags);
-            }
-            recordMotion(entity.mId, ptr, entity.mTransform->mPosition, entity.mTransform->mRotation, entity.mSpeed);
-            world.moveObject(ptr, entity.mTransform->mPosition);
-            world.rotateObject(ptr, entity.mTransform->mRotation, MWBase::RotationFlag_none);
-            if (entity.mStats)
-            {
-                applyStats(ptr, *entity.mStats);
-                applyHitReaction(ptr, entity.mId, entity.mStats->mHealth, /*localPlayer=*/false);
-            }
-            if (entity.mDrawState)
-                applyDrawState(ptr, *entity.mDrawState);
-            if (entity.mSwing)
-                applySwing(ptr, entity.mId, *entity.mSwing);
             else
-                mAppliedSwingSeq.try_emplace(entity.mId, 0); // witnessed its pre-swing state: the first real swing will play
-            ++applied;
+                world.moveObject(existing, entity.mTransform->mPosition);
+            return true;
         }
+
+        const MWWorld::Ptr ptr = worldModel.getPtr(entity.mId);
+        if (ptr.isEmpty() || !ptr.isInCell())
+            return false; // not present / not loaded into an active cell yet — moveObject needs a cell
+
+        // The host owns this entity: drive it purely from the authority and stop the
+        // local simulation from fighting the applied pose (cease-remote-sim).
+        ptr.getRefData().setRemoteOwned(true);
+        if (entity.mMoveFlags)
+        {
+            applyMoveFlags(ptr, *entity.mMoveFlags); // before record: maxSpeed depends on stance
+            applyJump(ptr, entity.mId, (*entity.mMoveFlags & MoveFlag_Airborne) != 0);
+            applyTurn(entity.mId, *entity.mMoveFlags);
+        }
+        recordMotion(entity.mId, ptr, entity.mTransform->mPosition, entity.mTransform->mRotation, entity.mSpeed);
+        world.moveObject(ptr, entity.mTransform->mPosition);
+        world.rotateObject(ptr, entity.mTransform->mRotation, MWBase::RotationFlag_none);
+        if (entity.mStats)
+        {
+            applyStats(ptr, *entity.mStats);
+            applyHitReaction(ptr, entity.mId, entity.mStats->mHealth, /*localPlayer=*/false);
+        }
+        if (entity.mDrawState)
+            applyDrawState(ptr, *entity.mDrawState);
+        if (entity.mSwing)
+            applySwing(ptr, entity.mId, *entity.mSwing);
+        else
+            mAppliedSwingSeq.try_emplace(entity.mId, 0); // witnessed its pre-swing state: the first real swing will play
+        return true;
+    }
+
+    void Replicator::applyRemovedItems(const SnapshotDelta& delta)
+    {
+        MWBase::World& world = *MWBase::Environment::get().getWorld();
+        MWWorld::WorldModel& worldModel = *MWBase::Environment::get().getWorldModel();
 
         // Loose items that have left the shared world (picked up elsewhere, or a script/NPC delete):
         // delete our copy. This covers both session-dropped items and save items — every peer holds a
@@ -1503,8 +1597,6 @@ namespace MWNet
                         item.getRefData().getPosition().asVec3());
             world.deleteObject(item);
         }
-
-        return applied;
     }
 
     void Replicator::pinAvatarAttacker(const MWWorld::Ptr& aggressor)
@@ -1534,7 +1626,16 @@ namespace MWNet
 
     void Replicator::applyActions(const ActionBatch& batch)
     {
-        MWBase::World& world = *MWBase::Environment::get().getWorld();
+        applyHitActions(batch);
+        applyItemDropActions(batch);
+        applyItemTakeActions(batch);
+        // A client routed its player's summon here so the creature is host-authoritative.
+        if (mIsAuthority)
+            applySummonActions(batch);
+    }
+
+    void Replicator::applyHitActions(const ActionBatch& batch)
+    {
         MWWorld::WorldModel& worldModel = *MWBase::Environment::get().getWorldModel();
         MWBase::MechanicsManager& mechanics = *MWBase::Environment::get().getMechanicsManager();
 
@@ -1559,9 +1660,9 @@ namespace MWNet
             }
 
             const MWWorld::Ptr victim = worldModel.getPtr(hit.mVictim);
-            if (victim.isEmpty() || !victim.isInCell() || !victim.getClass().isActor())
+            if (!isReplicableActor(victim))
             {
-                Log(Debug::Info) << "applyActions: victim refNum=(" << hit.mVictim.mIndex << ","
+                Log(Debug::Verbose) << "applyActions: victim refNum=(" << hit.mVictim.mIndex << ","
                                  << hit.mVictim.mContentFile << ") from netId=" << hit.mAttacker.mIndex
                                  << " unresolved/not-in-cell/not-actor — hit dropped";
                 continue;
@@ -1569,19 +1670,19 @@ namespace MWNet
             const auto attackerAvatar = mAvatars.find(hit.mAttacker);
             if (attackerAvatar == mAvatars.end())
             {
-                Log(Debug::Info) << "applyActions: no avatar yet for attacker netId=" << hit.mAttacker.mIndex
+                Log(Debug::Verbose) << "applyActions: no avatar yet for attacker netId=" << hit.mAttacker.mIndex
                                  << " — hit dropped";
                 continue; // we don't have an avatar for this peer's player yet
             }
             const MWWorld::Ptr& aggressor = attackerAvatar->second;
             if (aggressor.isEmpty() || !aggressor.isInCell())
             {
-                Log(Debug::Info) << "applyActions: aggressor avatar for netId=" << hit.mAttacker.mIndex
+                Log(Debug::Verbose) << "applyActions: aggressor avatar for netId=" << hit.mAttacker.mIndex
                                  << " empty/not-in-cell — hit dropped";
                 continue;
             }
             const ESM::RefNum agRef = aggressor.getCellRef().getRefNum();
-            Log(Debug::Info) << "applyActions: " << victim.getCellRef().getRefId() << " in cell "
+            Log(Debug::Verbose) << "applyActions: " << victim.getCellRef().getRefId() << " in cell "
                              << victim.getCell()->getCell()->getId() << " hit by netId=" << hit.mAttacker.mIndex
                              << " avatar refId=" << aggressor.getCellRef().getRefId() << " refNum=(" << agRef.mIndex
                              << "," << agRef.mContentFile << ") in cell " << aggressor.getCell()->getCell()->getId();
@@ -1591,12 +1692,9 @@ namespace MWNet
             // CreatureStats. (Trusting the client's damage number; host-side re-validation is later.)
             MWMechanics::CreatureStats& victimStats = victim.getClass().getCreatureStats(victim);
             const bool wasDead = victimStats.isDead();
-            const int index = hit.mHealthDamage ? 0 : 2; // 0 = health, 2 = fatigue
-            MWMechanics::DynamicStat<float> stat = victimStats.getDynamic(index);
-            stat.setCurrent(stat.getCurrent() - hit.mDamage, true);
-            victimStats.setDynamic(index, stat);
+            const float remaining = applyDynamicDamage(victimStats, hit.mHealthDamage, hit.mDamage);
             Log(Debug::Verbose) << "Applied combat hit: " << victim.getCellRef().getRefId() << " -"
-                                << hit.mDamage << (hit.mHealthDamage ? " hp -> " : " fatigue -> ") << stat.getCurrent()
+                                << hit.mDamage << (hit.mHealthDamage ? " hp -> " : " fatigue -> ") << remaining
                                 << ", aggroes onto remote player " << hit.mAttacker.mIndex;
 
             if (!wasDead && victimStats.isDead())
@@ -1627,6 +1725,12 @@ namespace MWNet
                 pending.mExpireTick = mTick + sAggroReassertTicks;
             }
         }
+    }
+
+    void Replicator::applyItemDropActions(const ActionBatch& batch)
+    {
+        MWBase::World& world = *MWBase::Environment::get().getWorld();
+        MWWorld::WorldModel& worldModel = *MWBase::Environment::get().getWorldModel();
 
         // A peer dropped an item: place it in the shared world authoritatively. It becomes a cell
         // ref with a host RefNum, which sampleDelta then replicates to every peer (the dropper
@@ -1655,6 +1759,12 @@ namespace MWNet
                 Log(Debug::Warning) << "applyActions: could not place dropped item " << drop.mRefId << ": " << e.what();
             }
         }
+    }
+
+    void Replicator::applyItemTakeActions(const ActionBatch& batch)
+    {
+        MWBase::World& world = *MWBase::Environment::get().getWorld();
+        MWWorld::WorldModel& worldModel = *MWBase::Environment::get().getWorldModel();
 
         // A peer picked a host-owned loose item up: delete it from the shared world. World::deleteObject
         // broadcasts the removal (see its replicator hook) so every other peer drops its copy; the
@@ -1665,41 +1775,42 @@ namespace MWNet
             if (!item.isEmpty() && item.getCellRef().getCount() > 0)
                 world.deleteObject(item);
         }
+    }
 
-        // A client routed its player's summon here so the creature is host-authoritative. Spawn it bound
-        // to the summoner's avatar (it follows/fights for that player, like the real summon) or, on the
-        // matching end, despawn it. sampleDelta then replicates the creature — and its later removal —
-        // like any host-owned world NPC, and combat rides the normal cross-peer paths.
-        if (mIsAuthority)
+    void Replicator::applySummonActions(const ActionBatch& batch)
+    {
+        MWBase::MechanicsManager& mechanics = *MWBase::Environment::get().getMechanicsManager();
+
+        // Spawn the routed summon bound to the summoner's avatar (it follows/fights for that player,
+        // like the real summon) or, on the matching end, despawn it. sampleDelta then replicates the
+        // creature — and its later removal — like any host-owned world NPC, and combat rides the
+        // normal cross-peer paths.
+        for (const SummonAction& summon : batch.mSummons)
         {
-            for (const SummonAction& summon : batch.mSummons)
+            MWWorld::Ptr avatar = findLiveAvatar(summon.mSummoner);
+            if (avatar.isEmpty())
+                continue;
+            const auto key = std::make_pair(summon.mSummoner, summon.mEffectId);
+            if (!summon.mEnd)
             {
-                const auto avatarIt = mAvatars.find(summon.mSummoner);
-                if (avatarIt == mAvatars.end() || avatarIt->second.isEmpty() || !avatarIt->second.isInCell())
+                if (mHostedSummons.find(key) != mHostedSummons.end())
+                    continue; // already have a live creature for this (summoner, effect)
+                const ESM::RefNum creature
+                    = MWMechanics::summonCreature(ESM::RefId::deserializeText(summon.mEffectId), avatar);
+                if (creature.isSet())
+                    mHostedSummons.emplace(key, creature);
+            }
+            else
+            {
+                const auto it = mHostedSummons.find(key);
+                if (it == mHostedSummons.end())
                     continue;
-                MWWorld::Ptr avatar = avatarIt->second;
-                const auto key = std::make_pair(summon.mSummoner, summon.mEffectId);
-                if (!summon.mEnd)
-                {
-                    if (mHostedSummons.find(key) != mHostedSummons.end())
-                        continue; // already have a live creature for this (summoner, effect)
-                    const ESM::RefNum creature
-                        = MWMechanics::summonCreature(ESM::RefId::deserializeText(summon.mEffectId), avatar);
-                    if (creature.isSet())
-                        mHostedSummons.emplace(key, creature);
-                }
-                else
-                {
-                    const auto it = mHostedSummons.find(key);
-                    if (it == mHostedSummons.end())
-                        continue;
-                    mechanics.cleanupSummonedCreature(it->second);
-                    // Drop it from the avatar's map so sampleDelta's despawn detection broadcasts removal.
-                    auto& map = avatar.getClass().getCreatureStats(avatar).getSummonedCreatureMap();
-                    for (auto m = map.begin(); m != map.end();)
-                        m = (m->second == it->second) ? map.erase(m) : std::next(m);
-                    mHostedSummons.erase(it);
-                }
+                mechanics.cleanupSummonedCreature(it->second);
+                // Drop it from the avatar's map so sampleDelta's despawn detection broadcasts removal.
+                auto& map = avatar.getClass().getCreatureStats(avatar).getSummonedCreatureMap();
+                for (auto m = map.begin(); m != map.end();)
+                    m = (m->second == it->second) ? map.erase(m) : std::next(m);
+                mHostedSummons.erase(it);
             }
         }
     }
@@ -1756,8 +1867,7 @@ namespace MWNet
         // brought up to date, and so a container whose cell unloaded-and-reloaded (rolling it back to
         // its deterministic default) is restored from the authoritative record. applyContainerState
         // no-ops when the live store already matches, so this is cheap when nothing drifted.
-        constexpr std::uint32_t sContainerRefreshInterval = 300;
-        if (mIsAuthority && (mTick % sContainerRefreshInterval) == 0)
+        if (mIsAuthority && (mTick % sReplicationRefreshInterval) == 0)
         {
             for (const auto& [id, state] : mAuthoritativeContainers)
             {
@@ -2047,7 +2157,7 @@ namespace MWNet
         {
             const MWWorld::Ptr actor = worldModel.getPtr(speech.mActor);
             // Its cell isn't loaded here (the actor is out of range) — nothing to play it on.
-            if (actor.isEmpty() || !actor.isInCell() || !actor.getClass().isActor())
+            if (!isReplicableActor(actor))
                 continue;
             soundMgr.say(actor, VFS::Path::Normalized(speech.mSound));
             // Show the subtitle the host sent, gated on THIS peer's own preference (the host always
@@ -2092,7 +2202,7 @@ namespace MWNet
             if (windowManager.containsMode(MWGui::GM_Dialogue))
                 continue;
             const MWWorld::Ptr guard = worldModel.getPtr(arrest.mGuard);
-            if (guard.isEmpty() || !guard.isInCell() || !guard.getClass().isActor())
+            if (!isReplicableActor(guard))
                 continue; // the guard's cell isn't loaded here yet
             windowManager.pushGuiMode(MWGui::GM_Dialogue, guard);
         }
@@ -2123,12 +2233,11 @@ namespace MWNet
         MWBase::MechanicsManager& mechanics = *MWBase::Environment::get().getMechanicsManager();
         for (const CombatRequest& request : batch.mCombatRequests)
         {
-            const auto it = mAvatars.find(request.mTarget);
-            if (it == mAvatars.end() || it->second.isEmpty() || !it->second.isInCell())
+            const MWWorld::Ptr avatar = findLiveAvatar(request.mTarget);
+            if (avatar.isEmpty())
                 continue; // we don't have this peer's avatar (yet)
-            const MWWorld::Ptr avatar = it->second;
             const MWWorld::Ptr instigator = worldModel.getPtr(request.mInstigator);
-            if (instigator.isEmpty() || !instigator.isInCell() || !instigator.getClass().isActor()
+            if (!isReplicableActor(instigator)
                 || instigator.getClass().getCreatureStats(instigator).isDead())
                 continue; // the host actor isn't resolvable / not alive here
             // Same authoritative call single-player makes on resist: the actor fights the avatar, and
@@ -2151,22 +2260,19 @@ namespace MWNet
         {
             if (pd.mTarget != mLocalPlayerNetId)
                 continue; // addressed to another player
-            const int index = pd.mHealthDamage ? 0 : 2; // 0 = health, 2 = fatigue
-            MWMechanics::DynamicStat<float> stat = stats.getDynamic(index);
-            const float oldCurrent = stat.getCurrent();
-            stat.setCurrent(oldCurrent - pd.mDamage, true);
-            stats.setDynamic(index, stat);
+            const float oldCurrent = stats.getDynamic(pd.mHealthDamage ? sHealthIndex : sFatigueIndex).getCurrent();
+            const float newCurrent = applyDynamicDamage(stats, pd.mHealthDamage, pd.mDamage);
             // Show the hit on our own player: flinch + grunt + screen hit overlay (the authoritative
             // damage arrives here directly, bypassing the onHit that would otherwise react). Seed the
             // prior health so applyHitReaction sees the drop. Only for actual health damage.
             if (pd.mHealthDamage)
             {
                 mLastHealth[mLocalPlayerNetId] = oldCurrent;
-                applyHitReaction(player, mLocalPlayerNetId, stat.getCurrent(), /*localPlayer=*/true);
+                applyHitReaction(player, mLocalPlayerNetId, newCurrent, /*localPlayer=*/true);
             }
             // Our own mechanics run normally for our player, so health <= 0 triggers death here.
             Log(Debug::Verbose) << "Took " << pd.mDamage << (pd.mHealthDamage ? " hp" : " fatigue")
-                                << " from the shared world -> " << stat.getCurrent();
+                                << " from the shared world -> " << newCurrent;
         }
     }
 

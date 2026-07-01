@@ -7,7 +7,7 @@ why.
 
 > This is a moving target and a research branch. Treat everything here as
 > work-in-progress, not a stable protocol. The wire format (`snapshot.cpp`,
-> `sVersion = 5`) is not compatibility-locked.
+> `sVersion = 10`) is not compatibility-locked.
 
 ## Topology
 
@@ -158,9 +158,10 @@ Hardening (recompute or sanity-bound the damage host-side) is a later step.
 
 ### 5. Diagnostics still in the hot path
 
-`Replicator::applyActions` and avatar instantiation emit verbose `Debug::Info`
-diagnostics (`applyActions: …`, avatar `refNum`/cell). These were for live debugging and
-should be gated behind a verbose flag or removed before any merge.
+`Replicator::applyActions` and avatar instantiation emit per-event diagnostics
+(`applyActions: …`, avatar `refNum`/cell). These now log at `Debug::Verbose` so they stay
+silent at the default log level, but they haven't been curated down — before any merge the
+survivors should be reviewed and the truly noisy ones removed rather than just gated.
 
 ### 6. Tuned for the dedicated-host topology
 
