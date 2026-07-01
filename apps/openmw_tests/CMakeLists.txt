@@ -22,6 +22,7 @@ file(GLOB UNITTEST_SRC_FILES
     mwnet/testsession.cpp
     mwnet/testactions.cpp
     mwnet/testcontrol.cpp
+    mwnet/testcharactercodec.cpp
 
     mwnull/testnullmanagers.cpp
 
