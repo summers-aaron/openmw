@@ -39,6 +39,12 @@ namespace MWNet
         /// Send a message to every connected peer.
         virtual void broadcast(const Message& message) = 0;
 
+        /// Send a message to a single peer (used for the per-client login handshake:
+        /// character lists and accept replies are addressed, not fanned out). For a
+        /// client or loopback — which have only one peer (the host, or self) — this is
+        /// equivalent to broadcast and the peer id is ignored.
+        virtual void sendTo(PeerId peer, const Message& message) = 0;
+
         /// Accept any newly-joined peers, pump I/O, and return everything received
         /// this tick, each tagged with the peer it came from.
         virtual std::vector<ReceivedMessage> poll() = 0;
@@ -66,6 +72,7 @@ namespace MWNet
         ~LoopbackSession() override;
 
         void broadcast(const Message& message) override;
+        void sendTo(PeerId peer, const Message& message) override;
         std::vector<ReceivedMessage> poll() override;
         std::size_t peerCount() const override;
 
@@ -83,6 +90,7 @@ namespace MWNet
         std::uint16_t port() const;
 
         void broadcast(const Message& message) override;
+        void sendTo(PeerId peer, const Message& message) override;
         std::vector<ReceivedMessage> poll() override;
         std::size_t peerCount() const override;
         bool isAuthority() const override { return true; }
@@ -112,6 +120,7 @@ namespace MWNet
         bool isConnected() const;
 
         void broadcast(const Message& message) override;
+        void sendTo(PeerId peer, const Message& message) override;
         std::vector<ReceivedMessage> poll() override;
         std::size_t peerCount() const override;
         bool receivesAuthoritativeState() const override { return true; }

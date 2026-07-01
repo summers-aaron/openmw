@@ -867,6 +867,12 @@ bool MWState::StateManager::confirmLoading(const std::vector<std::string_view>& 
 
 void MWState::StateManager::writeScreenshot(std::vector<char>& imageData) const
 {
+    // A dedicated server never presents frames and has no on-screen content to capture; forcing a
+    // render here would stall or crash the headless pipeline. The save profile tolerates an empty
+    // screenshot, so skip it.
+    if (MWBase::Environment::get().getWorld()->isDedicatedServer())
+        return;
+
     int screenshotW = 259 * 2, screenshotH = 133 * 2; // *2 to get some nice antialiasing
 
     osg::ref_ptr<osg::Image> screenshot(new osg::Image);

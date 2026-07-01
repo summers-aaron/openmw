@@ -86,6 +86,7 @@ bool parseOptions(int argc, char** argv, OMW::Engine& engine, Files::Configurati
             throw std::runtime_error("--connect expects host:port, got: " + connect);
         engine.setConnect(connect.substr(0, colon),
             static_cast<std::uint16_t>(std::stoi(connect.substr(colon + 1))));
+        engine.setPlayerName(variables["player-name"].as<std::string>());
     }
     else if (const int listenPort = variables["listen"].as<int>(); listenPort != 0)
     {

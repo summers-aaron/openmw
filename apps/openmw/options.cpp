@@ -105,6 +105,10 @@ namespace OpenMW
             "Join a multiplayer host as a client, given as host:port. Receives the host's "
             "authoritative replication stream instead of looping back.");
 
+        addOption("player-name", bpo::value<std::string>()->default_value(""),
+            "Login identity used with --connect: the host binds this connection to a persistent "
+            "character of this name and hands back a stable network id.");
+
         addOption("export-fonts", bpo::value<bool>()->implicit_value(true)->default_value(false),
             "Export Morrowind .fnt fonts to PNG image and XML file in current directory");
 

@@ -186,6 +186,9 @@ namespace MWBase
         /// counting down from -1, would share). Monotonic index; never reused.
         virtual ESM::RefNum reserveNetworkSummonRefNum() = 0;
 
+        /// True when this instance is a headless dedicated server (no local human player / window).
+        virtual bool isDedicatedServer() const = 0;
+
         virtual MWWorld::ESMStore& getStore() = 0;
         virtual const MWWorld::ESMStore& getStore() const = 0;
 

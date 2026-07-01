@@ -3,11 +3,13 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <string>
 
 #include <components/compiler/extensions.hpp>
 #include <components/debug/debuglog.hpp>
 #include <components/esm/refid.hpp>
+#include <components/esm3/refnum.hpp>
 #include <components/files/collections.hpp>
 #include <components/settings/settings.hpp>
 #include <components/translation/translation.hpp>
@@ -16,6 +18,9 @@
 #include <osgViewer/ViewerEventHandlers>
 
 #include "mwbase/environment.hpp"
+
+#include "mwnet/control.hpp"
+#include "mwnet/session.hpp"
 
 #include "runmode.hpp"
 
@@ -151,6 +156,11 @@ namespace OMW
         std::string mConnectHost;
         std::uint16_t mConnectPort = 0;
         std::uint16_t mListenPort = 0;
+        // Login / character-selection handshake state.
+        std::string mPlayerName; // client's login identity (--player-name)
+        bool mLoginSent = false; // client: has the LoginRequest been sent yet
+        std::map<std::string, ESM::RefNum> mLoginNetIds; // host: username -> stable network id
+        std::uint32_t mNextLoginId = 1; // host: next network id to hand out (0 is the host)
         MWBase::Environment mEnvironment;
         ToUTF8::FromType mEncoding;
         std::unique_ptr<ToUTF8::Utf8Encoder> mEncoder;
@@ -210,6 +220,13 @@ namespace OMW
         /// real messages flow across it (M9+).
         void pumpTransport();
 
+        /// Handle one login / character-selection control message from a peer. On the host this
+        /// binds a connecting client to a persistent character and replies with a stable network id;
+        /// on a client it adopts the id the host assigned.
+        void handleControlMessage(MWNet::PeerId from, const MWNet::ControlMessage& message);
+        /// Send a control message to one peer on the Reliable channel under the sKindControl tag.
+        void sendControl(MWNet::PeerId to, const MWNet::ControlMessage& message);
+
         bool frame(unsigned frameNumber, float dt);
 
         /// Prepare engine for game play
@@ -268,6 +285,10 @@ namespace OMW
         /// Host a session on the given port (M11): accept clients and broadcast the
         /// replication stream to them.
         void setListen(std::uint16_t port) { mListenPort = port; }
+
+        /// The client's login identity, sent to the host on connect so the host can bind this
+        /// connection to a persistent character (--player-name).
+        void setPlayerName(std::string name) { mPlayerName = std::move(name); }
 
         /// Run at most this many simulation frames then quit (0 = unlimited). Intended for
         /// headless/dedicated bounded runs and automated testing.

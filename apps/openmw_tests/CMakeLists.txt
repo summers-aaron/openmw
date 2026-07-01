@@ -21,6 +21,7 @@ file(GLOB UNITTEST_SRC_FILES
     mwnet/testnetworktransport.cpp
     mwnet/testsession.cpp
     mwnet/testactions.cpp
+    mwnet/testcontrol.cpp
 
     mwnull/testnullmanagers.cpp
 

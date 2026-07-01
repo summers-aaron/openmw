@@ -21,6 +21,11 @@ namespace MWNet
         mTransport->send(message);
     }
 
+    void LoopbackSession::sendTo(PeerId, const Message& message)
+    {
+        mTransport->send(message); // one peer (self) — addressing is moot
+    }
+
     std::vector<ReceivedMessage> LoopbackSession::poll()
     {
         mTransport->update();
@@ -53,6 +58,16 @@ namespace MWNet
     {
         for (Client& client : mClients)
             client.mTransport->send(message);
+    }
+
+    void HostSession::sendTo(PeerId peer, const Message& message)
+    {
+        for (Client& client : mClients)
+            if (client.mId == peer)
+            {
+                client.mTransport->send(message);
+                return;
+            }
     }
 
     std::vector<ReceivedMessage> HostSession::poll()
@@ -105,6 +120,11 @@ namespace MWNet
     void ClientSession::broadcast(const Message& message)
     {
         mTransport->send(message);
+    }
+
+    void ClientSession::sendTo(PeerId, const Message& message)
+    {
+        mTransport->send(message); // one peer (the host) — addressing is moot
     }
 
     std::vector<ReceivedMessage> ClientSession::poll()

@@ -85,6 +85,7 @@
 #include "mwmechanics/mechanicsmanagerimp.hpp"
 
 #include "mwnet/actions.hpp"
+#include "mwnet/control.hpp"
 #include "mwnet/events.hpp"
 #include "mwnet/replicator.hpp"
 #include "mwnet/session.hpp"
@@ -108,6 +109,15 @@ namespace
     void requestShutdownHandler(int)
     {
         sShutdownRequested.store(true, std::memory_order_relaxed);
+    }
+
+    // Set by the SIGUSR1 handler for the dedicated server: the main loop persists the world (and every
+    // connected player) on the next frame. Saving from the handler itself is not async-signal-safe.
+    std::atomic_bool sSaveRequested{ false };
+
+    void requestSaveHandler(int)
+    {
+        sSaveRequested.store(true, std::memory_order_relaxed);
     }
 
     void checkSDLError(int ret)
@@ -210,6 +220,54 @@ void OMW::Engine::executeLocalScripts()
     }
 }
 
+void OMW::Engine::sendControl(MWNet::PeerId to, const MWNet::ControlMessage& message)
+{
+    std::vector<std::byte> payload = MWNet::serializeControl(message);
+    payload.insert(payload.begin(), std::byte{ 2 }); // sKindControl (see pumpTransport)
+    mSession->sendTo(to, MWNet::Message{ MWNet::Channel::Reliable, std::move(payload) });
+}
+
+void OMW::Engine::handleControlMessage(MWNet::PeerId from, const MWNet::ControlMessage& message)
+{
+    if (mSession->isAuthority())
+    {
+        // Host side: bind a connecting client to a persistent character identity.
+        if (const auto* request = std::get_if<MWNet::LoginRequest>(&message))
+        {
+            // A character is serialized against its content files; reject a mismatch up front so the
+            // host never tries to deserialize a body built from different data.
+            const std::vector<std::string>& ours = MWBase::Environment::get().getWorld()->getContentFiles();
+            if (request->mContentFiles != ours)
+            {
+                sendControl(from, MWNet::LoginReject{ "content files do not match the server" });
+                Log(Debug::Warning) << "Rejected login '" << request->mUsername << "': content file mismatch";
+                return;
+            }
+            // Hand out (or recall) a stable network id for this identity, so a returning player keeps
+            // the same id and binds to the same character. An anonymous login gets a per-connection id.
+            const std::string key = request->mUsername.empty() ? '\x01' + std::to_string(from) : request->mUsername;
+            auto it = mLoginNetIds.find(key);
+            if (it == mLoginNetIds.end())
+                it = mLoginNetIds.emplace(key, ESM::RefNum{ mNextLoginId++, MWNet::sNetPlayerContentFile }).first;
+            sendControl(from, MWNet::LoginAccept{ it->second });
+            Log(Debug::Info) << "Accepted login '" << request->mUsername << "' as net id " << it->second.mIndex;
+        }
+    }
+    else
+    {
+        // Client side: adopt the identity the host assigned. The replication gate (ready) is left to
+        // the existing logic — immediate for a loaded save, chargen-completion for a new character —
+        // and appendLocalPlayer needs both the id (set here) and ready before it broadcasts.
+        if (const auto* accept = std::get_if<MWNet::LoginAccept>(&message))
+        {
+            mReplicator->setLocalPlayerNetId(accept->mNetId);
+            Log(Debug::Info) << "Logged in; adopted network id " << accept->mNetId.mIndex;
+        }
+        else if (const auto* reject = std::get_if<MWNet::LoginReject>(&message))
+            Log(Debug::Error) << "Login rejected by host: " << reject->mReason;
+    }
+}
+
 void OMW::Engine::pumpTransport()
 {
     // A multiplayer client still in its join-time character generation: advance that flow (finalize the
@@ -225,14 +283,28 @@ void OMW::Engine::pumpTransport()
     const MWNet::SnapshotDelta delta = mReplicator->sampleDelta();
     mSession->broadcast(MWNet::Message{ MWNet::Channel::Unreliable, MWNet::serializeSnapshot(delta) });
 
-    // Reliable channel carries two payload kinds, distinguished by a leading byte:
-    // M10 Lua events, and client-reported combat actions. (Unreliable is always the snapshot.)
+    // Reliable channel carries payload kinds distinguished by a leading byte: M10 Lua events,
+    // client-reported combat actions, and the login / character-selection handshake. (Unreliable is
+    // always the snapshot.)
     constexpr std::byte sKindEvents{ 0 };
     constexpr std::byte sKindActions{ 1 };
+    constexpr std::byte sKindControl{ 2 };
     const auto tagged = [](std::byte kind, std::vector<std::byte> payload) {
         payload.insert(payload.begin(), kind);
         return payload;
     };
+
+    // Client login handshake: on the first tick the host connection is live, announce ourselves so
+    // the host can bind us to a persistent character and hand back a stable network id (adopted in
+    // handleControlMessage). Until then our id is unset and we replicate nothing.
+    if (mSession->receivesAuthoritativeState() && !mLoginSent && mSession->peerCount() > 0)
+    {
+        MWNet::LoginRequest request;
+        request.mUsername = mPlayerName;
+        request.mContentFiles = MWBase::Environment::get().getWorld()->getContentFiles();
+        sendControl(MWNet::sLocalPeer, request); // a client has one peer (the host); id is ignored
+        mLoginSent = true;
+    }
 
     const MWNet::EventBatch outgoingEvents = mLuaManager->collectOutgoingEvents();
     if (!outgoingEvents.empty())
@@ -301,6 +373,11 @@ void OMW::Engine::pumpTransport()
                     // Authoritative lootable contents flow host -> clients; the host relays them onward.
                     mReplicator->applyContainers(*actions, /*relay=*/authority);
                 }
+            }
+            else if (message.mPayload.front() == sKindControl)
+            {
+                if (const std::optional<MWNet::ControlMessage> control = MWNet::deserializeControl(body))
+                    handleControlMessage(received.mFrom, *control);
             }
         }
     }
@@ -905,19 +982,16 @@ void OMW::Engine::prepareEngine()
     mReplicator = std::make_unique<MWNet::Replicator>();
     mEnvironment.setReplicator(*mReplicator);
     // Give this peer's player a network identity so other peers can show it as an avatar.
-    // The host is the fixed authority (id 0); each client self-assigns a random non-zero id
-    // so any number of clients get distinct identities without a handshake (collision is ~1 in
-    // 4 billion). The host also relays clients' players to one another so they see each other.
-    // Single-player leaves the id unset (no player is replicated).
+    // The host is the fixed authority (id 0). A client does NOT pick its own id: it announces
+    // itself to the host in the login handshake (pumpTransport) and adopts the stable id the host
+    // hands back in LoginAccept, so a returning player can be bound to the same character. Until
+    // that arrives the id stays unset, so appendLocalPlayer replicates nothing. Single-player
+    // leaves the id unset too (no player is replicated).
     if (!mConnectHost.empty())
     {
-        std::uint32_t id = std::random_device{}();
-        if (id == 0)
-            id = 1; // never collide with the host's id 0
-        mReplicator->setLocalPlayerNetId(ESM::RefNum{ id, MWNet::sNetPlayerContentFile });
         // A client joining without a save runs character generation before it has a character to
         // replicate; hold its player back until chargen finalizes so peers never see a half-built
-        // avatar. A client that loads a save already has its character, so it replicates immediately.
+        // avatar. A client that loads a save already has its character.
         if (mSaveGameFile.empty())
             mReplicator->setLocalPlayerReady(false);
     }
@@ -1257,6 +1331,7 @@ void OMW::Engine::go()
     {
         std::signal(SIGINT, &requestShutdownHandler);
         std::signal(SIGTERM, &requestShutdownHandler);
+        std::signal(SIGUSR1, &requestSaveHandler); // kill -USR1 <server> persists the world + players
     }
 
     // Start the main rendering loop
@@ -1271,6 +1346,15 @@ void OMW::Engine::go()
         {
             Log(Debug::Info) << "Shutdown signal received; quitting.";
             break;
+        }
+
+        // Manual persistence (SIGUSR1): write the world and every connected player to a save. Done
+        // here rather than in the handler so it is not async-signal-constrained. saveGame ignores
+        // isSavingAllowed (unlike quickSave), so it works headless with no player in a menu.
+        if (sSaveRequested.exchange(false, std::memory_order_relaxed))
+        {
+            Log(Debug::Info) << "Save signal received; persisting server state.";
+            mStateManager->saveGame("server");
         }
 
         // Bounded run (--frames): tick a fixed number of simulation frames then quit. Used

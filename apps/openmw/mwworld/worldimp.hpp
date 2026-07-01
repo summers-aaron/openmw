@@ -266,6 +266,7 @@ namespace MWWorld
         // Mark this World as belonging to a dedicated server (no local human player), so the navmesh
         // follows the network avatars rather than the stationary primary placeholder.
         void setDedicatedServer(bool value) { mDedicatedServer = value; }
+        bool isDedicatedServer() const override { return mDedicatedServer; }
 
         MWWorld::ESMStore& getStore() override { return mStore; }
 
