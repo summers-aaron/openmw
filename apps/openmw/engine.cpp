@@ -258,18 +258,45 @@ void OMW::Engine::handleControlMessage(MWNet::PeerId from, const MWNet::ControlM
             // If we already own a character for this login, serve it down so the client resumes it.
             // (Matched by in-game character name for now; durable identity is a follow-up.) Must be
             // sent BEFORE LoginAccept so the client adopts it before it starts replicating.
+            //
+            // Roster slots are the non-primary players (connected clients persisted as
+            // REC_PLAYER_EXTRA). Slot 0 — the dedicated server's placeholder — is servable only as a
+            // fallback when the server was booted from a save: loading a single-player save absorbs
+            // that save's character into the placeholder, and serving it is how such a character is
+            // claimed by its owner (a fresh --new-game placeholder is never offered). Extras win over
+            // slot 0 so a live/persisted avatar shadows the stale primary copy.
             MWBase::World& world = *MWBase::Environment::get().getWorld();
-            for (std::size_t i = 1; i < world.getPlayerCount(); ++i)
+            const auto characterName = [&](std::size_t slot) -> std::string {
+                const MWWorld::Ptr stored = world.getPlayerPtr(slot);
+                return stored.getClass().isNpc() ? stored.get<ESM::NPC>()->mBase->mName : std::string();
+            };
+            std::optional<std::size_t> match;
+            for (std::size_t i = 1; i < world.getPlayerCount() && !match; ++i)
+                if (characterName(i) == request->mUsername)
+                    match = i;
+            if (!match && world.isDedicatedServer() && !mSaveGameFile.empty()
+                && characterName(0) == request->mUsername)
+                match = 0;
+            if (match)
             {
-                const MWWorld::Ptr stored = world.getPlayerPtr(i);
-                if (!stored.getClass().isNpc() || stored.get<ESM::NPC>()->mBase->mName != request->mUsername)
-                    continue;
                 ESM::Player record;
-                world.getPlayer(i).buildEsmPlayer(record);
-                sendControl(from, MWNet::CharacterData{ static_cast<std::uint32_t>(i),
+                world.getPlayer(*match).buildEsmPlayer(record);
+                sendControl(from, MWNet::CharacterData{ static_cast<std::uint32_t>(*match),
                                       MWNet::serializeCharacter(record, ours) });
-                Log(Debug::Info) << "Serving stored character '" << request->mUsername << "' (slot " << i << ")";
-                break;
+                Log(Debug::Info) << "Serving stored character '" << request->mUsername << "' (slot " << *match
+                                 << ")";
+            }
+            else
+            {
+                // No stored character for this login: say what IS on the roster, so a name mismatch
+                // is diagnosable from the log instead of silently onboarding a fresh character.
+                std::string roster;
+                for (std::size_t i = 1; i < world.getPlayerCount(); ++i)
+                    roster += (roster.empty() ? "'" : ", '") + characterName(i) + "'";
+                if (world.isDedicatedServer() && !mSaveGameFile.empty())
+                    roster += (roster.empty() ? "'" : ", '") + characterName(0) + "' (save primary)";
+                Log(Debug::Info) << "No stored character named '" << request->mUsername
+                                 << "'; roster: " << (roster.empty() ? "(empty)" : roster);
             }
 
             sendControl(from, MWNet::LoginAccept{ it->second });
