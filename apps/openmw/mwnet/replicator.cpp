@@ -399,6 +399,13 @@ namespace MWNet
             if (!actor.getClass().isActor())
                 return;
             MWMechanics::CreatureStats& stats = actor.getClass().getCreatureStats(actor);
+            // The owning peer is authoritative over life AND death. Death is sticky here (setDynamic
+            // latches mDead once health drops below 1, and only resurrect() clears it), so a puppet that
+            // died — from a transient <= 0, or because its owner died and then reloaded a save — would
+            // otherwise stay dead on our screen forever even as the owner walks around alive. When the
+            // authoritative health says it's alive again, resurrect the puppet so it tracks the owner.
+            if (stats.isDead() && values.mHealth >= 1.f)
+                MWBase::Environment::get().getMechanicsManager()->resurrect(actor);
             const float current[3] = { values.mHealth, values.mMagicka, values.mFatigue };
             for (int i = 0; i < 3; ++i)
             {
