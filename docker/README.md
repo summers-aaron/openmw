@@ -59,7 +59,7 @@ All host-specific paths default to this machine but can be overridden:
 |---|---|---|
 | `OPENMW_DATA` | _(read from openmw.cfg)_ | force a specific Morrowind `Data Files` path |
 | `OPENMW_CONFIG` | `~/.config/openmw` | openmw config dir (copied per instance) |
-| `OPENMW_USERDATA` | throwaway temp dir | dir mounted at `/userdata` for saves (copied) |
+| `OPENMW_USERDATA` | client: throwaway temp dir; server: `~/openmw-mp-server-data` | dir mounted at `/userdata` for saves. Clients get a wiped copy each run; the **server's is persistent** (bind-mounted read-write) so `SIGUSR1` saves survive restarts |
 | `OPENMW_SAVE` | _(none)_ | a host `.omwsave` to load (same as `--save`) |
 | `IMAGE` | `openmw.server:latest` | build/run image tag |
 | `CONTAINER_RUNTIME` | auto | `podman` or `docker` |

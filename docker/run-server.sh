@@ -13,7 +13,8 @@
 # Env overrides:
 #   OPENMW_DATA      Morrowind "Data Files" path (must match your openmw.cfg data= entry)
 #   OPENMW_CONFIG    openmw config dir (default ~/.config/openmw)
-#   OPENMW_USERDATA  a dir to mount at /userdata (for saves); default: a throwaway temp dir
+#   OPENMW_USERDATA  PERSISTENT dir mounted read-write at /userdata; SIGUSR1 saves land under
+#                    <dir>/saves/ and survive restarts (default ~/openmw-mp-server-data)
 #   IMAGE            build image (default openmw.server:latest)
 #   CONTAINER_RUNTIME  podman|docker (auto-detected)
 #   PORT             listen port when --listen isn't passed (default 25565)
@@ -40,7 +41,14 @@ done
 mp_common_preflight
 mp_common_pick_name openmw-server   # -> NAME (auto-numbered so multiple servers coexist)
 mp_common_config_copy "$NAME"   # -> $MP_CFG
-mp_common_userdata "$NAME"      # -> $MP_USERDATA
+
+# The server's user-data is PERSISTENT (bind-mounted read-write, never wiped): SIGUSR1 saves land
+# under $MP_USERDATA/saves/ and must survive restarts — that is the point of server persistence.
+# (Clients keep mp_common_userdata's copied throwaway dir; only the server owns durable state.)
+MP_USERDATA="${OPENMW_USERDATA:-$HOME/openmw-mp-server-data}"
+mkdir -p "$MP_USERDATA"
+echo "Server user-data (saves persist here): $MP_USERDATA"
+
 mp_common_save "$SAVE_HOST"     # -> MP_SAVE_MOUNT, MP_SAVE_LOAD (a host .omwsave to host)
 
 # Choose the game: an explicit --save loads that save; otherwise default to a new game unless the

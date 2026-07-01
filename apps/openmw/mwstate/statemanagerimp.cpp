@@ -351,7 +351,7 @@ void MWState::StateManager::saveGame(std::string_view description, const Slot* s
 
         Log(Debug::Info) << '\'' << description << "' is saved in "
                          << std::chrono::duration_cast<std::chrono::duration<float, std::milli>>(finish - start).count()
-                         << "ms";
+                         << "ms to " << slot->mPath;
     }
     catch (const std::exception& e)
     {
