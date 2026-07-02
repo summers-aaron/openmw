@@ -390,6 +390,18 @@ void OMW::Engine::pumpTransport()
     // single-player, and a client whose character is already created.
     mReplicator->updateClientStart();
 
+    // A NEW character (onboarded or chargen'd — not a loaded save) is named after the login identity
+    // the moment it is finalized. The onboard flow skips the name dialog entirely (leaving the base
+    // record's default, "player"), and the server matches logins to stored characters BY NAME — so
+    // the login name must win or a returning player could never be served their character back.
+    if (!mPlayerNameApplied && !mPlayerName.empty() && mSession->receivesAuthoritativeState()
+        && mReplicator->isLocalPlayerReady() && mSaveGameFile.empty())
+    {
+        MWBase::Environment::get().getMechanicsManager()->setPlayerName(mPlayerName);
+        mPlayerNameApplied = true;
+        Log(Debug::Info) << "Named the character after the login identity '" << mPlayerName << "'";
+    }
+
     // Broadcast this peer's post-tick state to the session, then apply whatever peers
     // delivered. The session abstracts the role: single-player loops back to itself
     // (so applyDelta/injectIncomingEvents are no-ops on the echo and SP stays byte-

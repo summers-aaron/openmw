@@ -162,6 +162,7 @@ namespace OMW
         // Login / character-selection handshake state.
         std::string mPlayerName; // client's login identity (--player-name)
         bool mLoginSent = false; // client: has the LoginRequest been sent yet
+        bool mPlayerNameApplied = false; // client: has the login name been stamped onto a new character
         std::map<std::string, ESM::RefNum> mLoginNetIds; // host: username -> stable network id
         std::uint32_t mNextLoginId = 1; // host: next network id to hand out (0 is the host)
         MWBase::Environment mEnvironment;
