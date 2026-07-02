@@ -262,6 +262,9 @@ namespace MWWorld
         MWWorld::Ptr placeNetworkPlayer(
             const MWWorld::Ptr& ptr, MWWorld::CellStore& cell, const osg::Vec3f& position) override;
         void removePlayer(std::size_t index) override;
+        void parkPlayer(std::size_t index) override;
+        void unparkPlayer(std::size_t index) override;
+        bool isPlayerActive(std::size_t index) const override;
         ESM::RefNum reserveNetworkSummonRefNum() override;
         // Mark this World as belonging to a dedicated server (no local human player), so the navmesh
         // follows the network avatars rather than the stationary primary placeholder.

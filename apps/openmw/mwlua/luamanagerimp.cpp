@@ -514,10 +514,13 @@ namespace MWLua
         mObjectLists.setPlayer(ptr);
         mPlayer = ptr; // the local player drives this client's input/UI/camera
         setupPlayerScripts(ptr);
-        // Set up Lua scripting for any additional players restored from a save.
+        // Set up Lua scripting for any additional players restored from a save. A parked one (its
+        // client is offline) is skipped; LuaManager::addPlayer covers it when it is unparked.
         MWBase::World* world = MWBase::Environment::get().getWorld();
         for (std::size_t i = 1; i < world->getPlayerCount(); ++i)
         {
+            if (!world->isPlayerActive(i))
+                continue;
             const MWWorld::Ptr extra = world->getPlayerPtr(i);
             mObjectLists.objectAddedToScene(extra);
             mObjectLists.addPlayer(extra);

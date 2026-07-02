@@ -1,6 +1,7 @@
 #include "session.hpp"
 
 #include <algorithm>
+#include <utility>
 
 #include "loopbacktransport.hpp"
 #include "networktransport.hpp"
@@ -84,10 +85,19 @@ namespace MWNet
                 received.push_back({ client.mId, std::move(message) });
         }
 
-        // Drop clients whose connection has gone away.
+        // Drop clients whose connection has gone away, remembering who left so the engine can
+        // clean up their player (takeDisconnected).
+        for (const Client& client : mClients)
+            if (!client.mTransport->isConnected())
+                mDisconnected.push_back(client.mId);
         std::erase_if(mClients, [](const Client& client) { return !client.mTransport->isConnected(); });
 
         return received;
+    }
+
+    std::vector<PeerId> HostSession::takeDisconnected()
+    {
+        return std::exchange(mDisconnected, {});
     }
 
     std::size_t HostSession::peerCount() const

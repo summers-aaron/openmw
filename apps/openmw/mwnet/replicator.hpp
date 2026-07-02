@@ -273,6 +273,12 @@ namespace MWNet
         /// avatar on the client's first snapshot.
         void bindAvatar(const ESM::RefNum& netId, const MWWorld::Ptr& avatar);
 
+        /// Host: a client disconnected — release its avatar binding, forget its per-entity
+        /// replication state, and broadcast a despawn so every client deletes its cosmetic copy.
+        /// Returns the avatar Ptr that was bound (empty if none), so the caller can park the
+        /// world-side player slot (which stays as the character's last known state).
+        MWWorld::Ptr unbindAvatar(const ESM::RefNum& netId);
+
         /// Mark this peer as a connecting network client from process start — BEFORE the login
         /// handshake has assigned its network id — so load-time paths (e.g. skipping a shared
         /// save's extra players) can already behave client-side. isNetworkClient() only turns true
@@ -481,6 +487,11 @@ namespace MWNet
         /// Look up a remote player's avatar, returning it only if it is live (present and placed in
         /// a cell). Returns an empty Ptr when the peer has no avatar yet or it isn't resolvable.
         MWWorld::Ptr findLiveAvatar(const ESM::RefNum& netId) const;
+
+        /// Drop every piece of per-entity replication state held for the given id (sampling dedup,
+        /// animation/motion bookkeeping, avatar relay caches). Used when an entity leaves the
+        /// session (a client disconnected, or its avatar despawned here).
+        void forgetEntity(const ESM::RefNum& id);
 
         /// Per-remote-actor frame drivers, called from driveRemoteActors: launch a deferred cosmetic
         /// cast bolt at its release key, swap a weapon strike into its follow-through at impact, and

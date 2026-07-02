@@ -49,6 +49,10 @@ namespace MWNet
         /// this tick, each tagged with the peer it came from.
         virtual std::vector<ReceivedMessage> poll() = 0;
 
+        /// Peers whose connection went away since the last call (detected during poll). The host
+        /// uses this to clean up a departed client's player; loopback and clients report none.
+        virtual std::vector<PeerId> takeDisconnected() { return {}; }
+
         /// Number of connected remote peers (0 for loopback, or a host nobody has
         /// joined yet).
         virtual std::size_t peerCount() const = 0;
@@ -92,6 +96,7 @@ namespace MWNet
         void broadcast(const Message& message) override;
         void sendTo(PeerId peer, const Message& message) override;
         std::vector<ReceivedMessage> poll() override;
+        std::vector<PeerId> takeDisconnected() override;
         std::size_t peerCount() const override;
         bool isAuthority() const override { return true; }
 
@@ -104,6 +109,7 @@ namespace MWNet
 
         std::unique_ptr<NetworkServer> mServer;
         std::vector<Client> mClients;
+        std::vector<PeerId> mDisconnected;
         PeerId mNextPeerId = 1;
     };
 

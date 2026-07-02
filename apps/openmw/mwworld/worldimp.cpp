@@ -483,7 +483,13 @@ namespace MWWorld
                     break;
                 }
                 const ESM::NPC* playerNpc = mStore.get<ESM::NPC>().find(ESM::RefId::stringRefId("Player"));
-                mPlayers.loadExtra(index, playerNpc).readRecord(reader, type);
+                MWWorld::Player& extra = mPlayers.loadExtra(index, playerNpc);
+                extra.readRecord(reader, type);
+                // On the authority, a restored character starts PARKED — an offline player must not
+                // stand in the world. It enters the world (unparkPlayer) when its client reconnects
+                // and claims it.
+                if (replicator && replicator->isAuthority())
+                    extra.setActive(false);
                 break;
             }
             case ESM::REC_CSTA:
@@ -3688,6 +3694,49 @@ namespace MWWorld
         MWBase::Environment::get().getLuaManager()->removePlayer(ptr);
         mWorldModel.deregisterLiveCellRef(*ptr.getBase());
         mPlayers.remove(index);
+    }
+
+    void World::parkPlayer(std::size_t index)
+    {
+        if (index == MWWorld::Players::sPrimaryIndex)
+            throw std::out_of_range("World::parkPlayer: the primary player cannot be parked");
+        MWWorld::Player& player = mPlayers.get(index);
+        if (!player.isActive())
+            return;
+        const MWWorld::Ptr ptr = player.getPlayer();
+        // Out of the scene: no rendering/physics/AI, and — via the isActive check in the scene's
+        // occupancy test — its cells may unload. The slot itself keeps the character's last known
+        // state (cell, position, inventory, stats) for saves and for reconnecting.
+        if (ptr.isInCell())
+            mWorldScene->removeObjectFromScene(ptr);
+        MWBase::Environment::get().getLuaManager()->removePlayer(ptr);
+        player.setActive(false);
+        Log(Debug::Info) << "Parked disconnected player slot " << index;
+    }
+
+    void World::unparkPlayer(std::size_t index)
+    {
+        if (index == MWWorld::Players::sPrimaryIndex)
+            throw std::out_of_range("World::unparkPlayer: the primary player cannot be unparked");
+        MWWorld::Player& player = mPlayers.get(index);
+        if (player.isActive())
+            return;
+        player.setActive(true);
+        const MWWorld::Ptr ptr = player.getPlayer();
+        if (ptr.isInCell())
+        {
+            // Back into the world at the character's stored cell/position: keep its surroundings
+            // loaded (and the navmesh anchored) again, then re-add rendering/physics/AI/Lua.
+            mWorldScene->addExtraPlayer(ptr);
+            mWorldScene->addObjectToScene(ptr);
+        }
+        MWBase::Environment::get().getLuaManager()->addPlayer(ptr);
+        Log(Debug::Info) << "Unparked player slot " << index << " for a reconnecting client";
+    }
+
+    bool World::isPlayerActive(std::size_t index) const
+    {
+        return mPlayers.get(index).isActive();
     }
 
     bool World::adoptNetworkCharacter(const std::string& recordBlob)

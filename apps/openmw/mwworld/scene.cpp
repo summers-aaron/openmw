@@ -543,6 +543,9 @@ namespace MWWorld
     {
         for (std::size_t i = 1; i < mWorld.getPlayerCount(); ++i)
         {
+            // A parked player (its client disconnected) must not keep cells alive.
+            if (!mWorld.isPlayerActive(i))
+                continue;
             const CellStore* playerCell = mWorld.getPlayerPtr(i).getCell();
             if (playerCell == cell)
                 return true;

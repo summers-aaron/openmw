@@ -649,11 +649,13 @@ void MWState::StateManager::loadGame(const Character* character, const std::file
         }
 
         // Re-activate the cells occupied by any additional players restored from the save, so
-        // their surroundings are simulated as they were before saving.
+        // their surroundings are simulated as they were before saving. Parked players (restored on
+        // the authority with their client offline) stay out of the world until they reconnect.
         {
             MWBase::World* world = MWBase::Environment::get().getWorld();
             for (std::size_t i = 1; i < world->getPlayerCount(); ++i)
-                MWBase::Environment::get().getWorldScene()->addExtraPlayer(world->getPlayerPtr(i));
+                if (world->isPlayerActive(i))
+                    MWBase::Environment::get().getWorldScene()->addExtraPlayer(world->getPlayerPtr(i));
         }
 
         MWBase::Environment::get().getWorld()->updateProjectilesCasters();

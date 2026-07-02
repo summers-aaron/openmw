@@ -1103,6 +1103,47 @@ namespace MWNet
         mAvatars[netId] = avatar;
     }
 
+    MWWorld::Ptr Replicator::unbindAvatar(const ESM::RefNum& netId)
+    {
+        MWWorld::Ptr avatar;
+        const auto found = mAvatars.find(netId);
+        if (found != mAvatars.end())
+        {
+            avatar = found->second;
+            mAvatars.erase(found);
+        }
+        forgetEntity(netId);
+        // One-shot despawn broadcast: every client deletes its cosmetic copy of this avatar.
+        // Deliberately NOT recorded in mRemovedWorldItems — a player id is session-scoped, not a
+        // world item, and must not ride the periodic removal re-assert.
+        mPendingItemRemovals.push_back(netId);
+        return avatar;
+    }
+
+    void Replicator::forgetEntity(const ESM::RefNum& id)
+    {
+        mLastSent.erase(id);
+        mAppearances.erase(id);
+        mWasAttacking.erase(id);
+        mPendingSwing.erase(id);
+        mWindupPendingRelease.erase(id);
+        mWasBlocking.erase(id);
+        mWasCasting.erase(id);
+        mWasFidgeting.erase(id);
+        mSampledSwing.erase(id);
+        mAppliedSwingSeq.erase(id);
+        mWasAirborne.erase(id);
+        mTurnState.erase(id);
+        mPendingCastBolt.erase(id);
+        mPendingFollow.erase(id);
+        mAvatarSwing.erase(id);
+        mAvatarSpeed.erase(id);
+        mAvatarMoveFlags.erase(id);
+        mLastHealth.erase(id);
+        mLastHitReactionTick.erase(id);
+        mRemoteMotion.erase(id);
+    }
+
     MWWorld::Ptr Replicator::findLiveAvatar(const ESM::RefNum& netId) const
     {
         const auto it = mAvatars.find(netId);
@@ -1602,6 +1643,28 @@ namespace MWNet
         // deleted its copy, so the echo is then a no-op (count already 0).
         for (const ESM::RefNum& removed : delta.mRemovedItems)
         {
+            // A removed PLAYER id is an avatar despawn (its client disconnected): delete our cosmetic
+            // copy and forget the entity. Session-scoped — never recorded as a world-item removal.
+            if (isNetPlayer(removed))
+            {
+                const auto avatarIt = mAvatars.find(removed);
+                if (avatarIt != mAvatars.end())
+                {
+                    const MWWorld::Ptr avatar = avatarIt->second;
+                    mAvatars.erase(avatarIt);
+                    if (!avatar.isEmpty() && avatar.isInCell() && avatar.getCellRef().getCount() > 0)
+                    {
+                        // The handoff guard keeps deleteObject from reporting this deletion back to
+                        // the host as a pickup/dispose (a despawning avatar can be a corpse).
+                        mHandingOffDrop = true;
+                        world.deleteObject(avatar);
+                        mHandingOffDrop = false;
+                    }
+                }
+                forgetEntity(removed);
+                continue;
+            }
+
             // Remember every removal, even one we can't apply yet (its cell isn't loaded here): purge it
             // when that cell loads, so an item taken while we were away doesn't reappear on the shelf.
             mRemovedWorldItems.insert(removed);

@@ -61,9 +61,17 @@ namespace MWWorld
 
         bool mJumping;
 
+        // False while this (non-primary) player's client is disconnected: the slot is kept as the
+        // character's last known state, but it is out of the scene — not simulated, not keeping
+        // cells alive — until the player reconnects (World::parkPlayer / unparkPlayer).
+        bool mActive = true;
+
     public:
         /// The default RefId of the primary player.
         static ESM::RefId getPrimaryRefId();
+
+        bool isActive() const { return mActive; }
+        void setActive(bool value) { mActive = value; }
 
         Player(const ESM::NPC* player, ESM::RefId playerId = getPrimaryRefId());
 
