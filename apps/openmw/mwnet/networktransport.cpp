@@ -1,6 +1,7 @@
 #include "networktransport.hpp"
 
 #include <array>
+#include <cstdio>
 #include <cstring>
 #include <utility>
 
@@ -99,8 +100,16 @@ namespace MWNet
                 std::memcpy(&length, header + 1, sizeof(length));
                 if (length > sMaxPayload)
                 {
+                    // A garbage length means the reliable byte stream has desynced (the frame this
+                    // header claims can't be real). Log the header bytes and channel so a recurrence
+                    // is diagnosable rather than a bare "dropped connection".
+                    char header16[3 * 16 + 1] = { 0 };
+                    for (std::size_t k = offset, w = 0; k < mIncoming.size() && k < offset + 16; ++k, w += 3)
+                        std::snprintf(header16 + w, 4, "%02x ", static_cast<unsigned>(static_cast<std::uint8_t>(mIncoming[k])));
                     Log(Debug::Warning) << "NetworkTransport: peer sent oversized frame (" << length
-                                        << " bytes); dropping connection";
+                                        << " bytes) on channel " << static_cast<int>(static_cast<std::uint8_t>(header[0]))
+                                        << "; stream desynced (buffered=" << (mIncoming.size() - offset)
+                                        << ", bytes: " << header16 << "); dropping connection";
                     mConnected = false;
                     mIncoming.clear();
                     return;
