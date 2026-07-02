@@ -165,6 +165,8 @@ namespace OMW
         bool mPlayerNameApplied = false; // client: has the login name been stamped onto a new character
         std::vector<std::uint32_t> mCharacterChoices; // client: slot ids behind the open select UI's buttons
         bool mChoosingCharacter = false; // client: the select UI is up, waiting for a button press
+        bool mCreatingNewCharacter = false; // client: chose to create a new character (not resume one)
+        bool mPendingNewGame = false; // client: start a new game at the end of the pump (deferred, safe)
         int mAutoCharacter = -1; // client: roster id to auto-select, skipping the UI (--character)
         std::map<std::string, ESM::RefNum> mLoginNetIds; // host: username -> stable network id
         std::uint32_t mNextLoginId = 1; // host: next network id to hand out (0 is the host)

@@ -5,6 +5,7 @@
 #include <cerrno>
 #include <chrono>
 #include <csignal>
+#include <fstream>
 #include <future>
 #include <sstream>
 #include <system_error>
@@ -44,6 +45,7 @@
 
 #include <components/esm3/loadnpc.hpp>
 #include <components/esm3/player.hpp>
+#include <components/esm3/savedgame.hpp>
 
 #include <components/l10n/manager.hpp>
 
@@ -87,6 +89,7 @@
 #include "mwdialogue/journalimp.hpp"
 #include "mwdialogue/scripttest.hpp"
 
+#include "mwmechanics/creaturestats.hpp"
 #include "mwmechanics/mechanicsmanagerimp.hpp"
 
 #include "mwnet/actions.hpp"
@@ -356,10 +359,20 @@ void OMW::Engine::handleControlMessage(MWNet::PeerId from, const MWNet::ControlM
             }
             if (validExtra)
                 world.unparkPlayer(slot); // back into the world at its last known cell/position
+            const MWWorld::Ptr stored = world.getPlayerPtr(slot);
             ESM::Player record;
             world.getPlayer(slot).buildEsmPlayer(record);
-            sendControl(from, MWNet::CharacterData{ select->mId,
-                                  MWNet::serializeCharacter(record, world.getContentFiles()) });
+            // Serve the character as a loadable mini-save (profile + player), so the client brings it
+            // in through the real StateManager::loadGame path (a full teardown + rebuild) rather than
+            // a fragile mid-session swap. The profile only needs the content files for loadGame's
+            // compatibility check, plus a bit of metadata.
+            ESM::SavedGame profile{}; // value-init: loadGame only needs the content files (compat check)
+            profile.mContentFiles = world.getContentFiles();
+            profile.mPlayerName = stored.getClass().isNpc() ? stored.get<ESM::NPC>()->mBase->mName : std::string("Player");
+            profile.mPlayerLevel = stored.getClass().getCreatureStats(stored).getLevel();
+            profile.mDescription = "network character";
+            sendControl(from,
+                MWNet::CharacterData{ select->mId, MWNet::serializeCharacterSave(record, profile, world.getContentFiles()) });
             // Bind the slot to this client so it is the client's avatar puppet — never slot 0 (the
             // engine's primary placeholder), whose claim spawns a fresh avatar on first snapshot.
             if (validExtra)
@@ -390,6 +403,7 @@ void OMW::Engine::handleControlMessage(MWNet::PeerId from, const MWNet::ControlM
             // once a button is pressed.
             if (list->mCharacters.empty())
             {
+                mCreatingNewCharacter = true;
                 sendControl(MWNet::sLocalPeer, MWNet::CreateNew{});
                 Log(Debug::Info) << "No characters on this server yet; creating a new one.";
             }
@@ -417,17 +431,40 @@ void OMW::Engine::handleControlMessage(MWNet::PeerId from, const MWNet::ControlM
         }
         else if (const auto* character = std::get_if<MWNet::CharacterData>(&message))
         {
-            // The server owns our character and sent it down; become it (over whatever placeholder /
-            // freshly-onboarded player we started with). Arrives before LoginAccept.
-            if (MWBase::Environment::get().getWorld()->adoptNetworkCharacter(character->mBlob))
-                Log(Debug::Info) << "Adopted server character (slot " << character->mId << ")";
-            else
-                Log(Debug::Error) << "Failed to adopt server character (slot " << character->mId << ")";
+            // The server sent our character as a loadable mini-save. Write it out and load it through
+            // the real StateManager path — a full teardown + rebuild — so we end up controlling a
+            // first-class local player (input/camera/HUD all bound), exactly as a normal
+            // --load-savegame connect does. requestLoad defers the actual load to a safe point in the
+            // frame (loading mid-network-pump can crash). The replication gate is opened here: the id
+            // is set moments later by LoginAccept, and appendLocalPlayer no-ops until the load lands.
+            const std::filesystem::path path = mCfgMgr.getUserDataPath() / "network-character.omwsave";
+            try
+            {
+                std::ofstream out(path, std::ios::binary);
+                out.write(character->mBlob.data(), static_cast<std::streamsize>(character->mBlob.size()));
+                out.close();
+                if (!out)
+                    throw std::runtime_error("write failed");
+                mStateManager->requestLoad(nullptr, path);
+                mReplicator->setLocalPlayerReady(true);
+                Log(Debug::Info) << "Loading served character (slot " << character->mId << ") from " << path;
+            }
+            catch (const std::exception& e)
+            {
+                Log(Debug::Error) << "Failed to stage served character (slot " << character->mId
+                                  << "): " << e.what();
+            }
         }
         else if (const auto* accept = std::get_if<MWNet::LoginAccept>(&message))
         {
             mReplicator->setLocalPlayerNetId(accept->mNetId);
             Log(Debug::Info) << "Logged in; adopted network id " << accept->mNetId.mIndex;
+            // Creating a new character: request a fresh game (chargen). Deferred to the end of the
+            // pump (like a load) so we don't tear down/rebuild game state mid message-dispatch. This
+            // is the client's single, clean game start — a resumed character comes in via
+            // CharacterData -> loadGame instead.
+            if (mCreatingNewCharacter && mStateManager->getState() != MWBase::StateManager::State_Running)
+                mPendingNewGame = true;
         }
         else if (const auto* reject = std::get_if<MWNet::LoginReject>(&message))
             Log(Debug::Error) << "Login rejected by host: " << reject->mReason;
@@ -436,30 +473,10 @@ void OMW::Engine::handleControlMessage(MWNet::PeerId from, const MWNet::ControlM
 
 void OMW::Engine::pumpTransport()
 {
-    // A multiplayer client still in its join-time character generation: advance that flow (finalize the
-    // character once the chargen dialogs close, then open the replication gate). A no-op for the host,
-    // single-player, and a client whose character is already created.
-    mReplicator->updateClientStart();
-
-    // A NEW character (onboarded or chargen'd — not a loaded save) is named after the login identity
-    // the moment it is finalized. The onboard flow skips the name dialog entirely (leaving the base
-    // record's default, "player"), and the server matches logins to stored characters BY NAME — so
-    // the login name must win or a returning player could never be served their character back.
-    if (!mPlayerNameApplied && !mPlayerName.empty() && mSession->receivesAuthoritativeState()
-        && mReplicator->isLocalPlayerReady() && mSaveGameFile.empty())
-    {
-        MWBase::Environment::get().getMechanicsManager()->setPlayerName(mPlayerName);
-        mPlayerNameApplied = true;
-        Log(Debug::Info) << "Named the character after the login identity '" << mPlayerName << "'";
-    }
-
-    // Broadcast this peer's post-tick state to the session, then apply whatever peers
-    // delivered. The session abstracts the role: single-player loops back to itself
-    // (so applyDelta/injectIncomingEvents are no-ops on the echo and SP stays byte-
-    // identical), a host fans out to every client, a client sends to its host.
-    // M9: post-tick transform delta on the Unreliable (latest-wins) channel.
-    const MWNet::SnapshotDelta delta = mReplicator->sampleDelta();
-    mSession->broadcast(MWNet::Message{ MWNet::Channel::Unreliable, MWNet::serializeSnapshot(delta) });
+    // A client stays OUT of any game until the login handshake picks a character (below), then loads
+    // or creates it once from a clean state. So the replication machinery (which needs a running
+    // world/player) only runs in-game; the handshake itself runs regardless of game state.
+    const bool inGame = mStateManager->getState() == MWBase::StateManager::State_Running;
 
     // Reliable channel carries payload kinds distinguished by a leading byte: M10 Lua events,
     // client-reported combat actions, and the login / character-selection handshake. (Unreliable is
@@ -472,9 +489,10 @@ void OMW::Engine::pumpTransport()
         return payload;
     };
 
-    // Client login handshake: on the first tick the host connection is live, announce ourselves so
-    // the host can bind us to a persistent character and hand back a stable network id (adopted in
-    // handleControlMessage). Until then our id is unset and we replicate nothing.
+    // --- Login handshake (runs pre-game) --------------------------------------------------------
+    // Client: on the first tick the host connection is live, announce ourselves. The host replies
+    // with the claimable roster (CharacterList); we pick one (or a new character); the host serves
+    // it (CharacterData) and hands back a stable network id (LoginAccept). All in handleControlMessage.
     if (mSession->receivesAuthoritativeState() && !mLoginSent && mSession->peerCount() > 0)
     {
         MWNet::LoginRequest request;
@@ -483,9 +501,8 @@ void OMW::Engine::pumpTransport()
         sendControl(MWNet::sLocalPeer, request); // a client has one peer (the host); id is ignored
         mLoginSent = true;
     }
-
-    // Character-select UI is up: answer the host once a button is pressed. The last button is
-    // always "New character"; the rest map to mCharacterChoices slot ids.
+    // Character-select UI is up: answer the host once a button is pressed. The last button is always
+    // "New character"; the rest map to mCharacterChoices slot ids.
     if (mChoosingCharacter)
     {
         const int button = MWBase::Environment::get().getWindowManager()->readPressedButton();
@@ -495,13 +512,51 @@ void OMW::Engine::pumpTransport()
             if (static_cast<std::size_t>(button) < mCharacterChoices.size())
                 sendControl(MWNet::sLocalPeer, MWNet::SelectCharacter{ mCharacterChoices[button] });
             else
+            {
+                mCreatingNewCharacter = true;
                 sendControl(MWNet::sLocalPeer, MWNet::CreateNew{});
+            }
         }
+    }
+
+    // --- In-game replication (needs a running world/player) -------------------------------------
+    std::optional<MWNet::SnapshotDelta> delta;
+    MWNet::EventBatch outgoingEvents;
+    if (inGame)
+    {
+        // Advance a joining client's chargen (finalize the character when the dialogs close, then open
+        // the replication gate). No-op for the host, single-player, and an already-created character.
+        mReplicator->updateClientStart();
+
+        // A NEW character is named after the login identity the moment it is finalized (chargen skips
+        // or overrides its own name dialog). A resumed character keeps its stored name.
+        if (!mPlayerNameApplied && mCreatingNewCharacter && !mPlayerName.empty()
+            && mReplicator->isLocalPlayerReady())
+        {
+            MWBase::Environment::get().getMechanicsManager()->setPlayerName(mPlayerName);
+            mPlayerNameApplied = true;
+            Log(Debug::Info) << "Named the character after the login identity '" << mPlayerName << "'";
+        }
+
+        // Post-tick transform delta on the Unreliable (latest-wins) channel.
+        delta = mReplicator->sampleDelta();
+        mSession->broadcast(MWNet::Message{ MWNet::Channel::Unreliable, MWNet::serializeSnapshot(*delta) });
+
+        outgoingEvents = mLuaManager->collectOutgoingEvents();
+        if (!outgoingEvents.empty())
+            mSession->broadcast(
+                MWNet::Message{ MWNet::Channel::Reliable, tagged(sKindEvents, MWNet::serializeEvents(outgoingEvents)) });
+
+        // This peer's reported hits on host-owned actors, for the host to resolve authoritatively.
+        const MWNet::ActionBatch outgoingActions = mReplicator->takeOutgoingActions();
+        if (!outgoingActions.empty())
+            mSession->broadcast(MWNet::Message{ MWNet::Channel::Reliable,
+                tagged(sKindActions, MWNet::serializeActions(outgoingActions)) });
     }
 
     // Host: clean up departed clients. The avatar is despawned for everyone and its world slot is
     // PARKED — kept as the character's last known state (it still saves and can be reclaimed on
-    // reconnect) but out of the world: not simulated, not keeping cells alive.
+    // reconnect) but out of the world: not simulated, not keeping cells alive. (The host is in-game.)
     if (mSession->isAuthority())
     {
         for (const MWNet::PeerId peer : mSession->takeDisconnected())
@@ -527,25 +582,11 @@ void OMW::Engine::pumpTransport()
         }
     }
 
-    const MWNet::EventBatch outgoingEvents = mLuaManager->collectOutgoingEvents();
-    if (!outgoingEvents.empty())
-        mSession->broadcast(MWNet::Message{ MWNet::Channel::Reliable, tagged(sKindEvents, MWNet::serializeEvents(outgoingEvents)) });
-
-    // This peer's reported hits on host-owned actors, for the host to resolve authoritatively.
-    const MWNet::ActionBatch outgoingActions = mReplicator->takeOutgoingActions();
-    if (!outgoingActions.empty())
-        mSession->broadcast(MWNet::Message{ MWNet::Channel::Reliable, tagged(sKindActions, MWNet::serializeActions(outgoingActions)) });
-
-    // Only a client obeys received state (the host is its authority); only the host resolves
-    // reported actions. A loopback echo is our own state, so in SP nothing is applied and it
-    // stays byte-identical.
+    // Only a client obeys received state (the host is its authority); only the host resolves reported
+    // actions. A loopback echo is our own state, so in SP nothing is applied and it stays byte-
+    // identical. A client mid-chargen also holds application (private bubble; see below).
     const bool applyRemote = mSession->receivesAuthoritativeState();
     const bool authority = mSession->isAuthority();
-    // A client mid-chargen lives in a private bubble. Its intro cells (prison ship, census office)
-    // are ordinary shared-world cells, so applying the host's snapshots would drive their NPCs from
-    // the server's copy of the intro — the guard walks off while the local game is paused on a
-    // chargen dialog. Hold ALL snapshot application (world entities and avatars) until the same
-    // ready gate that keeps this player hidden from peers opens (chargen complete).
     const bool chargenBubble = applyRemote && !mReplicator->isLocalPlayerReady();
     std::size_t receivedEntities = 0;
     std::size_t appliedEntities = 0;
@@ -556,19 +597,27 @@ void OMW::Engine::pumpTransport()
         const MWNet::Message& message = received.mMessage;
         if (message.mChannel == MWNet::Channel::Unreliable)
         {
-            if (const std::optional<MWNet::SnapshotDelta> snapshot = MWNet::deserializeSnapshot(message.mPayload))
-            {
-                receivedEntities += snapshot->mEntities.size();
-                // Other peers' players always become avatars; world entities are applied
-                // only when this peer obeys the sender as an authority (a client of a host).
-                if (!chargenBubble)
+            // Snapshots need a running world; drop them pre-game and while mid-chargen.
+            if (inGame && !chargenBubble)
+                if (const std::optional<MWNet::SnapshotDelta> snapshot = MWNet::deserializeSnapshot(message.mPayload))
+                {
+                    receivedEntities += snapshot->mEntities.size();
                     appliedEntities += mReplicator->applyDelta(*snapshot, applyRemote);
-            }
+                }
         }
-        else if (!message.mPayload.empty()) // Reliable: leading byte selects events vs actions
+        else if (!message.mPayload.empty()) // Reliable: leading byte selects events / actions / control
         {
             const std::span<const std::byte> body(message.mPayload.data() + 1, message.mPayload.size() - 1);
-            if (message.mPayload.front() == sKindEvents)
+            if (message.mPayload.front() == sKindControl)
+            {
+                // The login/character handshake — dispatched in ALL game states (it is what decides
+                // whether/what game a client starts).
+                if (const std::optional<MWNet::ControlMessage> control = MWNet::deserializeControl(body))
+                    handleControlMessage(received.mFrom, *control);
+            }
+            else if (!inGame)
+                continue; // events/actions need a running game
+            else if (message.mPayload.front() == sKindEvents)
             {
                 if (const std::optional<MWNet::EventBatch> events = MWNet::deserializeEvents(body))
                 {
@@ -603,25 +652,30 @@ void OMW::Engine::pumpTransport()
                         mReplicator->applyContainers(*actions, /*relay=*/authority);
                 }
             }
-            else if (message.mPayload.front() == sKindControl)
-            {
-                if (const std::optional<MWNet::ControlMessage> control = MWNet::deserializeControl(body))
-                    handleControlMessage(received.mFrom, *control);
-            }
         }
     }
 
     // Re-assert every remote-owned actor's locomotion intent for this frame, before the mechanics
-    // pass (which zeroes the movement vector each frame) runs. applyDelta only records the intent on
-    // snapshot-receipt frames; driving it here every frame keeps remote avatars' walk cycles
-    // continuous and lets them dead-reckon between snapshots instead of sliding under an idle pose.
-    mReplicator->driveRemoteActors();
+    // pass (which zeroes the movement vector each frame) runs.
+    if (inGame)
+        mReplicator->driveRemoteActors();
 
-    // Verbose-only replication heartbeat, strictly throttled to ~once per 300 ticks. (It used to
-    // log every tick while peers were connected — that drowns the server's interactive console.)
-    if (delta.mTick % 300 == 0)
-        Log(Debug::Verbose) << "Replication tick " << delta.mTick << " [" << mSession->peerCount()
-                            << " peer(s)]: sent " << delta.mEntities.size() << " changed-entity delta(s) [recv "
+    // Deferred new-game for a client that chose to create a character (safe here: message dispatch is
+    // done). Its single, clean game start; the onboard script (if any) runs just as it would have at
+    // the initial start.
+    if (mPendingNewGame)
+    {
+        mPendingNewGame = false;
+        mReplicator->setLocalPlayerReady(false); // held back until chargen finishes
+        mStateManager->newGame(false);
+        if (!mStartupScript.empty() && mStateManager->getState() == MWBase::StateManager::State_Running)
+            mWindowManager->executeInConsole(mStartupScript);
+    }
+
+    // Verbose-only replication heartbeat, strictly throttled to ~once per 300 ticks.
+    if (delta && delta->mTick % 300 == 0)
+        Log(Debug::Verbose) << "Replication tick " << delta->mTick << " [" << mSession->peerCount()
+                            << " peer(s)]: sent " << delta->mEntities.size() << " changed-entity delta(s) [recv "
                             << receivedEntities << ", applied " << appliedEntities << "], "
                             << (outgoingEvents.mGlobal.size() + outgoingEvents.mLocal.size())
                             << " Lua event(s) [recv " << receivedEvents << "]";
@@ -1526,13 +1580,13 @@ void OMW::Engine::go()
         Resource::collectStatistics(*mViewer);
 
     // Start the game
-    if (!mConnectHost.empty() && mSaveGameFile.empty())
+    if (!mConnectHost.empty())
     {
-        // A multiplayer client that joined without a save runs the normal new-game intro (prison ship,
-        // census office, chargen) so each client creates its own character the vanilla way. Its avatar
-        // is held back until chargen finishes (the replicator's ready-gate, keyed on chargenstate). The
-        // dedicated server still boots from a save via --load.
-        mStateManager->newGame(false);
+        // A multiplayer client does NOT start a game here: it first runs the login handshake
+        // (pumpTransport), which picks a character. Only then does it load a resumed character
+        // (StateManager::loadGame — a clean, first load) or start a new game for character creation
+        // (handleControlMessage). Starting a game now and swapping/loading later double-inits Lua and
+        // crashes. The dedicated server still boots from a save via --load below.
     }
     else if (!mSaveGameFile.empty())
     {

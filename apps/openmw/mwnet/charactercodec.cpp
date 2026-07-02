@@ -8,6 +8,7 @@
 #include <components/esm3/esmwriter.hpp>
 #include <components/esm3/formatversion.hpp>
 #include <components/esm3/player.hpp>
+#include <components/esm3/savedgame.hpp>
 
 namespace MWNet
 {
@@ -28,6 +29,33 @@ namespace MWNet
 
         // Exactly the record StateManager writes per player, minus the PLIX slot index; on receipt it
         // feeds straight into MWWorld::Player::readRecord.
+        writer.startRecord(ESM::REC_PLAY);
+        player.save(writer);
+        writer.endRecord(ESM::REC_PLAY);
+        writer.close();
+
+        return stream.str();
+    }
+
+    std::string serializeCharacterSave(
+        const ESM::Player& player, const ESM::SavedGame& profile, const std::vector<std::string>& contentFiles)
+    {
+        std::ostringstream stream;
+
+        ESM::ESMWriter writer;
+        for (const std::string& contentFile : contentFiles)
+            writer.addMaster(contentFile, 0);
+        writer.setFormatVersion(ESM::CurrentSaveGameFormatVersion);
+        writer.setVersion(0);
+        writer.setType(0);
+        writer.setAuthor("");
+        writer.setDescription("");
+        writer.setRecordCount(2); // REC_SAVE + REC_PLAY
+
+        writer.save(stream);
+        writer.startRecord(ESM::REC_SAVE);
+        profile.save(writer);
+        writer.endRecord(ESM::REC_SAVE);
         writer.startRecord(ESM::REC_PLAY);
         player.save(writer);
         writer.endRecord(ESM::REC_PLAY);

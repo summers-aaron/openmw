@@ -8,6 +8,7 @@
 namespace ESM
 {
     struct Player;
+    struct SavedGame;
 }
 
 namespace MWNet
@@ -21,6 +22,15 @@ namespace MWNet
     /// contentFiles is the load order the record is written against; the same data must be loaded on
     /// both ends for the character's referenced records (cell, birthsign, base NPC) to resolve.
     std::string serializeCharacter(const ESM::Player& player, const std::vector<std::string>& contentFiles);
+
+    /// Serialize a character as a minimal but fully LOADABLE savegame (a REC_SAVE profile followed by
+    /// the REC_PLAY record). Writing this blob to a file and handing it to StateManager::loadGame is
+    /// how the server serves a character to a client: loadGame runs the complete, proven teardown +
+    /// rebuild (LuaManager::clear, setupPlayer/renderPlayer, camera, input, HUD), so the client ends
+    /// up with a first-class local character — exactly as a normal --load-savegame connect does —
+    /// rather than a fragile mid-session player swap.
+    std::string serializeCharacterSave(
+        const ESM::Player& player, const ESM::SavedGame& profile, const std::vector<std::string>& contentFiles);
 
     /// Parse a character blob. Returns nullptr on any malformed / truncated input, so a hostile or
     /// corrupt blob is rejected cleanly rather than crashing. (Heap-allocated because ESM::Player is
