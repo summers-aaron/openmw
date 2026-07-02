@@ -23,6 +23,7 @@
 #include "mwnet/session.hpp"
 
 #include "runmode.hpp"
+#include "serverconsole.hpp"
 
 namespace Resource
 {
@@ -156,6 +157,8 @@ namespace OMW
         std::string mConnectHost;
         std::uint16_t mConnectPort = 0;
         std::uint16_t mListenPort = 0;
+        // Interactive terminal console for the dedicated server (save / stop / script commands).
+        std::unique_ptr<ServerConsole> mServerConsole;
         // Login / character-selection handshake state.
         std::string mPlayerName; // client's login identity (--player-name)
         bool mLoginSent = false; // client: has the LoginRequest been sent yet
@@ -226,6 +229,10 @@ namespace OMW
         void handleControlMessage(MWNet::PeerId from, const MWNet::ControlMessage& message);
         /// Send a control message to one peer on the Reliable channel under the sKindControl tag.
         void sendControl(MWNet::PeerId to, const MWNet::ControlMessage& message);
+
+        /// Drain and dispatch lines typed into the dedicated server's terminal console:
+        /// save/stop/players/help are built-ins; anything else runs as a console script command.
+        void processServerConsole();
 
         bool frame(unsigned frameNumber, float dt);
 

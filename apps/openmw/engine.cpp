@@ -6,6 +6,7 @@
 #include <chrono>
 #include <csignal>
 #include <future>
+#include <sstream>
 #include <system_error>
 
 #include <osgDB/ReaderWriter>
@@ -222,6 +223,61 @@ void OMW::Engine::executeLocalScripts()
     {
         MWScript::InterpreterContext interpreterContext(&script.second.getRefData().getLocals(), script.second);
         mScriptManager->run(script.first, interpreterContext);
+    }
+}
+
+void OMW::Engine::processServerConsole()
+{
+    for (const std::string& line : mServerConsole->takeLines())
+    {
+        // First word selects a built-in; anything unrecognized runs as a console script command.
+        std::istringstream words(line);
+        std::string command;
+        words >> command;
+
+        if (command == "help")
+        {
+            Log(Debug::Info) << "Server console commands:\n"
+                             << "  save [name]   persist the world and every connected player\n"
+                             << "  players       list connected peers and stored characters\n"
+                             << "  stop          save and shut the server down\n"
+                             << "  help          this text\n"
+                             << "  <anything else> runs as an in-game console command (e.g. 'set gamehour to 10')";
+        }
+        else if (command == "save")
+        {
+            std::string name;
+            std::getline(words, name);
+            if (const std::size_t start = name.find_first_not_of(' '); start != std::string::npos)
+                name = name.substr(start);
+            else
+                name = "server";
+            mStateManager->saveGame(name);
+        }
+        else if (command == "stop" || command == "quit" || command == "exit")
+        {
+            Log(Debug::Info) << "Stopping: saving server state, then shutting down.";
+            mStateManager->saveGame("server");
+            mStateManager->requestQuit();
+        }
+        else if (command == "players")
+        {
+            MWBase::World& world = *MWBase::Environment::get().getWorld();
+            Log(Debug::Info) << "Connected peers: " << mSession->peerCount();
+            for (std::size_t i = 0; i < world.getPlayerCount(); ++i)
+            {
+                const MWWorld::Ptr player = world.getPlayerPtr(i);
+                const std::string& name
+                    = player.getClass().isNpc() ? player.get<ESM::NPC>()->mBase->mName : std::string();
+                Log(Debug::Info) << "  slot " << i << ": '" << name << "'"
+                                 << (i == 0 ? " (server placeholder)" : "")
+                                 << (player.isInCell()
+                                            ? " in " + player.getCell()->getCell()->getId().toDebugString()
+                                            : std::string());
+            }
+        }
+        else if (!command.empty())
+            mServerConsole->runScriptCommand(line);
     }
 }
 
@@ -1405,6 +1461,11 @@ void OMW::Engine::go()
         std::signal(SIGINT, &requestShutdownHandler);
         std::signal(SIGTERM, &requestShutdownHandler);
         std::signal(SIGUSR1, &requestSaveHandler); // kill -USR1 <server> persists the world + players
+
+        // Interactive terminal console: 'save', 'stop', 'players', 'help', or any script command.
+        mServerConsole = std::make_unique<ServerConsole>();
+        mServerConsole->start();
+        Log(Debug::Info) << "Server console ready; type 'help' for commands.";
     }
 
     // Start the main rendering loop
@@ -1429,6 +1490,10 @@ void OMW::Engine::go()
             Log(Debug::Info) << "Save signal received; persisting server state.";
             mStateManager->saveGame("server");
         }
+
+        // Dedicated server terminal console (typed commands drained once per frame).
+        if (mServerConsole)
+            processServerConsole();
 
         // Bounded run (--frames): tick a fixed number of simulation frames then quit. Used
         // for headless/dedicated runs and automated testing where there is no window to close.
