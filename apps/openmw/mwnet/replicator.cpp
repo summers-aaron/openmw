@@ -9,6 +9,7 @@
 #include <osg/Quat>
 
 #include <components/debug/debuglog.hpp>
+#include <components/esm/generatedrefid.hpp>
 #include <components/esm/refid.hpp>
 #include <components/esm3/loadcrea.hpp>
 #include <components/esm3/loadench.hpp>
@@ -1479,6 +1480,23 @@ namespace MWNet
         MWWorld::Ptr& avatar = found->second;
         if (avatar.isEmpty() || !avatar.isInCell())
             return false;
+        // Keep the avatar's name current. The dynamic NPC record is synthesized once, at spawn, from
+        // whatever appearance had arrived by then — but a joining client renames its character after
+        // login (post-chargen), so that first record often still holds the default "player". The
+        // appearance is re-advertised on every full-refresh tick; when its name no longer matches the
+        // record, refresh the record in place (same dynamic id, so the live ref and every save/serve
+        // built from it pick up the new name). Guarded to the synthesized dynamic record so we never
+        // touch a stock content NPC.
+        if (entity.mAppearance && avatar.getClass().isNpc())
+        {
+            const ESM::NPC* base = avatar.get<ESM::NPC>()->mBase;
+            if (base->mId.is<ESM::GeneratedRefId>() && base->mName != entity.mAppearance->mName)
+            {
+                ESM::NPC renamed = *base;
+                renamed.mName = entity.mAppearance->mName;
+                world.getStore().overrideRecord(renamed);
+            }
+        }
         if (entity.mMoveFlags)
         {
             applyMoveFlags(avatar, *entity.mMoveFlags); // before record: maxSpeed depends on stance

@@ -7,6 +7,7 @@
 #include <components/esm3/esmreader.hpp>
 #include <components/esm3/esmwriter.hpp>
 #include <components/esm3/formatversion.hpp>
+#include <components/esm3/loadnpc.hpp>
 #include <components/esm3/player.hpp>
 #include <components/esm3/savedgame.hpp>
 
@@ -37,8 +38,8 @@ namespace MWNet
         return stream.str();
     }
 
-    std::string serializeCharacterSave(
-        const ESM::Player& player, const ESM::SavedGame& profile, const std::vector<std::string>& contentFiles)
+    std::string serializeCharacterSave(const ESM::Player& player, const ESM::SavedGame& profile,
+        const std::vector<std::string>& contentFiles, const ESM::NPC* baseRecord)
     {
         std::ostringstream stream;
 
@@ -50,12 +51,20 @@ namespace MWNet
         writer.setType(0);
         writer.setAuthor("");
         writer.setDescription("");
-        writer.setRecordCount(2); // REC_SAVE + REC_PLAY
+        writer.setRecordCount(baseRecord ? 3 : 2); // REC_SAVE + [REC_NPC_] + REC_PLAY
 
         writer.save(stream);
         writer.startRecord(ESM::REC_SAVE);
         profile.save(writer);
         writer.endRecord(ESM::REC_SAVE);
+        // The character's dynamic NPC record must land in the store before the player record that
+        // references it (mBaseRecord), exactly as a real save orders its dynamic records first.
+        if (baseRecord)
+        {
+            writer.startRecord(ESM::REC_NPC_);
+            baseRecord->save(writer);
+            writer.endRecord(ESM::REC_NPC_);
+        }
         writer.startRecord(ESM::REC_PLAY);
         player.save(writer);
         writer.endRecord(ESM::REC_PLAY);

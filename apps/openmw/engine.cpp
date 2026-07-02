@@ -43,6 +43,7 @@
 
 #include <components/version/version.hpp>
 
+#include <components/esm/generatedrefid.hpp>
 #include <components/esm3/loadnpc.hpp>
 #include <components/esm3/player.hpp>
 #include <components/esm3/savedgame.hpp>
@@ -371,8 +372,14 @@ void OMW::Engine::handleControlMessage(MWNet::PeerId from, const MWNet::ControlM
             profile.mPlayerName = stored.getClass().isNpc() ? stored.get<ESM::NPC>()->mBase->mName : std::string("Player");
             profile.mPlayerLevel = stored.getClass().getCreatureStats(stored).getLevel();
             profile.mDescription = "network character";
+            // Ship the puppet's synthesized (dynamic) NPC record alongside so the client can resolve
+            // the character's real name/appearance on load; a stock content record needs no shipping.
+            const ESM::NPC* baseRecord = nullptr;
+            if (stored.getClass().isNpc() && stored.get<ESM::NPC>()->mBase->mId.is<ESM::GeneratedRefId>())
+                baseRecord = stored.get<ESM::NPC>()->mBase;
             sendControl(from,
-                MWNet::CharacterData{ select->mId, MWNet::serializeCharacterSave(record, profile, world.getContentFiles()) });
+                MWNet::CharacterData{ select->mId,
+                    MWNet::serializeCharacterSave(record, profile, world.getContentFiles(), baseRecord) });
             // Bind the slot to this client so it is the client's avatar puppet — never slot 0 (the
             // engine's primary placeholder), whose claim spawns a fresh avatar on first snapshot.
             if (validExtra)
@@ -587,6 +594,11 @@ void OMW::Engine::pumpTransport()
             {
                 ESM::Player record;
                 world.getPlayer(0).buildEsmPlayer(record);
+                // buildEsmPlayer stamps the source's base-record id ("player" for our primary). That
+                // id is meaningless on the host — it would resolve against the host's stock "player"
+                // record and clobber the puppet's synthesized (correctly-named) one. Clear it so the
+                // host keeps the puppet's own base record (see Player::readRecord).
+                record.mBaseRecord = ESM::RefId();
                 sendControl(MWNet::sLocalPeer,
                     MWNet::CharacterData{ 0, MWNet::serializeCharacter(record, world.getContentFiles()) });
                 mCharacterUploaded = true;
@@ -623,6 +635,14 @@ void OMW::Engine::pumpTransport()
             const ESM::RefNum netId = idIt->second;
             mPeerNetIds.erase(idIt);
             mCharacterApplied.erase(netId); // a reconnecting client re-applies its sheet
+            // Take the client's latest uploaded sheet before dropping the session state. Unlike the
+            // live puppet — applied only once, at connect — it carries the character's in-session
+            // progression: level, name, skills, inventory, gold. We flush it into the slot below so
+            // the parked (and later saved) character reflects where the player actually left off,
+            // not the create-time snapshot.
+            std::string finalSheet;
+            if (const auto blobIt = mUploadedBlobs.find(netId); blobIt != mUploadedBlobs.end())
+                finalSheet = std::move(blobIt->second);
             mUploadedBlobs.erase(netId);
             const MWWorld::Ptr avatar = mReplicator->unbindAvatar(netId);
             if (!avatar.isEmpty())
@@ -631,6 +651,10 @@ void OMW::Engine::pumpTransport()
                 for (std::size_t i = 1; i < world.getPlayerCount(); ++i)
                     if (world.getPlayerPtr(i) == avatar)
                     {
+                        // Flush the latest sheet into the slot (safe here: it is leaving the scene
+                        // anyway), then park it as the character's last known state.
+                        if (!finalSheet.empty())
+                            world.applyNetworkCharacter(i, finalSheet);
                         world.parkPlayer(i);
                         break;
                     }
