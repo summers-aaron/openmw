@@ -271,6 +271,7 @@ void OMW::Engine::processServerConsole()
                     = player.getClass().isNpc() ? player.get<ESM::NPC>()->mBase->mName : std::string();
                 Log(Debug::Info) << "  slot " << i << ": '" << name << "'"
                                  << (i == 0 ? " (server placeholder)" : "")
+                                 << (i != 0 && !world.isPlayerActive(i) ? " (offline)" : "")
                                  << (player.isInCell()
                                             ? " in " + player.getCell()->getCell()->getId().toDebugString()
                                             : std::string());
@@ -310,59 +311,71 @@ void OMW::Engine::handleControlMessage(MWNet::PeerId from, const MWNet::ControlM
             auto it = mLoginNetIds.find(key);
             if (it == mLoginNetIds.end())
                 it = mLoginNetIds.emplace(key, ESM::RefNum{ mNextLoginId++, MWNet::sNetPlayerContentFile }).first;
+            mPeerNetIds[from] = it->second;
 
-            // If we already own a character for this login, serve it down so the client resumes it.
-            // (Matched by in-game character name for now; durable identity is a follow-up.) Must be
-            // sent BEFORE LoginAccept so the client adopts it before it starts replicating.
-            //
-            // Roster slots are the non-primary players (connected clients persisted as
-            // REC_PLAYER_EXTRA). Slot 0 — the dedicated server's placeholder — is servable only as a
-            // fallback when the server was booted from a save: loading a single-player save absorbs
-            // that save's character into the placeholder, and serving it is how such a character is
-            // claimed by its owner (a fresh --new-game placeholder is never offered). Extras win over
-            // slot 0 so a live/persisted avatar shadows the stale primary copy.
+            // Offer the claimable roster: every PARKED non-primary slot (a character whose player is
+            // offline), plus — on a dedicated host booted from a save — the save's primary character
+            // absorbed into the placeholder (slot 0). Slots bound to a connected client are not
+            // offered. The client answers with SelectCharacter or CreateNew.
             MWBase::World& world = *MWBase::Environment::get().getWorld();
-            const auto characterName = [&](std::size_t slot) -> std::string {
+            MWNet::CharacterList list;
+            const auto describe = [&](std::size_t slot) {
                 const MWWorld::Ptr stored = world.getPlayerPtr(slot);
-                return stored.getClass().isNpc() ? stored.get<ESM::NPC>()->mBase->mName : std::string();
+                if (!stored.getClass().isNpc())
+                    return;
+                MWNet::CharacterInfo info;
+                info.mId = static_cast<std::uint32_t>(slot);
+                info.mName = stored.get<ESM::NPC>()->mBase->mName;
+                info.mLevel
+                    = static_cast<std::uint32_t>(stored.getClass().getCreatureStats(stored).getLevel());
+                info.mCell = stored.isInCell() ? stored.getCell()->getCell()->getId().toDebugString() : "";
+                list.mCharacters.push_back(std::move(info));
             };
-            std::optional<std::size_t> match;
-            for (std::size_t i = 1; i < world.getPlayerCount() && !match; ++i)
-                if (characterName(i) == request->mUsername)
-                    match = i;
-            if (!match && world.isDedicatedServer() && !mSaveGameFile.empty()
-                && characterName(0) == request->mUsername)
-                match = 0;
-            if (match)
+            for (std::size_t i = 1; i < world.getPlayerCount(); ++i)
+                if (!world.isPlayerActive(i))
+                    describe(i);
+            if (world.isDedicatedServer() && !mSaveGameFile.empty())
+                describe(0);
+            sendControl(from, list);
+            Log(Debug::Info) << "Login '" << request->mUsername << "' (net id " << it->second.mIndex
+                             << "): offered " << list.mCharacters.size() << " character(s)";
+        }
+        else if (const auto* select = std::get_if<MWNet::SelectCharacter>(&message))
+        {
+            const auto peerIt = mPeerNetIds.find(from);
+            if (peerIt == mPeerNetIds.end())
+                return; // never logged in
+            MWBase::World& world = *MWBase::Environment::get().getWorld();
+            const std::size_t slot = select->mId;
+            const bool primaryClaim = slot == 0 && world.isDedicatedServer() && !mSaveGameFile.empty();
+            const bool validExtra = slot >= 1 && slot < world.getPlayerCount() && !world.isPlayerActive(slot);
+            if (!primaryClaim && !validExtra)
             {
-                ESM::Player record;
-                world.getPlayer(*match).buildEsmPlayer(record);
-                sendControl(from, MWNet::CharacterData{ static_cast<std::uint32_t>(*match),
-                                      MWNet::serializeCharacter(record, ours) });
-                // Bind the stored slot to this client so it becomes the client's avatar puppet —
-                // otherwise it keeps standing in the world as an independent, server-simulated copy
-                // AND the client's replication instantiates a second one. Never the placeholder
-                // (slot 0): it must stay the engine's primary player.
-                if (*match != 0)
-                    mReplicator->bindAvatar(it->second, world.getPlayerPtr(*match));
-                Log(Debug::Info) << "Serving stored character '" << request->mUsername << "' (slot " << *match
-                                 << ")";
+                sendControl(from, MWNet::LoginReject{ "that character is not available" });
+                return;
             }
-            else
-            {
-                // No stored character for this login: say what IS on the roster, so a name mismatch
-                // is diagnosable from the log instead of silently onboarding a fresh character.
-                std::string roster;
-                for (std::size_t i = 1; i < world.getPlayerCount(); ++i)
-                    roster += (roster.empty() ? "'" : ", '") + characterName(i) + "'";
-                if (world.isDedicatedServer() && !mSaveGameFile.empty())
-                    roster += (roster.empty() ? "'" : ", '") + characterName(0) + "' (save primary)";
-                Log(Debug::Info) << "No stored character named '" << request->mUsername
-                                 << "'; roster: " << (roster.empty() ? "(empty)" : roster);
-            }
-
-            sendControl(from, MWNet::LoginAccept{ it->second });
-            Log(Debug::Info) << "Accepted login '" << request->mUsername << "' as net id " << it->second.mIndex;
+            if (validExtra)
+                world.unparkPlayer(slot); // back into the world at its last known cell/position
+            ESM::Player record;
+            world.getPlayer(slot).buildEsmPlayer(record);
+            sendControl(from, MWNet::CharacterData{ select->mId,
+                                  MWNet::serializeCharacter(record, world.getContentFiles()) });
+            // Bind the slot to this client so it is the client's avatar puppet — never slot 0 (the
+            // engine's primary placeholder), whose claim spawns a fresh avatar on first snapshot.
+            if (validExtra)
+                mReplicator->bindAvatar(peerIt->second, world.getPlayerPtr(slot));
+            sendControl(from, MWNet::LoginAccept{ peerIt->second });
+            Log(Debug::Info) << "Peer " << from << " resumed character slot " << slot;
+        }
+        else if (std::get_if<MWNet::CreateNew>(&message))
+        {
+            const auto peerIt = mPeerNetIds.find(from);
+            if (peerIt == mPeerNetIds.end())
+                return; // never logged in
+            // Nothing to serve: the client runs character generation and its avatar gets a fresh
+            // slot on its first snapshot (applyAvatarEntity -> addPlayer).
+            sendControl(from, MWNet::LoginAccept{ peerIt->second });
+            Log(Debug::Info) << "Peer " << from << " is creating a new character";
         }
     }
     else
@@ -370,7 +383,33 @@ void OMW::Engine::handleControlMessage(MWNet::PeerId from, const MWNet::ControlM
         // Client side: adopt the identity the host assigned. The replication gate (ready) is left to
         // the existing logic — immediate for a loaded save, chargen-completion for a new character —
         // and appendLocalPlayer needs both the id (set here) and ready before it broadcasts.
-        if (const auto* character = std::get_if<MWNet::CharacterData>(&message))
+        if (const auto* list = std::get_if<MWNet::CharacterList>(&message))
+        {
+            // The server's claimable roster. Nothing to pick from -> new character; otherwise show
+            // a select UI (a button per character + "New character"), answered in pumpTransport
+            // once a button is pressed.
+            if (list->mCharacters.empty())
+            {
+                sendControl(MWNet::sLocalPeer, MWNet::CreateNew{});
+                Log(Debug::Info) << "No characters on this server yet; creating a new one.";
+            }
+            else
+            {
+                std::string text = "Choose your character:";
+                std::vector<std::string> buttons;
+                mCharacterChoices.clear();
+                for (const MWNet::CharacterInfo& info : list->mCharacters)
+                {
+                    buttons.push_back(info.mName + " (level " + std::to_string(info.mLevel)
+                        + (info.mCell.empty() ? std::string() : ", " + info.mCell) + ")");
+                    mCharacterChoices.push_back(info.mId);
+                }
+                buttons.push_back("New character");
+                MWBase::Environment::get().getWindowManager()->interactiveMessageBox(text, buttons);
+                mChoosingCharacter = true;
+            }
+        }
+        else if (const auto* character = std::get_if<MWNet::CharacterData>(&message))
         {
             // The server owns our character and sent it down; become it (over whatever placeholder /
             // freshly-onboarded player we started with). Arrives before LoginAccept.
@@ -437,6 +476,49 @@ void OMW::Engine::pumpTransport()
         request.mContentFiles = MWBase::Environment::get().getWorld()->getContentFiles();
         sendControl(MWNet::sLocalPeer, request); // a client has one peer (the host); id is ignored
         mLoginSent = true;
+    }
+
+    // Character-select UI is up: answer the host once a button is pressed. The last button is
+    // always "New character"; the rest map to mCharacterChoices slot ids.
+    if (mChoosingCharacter)
+    {
+        const int button = MWBase::Environment::get().getWindowManager()->readPressedButton();
+        if (button >= 0)
+        {
+            mChoosingCharacter = false;
+            if (static_cast<std::size_t>(button) < mCharacterChoices.size())
+                sendControl(MWNet::sLocalPeer, MWNet::SelectCharacter{ mCharacterChoices[button] });
+            else
+                sendControl(MWNet::sLocalPeer, MWNet::CreateNew{});
+        }
+    }
+
+    // Host: clean up departed clients. The avatar is despawned for everyone and its world slot is
+    // PARKED — kept as the character's last known state (it still saves and can be reclaimed on
+    // reconnect) but out of the world: not simulated, not keeping cells alive.
+    if (mSession->isAuthority())
+    {
+        for (const MWNet::PeerId peer : mSession->takeDisconnected())
+        {
+            const auto idIt = mPeerNetIds.find(peer);
+            if (idIt == mPeerNetIds.end())
+                continue; // connected but never logged in
+            const ESM::RefNum netId = idIt->second;
+            mPeerNetIds.erase(idIt);
+            const MWWorld::Ptr avatar = mReplicator->unbindAvatar(netId);
+            if (!avatar.isEmpty())
+            {
+                MWBase::World& world = *MWBase::Environment::get().getWorld();
+                for (std::size_t i = 1; i < world.getPlayerCount(); ++i)
+                    if (world.getPlayerPtr(i) == avatar)
+                    {
+                        world.parkPlayer(i);
+                        break;
+                    }
+            }
+            Log(Debug::Info) << "Peer " << peer << " disconnected (net id " << netId.mIndex
+                             << "); its player was parked.";
+        }
     }
 
     const MWNet::EventBatch outgoingEvents = mLuaManager->collectOutgoingEvents();
