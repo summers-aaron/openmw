@@ -508,6 +508,14 @@ namespace MWLua
             // through to rebind and recreate them. A different player is still a logic error.
             if (mPlayer.mRef != ptr.mRef)
                 throw std::logic_error("Player is initialized twice");
+            // Tear down the outgoing player's scripts and — crucially — its input action/trigger
+            // registrations. Those live in these maps (registered only by player-context scripts),
+            // so unless they are cleared the freshly-recreated playercontrols/camera scripts fail to
+            // start with "Action key already in use" and the player ends up only half-controllable.
+            if (LocalScripts* old = mPlayer.getRefData().getLuaScripts())
+                mActiveLocalScripts.erase(old->getWeakPointer());
+            mInputActions.clear();
+            mInputTriggers.clear();
             mPlayer = MWWorld::Ptr(); // rebound below
         }
         mObjectLists.objectAddedToScene(ptr);
