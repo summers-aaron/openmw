@@ -1092,6 +1092,17 @@ namespace MWNet
         return it->second;
     }
 
+    void Replicator::bindAvatar(const ESM::RefNum& netId, const MWWorld::Ptr& avatar)
+    {
+        if (avatar.isEmpty())
+            return;
+        // From now on the slot is the client's puppet: the client's replication drives it (so stop
+        // simulating it locally), sampleDelta stops replicating it as an independent world actor,
+        // and applyAvatarEntity reuses it instead of instantiating a duplicate on the first snapshot.
+        avatar.getRefData().setRemoteOwned(true);
+        mAvatars[netId] = avatar;
+    }
+
     MWWorld::Ptr Replicator::findLiveAvatar(const ESM::RefNum& netId) const
     {
         const auto it = mAvatars.find(netId);

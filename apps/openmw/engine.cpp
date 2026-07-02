@@ -339,6 +339,12 @@ void OMW::Engine::handleControlMessage(MWNet::PeerId from, const MWNet::ControlM
                 world.getPlayer(*match).buildEsmPlayer(record);
                 sendControl(from, MWNet::CharacterData{ static_cast<std::uint32_t>(*match),
                                       MWNet::serializeCharacter(record, ours) });
+                // Bind the stored slot to this client so it becomes the client's avatar puppet —
+                // otherwise it keeps standing in the world as an independent, server-simulated copy
+                // AND the client's replication instantiates a second one. Never the placeholder
+                // (slot 0): it must stay the engine's primary player.
+                if (*match != 0)
+                    mReplicator->bindAvatar(it->second, world.getPlayerPtr(*match));
                 Log(Debug::Info) << "Serving stored character '" << request->mUsername << "' (slot " << *match
                                  << ")";
             }
@@ -1124,6 +1130,9 @@ void OMW::Engine::prepareEngine()
     // leaves the id unset too (no player is replicated).
     if (!mConnectHost.empty())
     {
+        // Known to be a client before the handshake assigns an id: load-time paths (e.g. skipping a
+        // shared save's extra players — those belong to the server) key off this.
+        mReplicator->setClientSession(true);
         // A client joining without a save runs character generation before it has a character to
         // replicate; hold its player back until chargen finalizes so peers never see a half-built
         // avatar. A client that loads a save already has its character.

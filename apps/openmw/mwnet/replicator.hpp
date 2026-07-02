@@ -239,6 +239,9 @@ namespace MWNet
         bool mRelayAvatars = false;
         // True on the host (the authority that resolves combat for the shared world).
         bool mIsAuthority = false;
+        // True on a connecting network client from process start, before the login handshake has
+        // assigned a network id (isNetworkClient() needs the id, which arrives only in LoginAccept).
+        bool mIsClientSession = false;
         // Set transiently while the world deletes a just-dropped item being handed to the host, so
         // that deletion isn't reported back as a pickup (see setHandingOffDrop).
         bool mHandingOffDrop = false;
@@ -263,6 +266,19 @@ namespace MWNet
         /// Host only: relay other peers' players (the avatars we hold) back out under their
         /// network ids, so every client sees every other client's player, not just the host's.
         void setRelayAvatars(bool value) { mRelayAvatars = value; }
+
+        /// Host: bind an existing (persisted) player slot to a connecting client's network id,
+        /// making it that client's avatar puppet — driven by the client's replication instead of
+        /// simulated as an independent world actor, and reused instead of instantiating a duplicate
+        /// avatar on the client's first snapshot.
+        void bindAvatar(const ESM::RefNum& netId, const MWWorld::Ptr& avatar);
+
+        /// Mark this peer as a connecting network client from process start — BEFORE the login
+        /// handshake has assigned its network id — so load-time paths (e.g. skipping a shared
+        /// save's extra players) can already behave client-side. isNetworkClient() only turns true
+        /// once the id arrives.
+        void setClientSession(bool value) { mIsClientSession = value; }
+        bool isClientSession() const { return mIsClientSession; }
 
         /// Mark this peer as the authority (the host). The authority resolves combat for the
         /// shared world: it applies clients' reported hits and reports damage back to players.

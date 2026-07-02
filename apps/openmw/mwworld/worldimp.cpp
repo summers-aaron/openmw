@@ -23,6 +23,7 @@
 #include <components/esm3/loadench.hpp>
 #include <components/esm3/loadgmst.hpp>
 #include <components/esm3/loadlevlist.hpp>
+#include <components/esm3/player.hpp>
 #include <components/esm3/loadmgef.hpp>
 #include <components/esm3/loadregn.hpp>
 #include <components/esm3/loadstat.hpp>
@@ -468,6 +469,17 @@ namespace MWWorld
                 // index and player setup are already in place by the time we get here.
                 uint32_t index = 0;
                 reader.getHNT(index, "PLIX");
+                // A network client loading a shared save must NOT restore other players' characters:
+                // those slots belong to the server (which serves each one to its owning client), and
+                // restoring them locally leaves an uncontrolled copy standing in the world. Consume
+                // and discard the record so the stream stays aligned.
+                MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+                if (replicator && replicator->isClientSession())
+                {
+                    ESM::Player discarded;
+                    discarded.load(reader);
+                    break;
+                }
                 const ESM::NPC* playerNpc = mStore.get<ESM::NPC>().find(ESM::RefId::stringRefId("Player"));
                 mPlayers.loadExtra(index, playerNpc).readRecord(reader, type);
                 break;
