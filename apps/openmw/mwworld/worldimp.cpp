@@ -3773,6 +3773,12 @@ namespace MWWorld
         renderPlayer();
         MWBase::Environment::get().getWindowManager()->updatePlayer();
         MWBase::Environment::get().getMechanicsManager()->playerLoaded();
+        // Reset the camera exactly as StateManager::loadGame does: a mid-session adopt can inherit a
+        // vanity/preview camera (e.g. left over from the join-time intro), which reads as a detached,
+        // uncontrollable "floating camera". Force it back to a normal attached view.
+        toggleVanityMode(false);
+        if (isFirstPerson())
+            togglePOV();
 
         const MWWorld::Ptr player = getPlayerPtr();
         if (player.isInCell())
@@ -3797,20 +3803,38 @@ namespace MWWorld
         MWBase::WindowManager& windows = *MWBase::Environment::get().getWindowManager();
         windows.allow(MWGui::GW_ALL);
         windows.enableRest();
+        // Drop any GUI mode still open from the join-time intro (loading screen, a chargen dialog):
+        // otherwise the client is left paused in a menu — cursor up, unable to move — reading as an
+        // uncontrollable camera even though the character is fully in the world. Bounded so a
+        // misbehaving mode can't spin here.
+        for (int guard = 0; windows.isGuiMode() && guard < 16; ++guard)
+        {
+            const MWGui::GuiMode mode = windows.getMode();
+            windows.removeGuiMode(mode);
+            if (windows.getMode() == mode)
+            {
+                Log(Debug::Warning) << "adoptNetworkCharacter: could not clear GUI mode " << static_cast<int>(mode);
+                break;
+            }
+        }
 
         // Diagnostic snapshot of the adopted state, so a broken adopt (bodiless camera, void spawn,
         // wrong cell) is identifiable from the log rather than guessed at.
         {
             const ESM::Position& pos = player.getRefData().getPosition();
             const auto& stats = player.getClass().getCreatureStats(player);
+            MWBase::WindowManager& wm = *MWBase::Environment::get().getWindowManager();
             Log(Debug::Info) << "adoptNetworkCharacter: base='" << player.get<ESM::NPC>()->mBase->mId
                              << "' name='" << player.get<ESM::NPC>()->mBase->mName << "' cell="
                              << (player.isInCell() ? player.getCell()->getCell()->getId().toDebugString()
                                                    : std::string("<none>"))
                              << " pos=(" << pos.pos[0] << ", " << pos.pos[1] << ", " << pos.pos[2] << ")"
                              << " health=" << stats.getHealth().getCurrent() << "/"
-                             << stats.getHealth().getModified() << " animation="
-                             << (getAnimation(player) != nullptr ? "yes" : "MISSING");
+                             << stats.getHealth().getModified() << " dead=" << stats.isDead()
+                             << " animation=" << (getAnimation(player) != nullptr ? "yes" : "MISSING")
+                             << " firstPerson=" << isFirstPerson() << " preview=" << isPreviewModeEnabled()
+                             << " guiMode=" << wm.isGuiMode() << " modeId=" << static_cast<int>(wm.getMode())
+                             << " remoteOwned=" << player.getRefData().isRemoteOwned();
         }
         return true;
     }
