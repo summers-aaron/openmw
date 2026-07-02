@@ -314,6 +314,11 @@ namespace MWWorld
             player.mSaveSkills[i] = mSaveSkills[i];
 
         player.mPreviousItems = mPreviousItems;
+
+        // The record this player was built from: for a network avatar that is a dynamic record
+        // synthesized at instantiation, and it carries the character's name and body — the restored
+        // slot must be re-pointed at it (see readRecord).
+        player.mBaseRecord = mPlayer.mBase->mId;
     }
 
     void Player::write(ESM::ESMWriter& writer, Loading::Listener& progress, std::size_t index) const
@@ -326,6 +331,7 @@ namespace MWWorld
         // records carrying their index; World reads that index back to route the record.
         if (index == 0)
         {
+            player.mBaseRecord = ESM::RefId(); // never written for the primary: byte-identical SP saves
             writer.startRecord(ESM::REC_PLAY);
             player.save(writer);
             writer.endRecord(ESM::REC_PLAY);
@@ -372,16 +378,18 @@ namespace MWWorld
 
             MWBase::Environment::get().getWorldModel()->deregisterLiveCellRef(mPlayer);
             mPlayer.load(player.mObject);
-            // Re-point the base record to the one the state was saved against. A non-primary player
-            // (a network avatar) is built from a DYNAMIC NPC record synthesized at runtime — its
-            // name and body (race/head/hair) live there, and the record itself persists with the
-            // save — but loadExtra constructs the slot from the stock "Player" record, so without
-            // this every restored character reverts to the default name and appearance. The primary
-            // player resolves to its own record (a no-op); a refid with no matching record (e.g. a
-            // served character whose dynamic record wasn't shipped) keeps the current base.
-            if (const ESM::NPC* base
-                = MWBase::Environment::get().getESMStore()->get<ESM::NPC>().search(player.mObject.mRef.mRefID))
-                mPlayer.mBase = base;
+            // Re-point the base record to the one this player was saved against (persisted as
+            // mBaseRecord). A non-primary player (a network avatar) is built from a DYNAMIC NPC
+            // record synthesized at runtime — its name and body (race/head/hair) live there, and
+            // dynamic records persist with the save (written before the player records) — but
+            // loadExtra constructs the slot from the stock "Player" record, so without this every
+            // restored character reverts to the default name and appearance. Absent (primary /
+            // legacy saves) or unresolvable (a served blob whose dynamic record wasn't shipped),
+            // the current base is kept.
+            if (!player.mBaseRecord.empty())
+                if (const ESM::NPC* base
+                    = MWBase::Environment::get().getESMStore()->get<ESM::NPC>().search(player.mBaseRecord))
+                    mPlayer.mBase = base;
             MWBase::Environment::get().getWorldModel()->registerPtr(getPlayer());
             if (reader.mActorIdConverter)
                 reader.mActorIdConverter->mMappings.emplace(

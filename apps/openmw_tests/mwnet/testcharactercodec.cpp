@@ -26,6 +26,7 @@ namespace MWNet
             player.mLastKnownExteriorPosition[2] = 42.f;
             player.mSaveAttributes[0] = 55.f;
             player.mSaveSkills[0] = 33.f;
+            player.mBaseRecord = ESM::RefId::generated(7); // dynamic avatar record id
         }
 
         TEST(MWNetCharacterCodecTest, roundTripsScalarState)
@@ -44,6 +45,7 @@ namespace MWNet
             EXPECT_FLOAT_EQ(parsed->mLastKnownExteriorPosition[2], 42.f);
             EXPECT_FLOAT_EQ(parsed->mSaveAttributes[0], 55.f);
             EXPECT_FLOAT_EQ(parsed->mSaveSkills[0], 33.f);
+            EXPECT_EQ(parsed->mBaseRecord, original.mBaseRecord);
         }
 
         TEST(MWNetCharacterCodecTest, rejectsGarbageBlob)

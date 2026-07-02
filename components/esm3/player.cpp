@@ -78,6 +78,9 @@ namespace ESM
             esm.getHNT(mSaveAttributes, "WWAT");
             esm.getHNT(mSaveSkills, "WWSK");
         }
+
+        // Trailing and optional: only multi-player saves write it (never legacy/single-player ones).
+        mBaseRecord = esm.getHNORefId("BREC");
     }
 
     void Player::save(ESMWriter& esm) const
@@ -107,6 +110,10 @@ namespace ESM
 
         esm.writeHNT("WWAT", mSaveAttributes);
         esm.writeHNT("WWSK", mSaveSkills);
+
+        // Written only when set (non-primary players), keeping single-player saves byte-identical.
+        if (!mBaseRecord.empty())
+            esm.writeHNRefId("BREC", mBaseRecord);
     }
 
 }
