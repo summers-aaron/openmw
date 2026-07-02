@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <set>
 #include <string>
 
 #include <components/compiler/extensions.hpp>
@@ -173,7 +174,8 @@ namespace OMW
         std::map<std::string, ESM::RefNum> mLoginNetIds; // host: username -> stable network id
         std::uint32_t mNextLoginId = 1; // host: next network id to hand out (0 is the host)
         std::map<MWNet::PeerId, ESM::RefNum> mPeerNetIds; // host: connected peer -> its login net id
-        std::map<ESM::RefNum, std::string> mUploadedBlobs; // host: last character sheet applied per net id
+        std::map<ESM::RefNum, std::string> mUploadedBlobs; // host: latest uploaded character sheet per net id
+        std::set<ESM::RefNum> mCharacterApplied; // host: net ids whose sheet was applied to the live puppet
         MWBase::Environment mEnvironment;
         ToUTF8::FromType mEncoding;
         std::unique_ptr<ToUTF8::Utf8Encoder> mEncoder;

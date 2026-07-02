@@ -3789,9 +3789,9 @@ namespace MWWorld
             mWorldScene->addObjectToScene(after);
         }
         MWBase::Environment::get().getLuaManager()->addPlayer(after);
-        Log(Debug::Info) << "applyNetworkCharacter: slot " << index << " now Strength="
-                         << after.getClass().getCreatureStats(after).getAttribute(ESM::Attribute::Strength).getBase()
-                         << " maxHealth=" << after.getClass().getCreatureStats(after).getHealth().getModified();
+        Log(Debug::Verbose) << "applyNetworkCharacter: slot " << index << " Strength="
+                            << after.getClass().getCreatureStats(after).getAttribute(ESM::Attribute::Strength).getBase()
+                            << " maxHealth=" << after.getClass().getCreatureStats(after).getHealth().getModified();
         return true;
     }
 

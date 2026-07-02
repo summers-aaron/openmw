@@ -397,15 +397,20 @@ void OMW::Engine::handleControlMessage(MWNet::PeerId from, const MWNet::ControlM
             const auto peerIt = mPeerNetIds.find(from);
             if (peerIt == mPeerNetIds.end())
                 return;
-            // The client re-uploads periodically; skip the (ref-rebuilding) apply when the sheet is
-            // unchanged, so an idle character costs nothing beyond the wire bytes.
-            std::string& last = mUploadedBlobs[peerIt->second];
-            if (last == upload->mBlob)
-                return;
+            // Always stash the latest sheet (cheap) — its stats will be persisted to the server save
+            // (progression sync at save time is a later step). But apply it to the live puppet only
+            // ONCE per session: readRecord rebuilds the slot's ref (and its scene/physics/navmesh
+            // anchor), so re-doing it on every periodic upload would churn nearby NPC AI. One apply
+            // gives the puppet the real stats that a save/serve then carries.
+            mUploadedBlobs[peerIt->second] = upload->mBlob;
+            if (!mCharacterApplied.insert(peerIt->second).second)
+                return; // already applied this session
             const MWWorld::Ptr avatar = mReplicator->boundAvatar(peerIt->second);
             if (avatar.isEmpty())
-                return; // its puppet isn't instantiated yet — the client re-uploads until it is
-            last = upload->mBlob;
+            {
+                mCharacterApplied.erase(peerIt->second); // puppet not ready yet — let a later upload retry
+                return;
+            }
             MWBase::World& world = *MWBase::Environment::get().getWorld();
             for (std::size_t i = 1; i < world.getPlayerCount(); ++i)
                 if (world.getPlayerPtr(i) == avatar)
@@ -617,6 +622,8 @@ void OMW::Engine::pumpTransport()
                 continue; // connected but never logged in
             const ESM::RefNum netId = idIt->second;
             mPeerNetIds.erase(idIt);
+            mCharacterApplied.erase(netId); // a reconnecting client re-applies its sheet
+            mUploadedBlobs.erase(netId);
             const MWWorld::Ptr avatar = mReplicator->unbindAvatar(netId);
             if (!avatar.isEmpty())
             {
