@@ -393,6 +393,12 @@ void OMW::Engine::handleControlMessage(MWNet::PeerId from, const MWNet::ControlM
                 sendControl(MWNet::sLocalPeer, MWNet::CreateNew{});
                 Log(Debug::Info) << "No characters on this server yet; creating a new one.";
             }
+            else if (mAutoCharacter >= 0)
+            {
+                // --character: scripted/headless runs skip the UI and claim the given slot.
+                sendControl(MWNet::sLocalPeer, MWNet::SelectCharacter{ static_cast<std::uint32_t>(mAutoCharacter) });
+                Log(Debug::Info) << "Auto-selecting character slot " << mAutoCharacter;
+            }
             else
             {
                 std::string text = "Choose your character:";

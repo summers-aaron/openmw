@@ -165,6 +165,7 @@ namespace OMW
         bool mPlayerNameApplied = false; // client: has the login name been stamped onto a new character
         std::vector<std::uint32_t> mCharacterChoices; // client: slot ids behind the open select UI's buttons
         bool mChoosingCharacter = false; // client: the select UI is up, waiting for a button press
+        int mAutoCharacter = -1; // client: roster id to auto-select, skipping the UI (--character)
         std::map<std::string, ESM::RefNum> mLoginNetIds; // host: username -> stable network id
         std::uint32_t mNextLoginId = 1; // host: next network id to hand out (0 is the host)
         std::map<MWNet::PeerId, ESM::RefNum> mPeerNetIds; // host: connected peer -> its login net id
@@ -300,6 +301,10 @@ namespace OMW
         /// The client's login identity, sent to the host on connect so the host can bind this
         /// connection to a persistent character (--player-name).
         void setPlayerName(std::string name) { mPlayerName = std::move(name); }
+
+        /// Auto-select this roster character id when connecting, skipping the select UI
+        /// (--character). -1 shows the UI.
+        void setAutoCharacter(int id) { mAutoCharacter = id; }
 
         /// Run at most this many simulation frames then quit (0 = unlimited). Intended for
         /// headless/dedicated bounded runs and automated testing.
