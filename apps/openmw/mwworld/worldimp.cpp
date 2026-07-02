@@ -3769,10 +3769,18 @@ namespace MWWorld
             return false;
         }
 
+        // "This is a real, loaded character now, not a new game" — mirrors StateManager::loadGame so
+        // the HUD and the built-in player Lua scripts treat it as such.
+        MWBase::Environment::get().getWindowManager()->setNewGame(false);
         setupPlayer();
         renderPlayer();
         MWBase::Environment::get().getWindowManager()->updatePlayer();
         MWBase::Environment::get().getMechanicsManager()->playerLoaded();
+        // Fire the game-loaded hook so the player's built-in Lua scripts (movement, camera, controls,
+        // HUD) activate for the rebuilt player. Without it the player is only "half" controllable —
+        // the engine moves it a little but the Lua control/camera layer never binds. newGame and
+        // loadGame both do this; a mid-session adopt must too.
+        MWBase::Environment::get().getLuaManager()->gameLoaded();
         // Reset the camera exactly as StateManager::loadGame does: a mid-session adopt can inherit a
         // vanity/preview camera (e.g. left over from the join-time intro), which reads as a detached,
         // uncontrollable "floating camera". Force it back to a normal attached view.
