@@ -3797,6 +3797,21 @@ namespace MWWorld
         MWBase::WindowManager& windows = *MWBase::Environment::get().getWindowManager();
         windows.allow(MWGui::GW_ALL);
         windows.enableRest();
+
+        // Diagnostic snapshot of the adopted state, so a broken adopt (bodiless camera, void spawn,
+        // wrong cell) is identifiable from the log rather than guessed at.
+        {
+            const ESM::Position& pos = player.getRefData().getPosition();
+            const auto& stats = player.getClass().getCreatureStats(player);
+            Log(Debug::Info) << "adoptNetworkCharacter: base='" << player.get<ESM::NPC>()->mBase->mId
+                             << "' name='" << player.get<ESM::NPC>()->mBase->mName << "' cell="
+                             << (player.isInCell() ? player.getCell()->getCell()->getId().toDebugString()
+                                                   : std::string("<none>"))
+                             << " pos=(" << pos.pos[0] << ", " << pos.pos[1] << ", " << pos.pos[2] << ")"
+                             << " health=" << stats.getHealth().getCurrent() << "/"
+                             << stats.getHealth().getModified() << " animation="
+                             << (getAnimation(player) != nullptr ? "yes" : "MISSING");
+        }
         return true;
     }
 
