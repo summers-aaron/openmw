@@ -61,6 +61,8 @@
 #include <components/settings/values.hpp>
 
 #include "../mwbase/environment.hpp"
+#include "../mwbase/guimode.hpp"
+#include "../mwbase/inputmanager.hpp"
 #include "../mwbase/luamanager.hpp"
 #include "../mwbase/mechanicsmanager.hpp"
 #include "../mwbase/scriptmanager.hpp"
@@ -3729,6 +3731,23 @@ namespace MWWorld
         else
             Log(Debug::Warning)
                 << "adoptNetworkCharacter: character's cell is not available here; player left in place";
+
+        // The adopted character is complete: finalize the client's session state no matter which
+        // start flow it launched with. A joining client typically arrives here mid character
+        // generation — the vanilla intro has controls and the GUI disabled and only re-enables them
+        // at the end of a sequence we just teleported out of — so without this the player is left
+        // as a bodiless camera with no HUD. Mirrors what docker/onboard.txt does by script: mark
+        // chargen finished (which also opens the replication gate), re-enable the control switches
+        // the intro turned off, and re-allow the GUI windows a new game starts with disallowed.
+        setGlobalInt(Globals::sCharGenState, -1);
+        MWBase::InputManager& input = *MWBase::Environment::get().getInputManager();
+        for (const auto sw :
+            { "playercontrols", "playerfighting", "playerjumping", "playerlooking", "playermagic",
+                "playerviewswitch" })
+            input.toggleControlSwitch(sw, true);
+        MWBase::WindowManager& windows = *MWBase::Environment::get().getWindowManager();
+        windows.allow(MWGui::GW_ALL);
+        windows.enableRest();
         return true;
     }
 
