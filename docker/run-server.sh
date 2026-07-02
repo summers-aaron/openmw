@@ -66,6 +66,7 @@ echo "Starting dedicated server '$NAME' on port $LISTEN (Ctrl+C to stop)..."
 echo "Interactive console: type 'help' for commands (save / players / stop / script commands)."
 # -i keeps stdin attached so the in-process server console receives what you type.
 exec "$MP_RUNTIME" run --rm -i --name "$NAME" --network host --security-opt label=disable \
+    -e OPENMW_DEBUG_LEVEL="${OPENMW_DEBUG_LEVEL:-INFO}" \
     -e LIBGL_ALWAYS_SOFTWARE=1 -e GALLIUM_DRIVER=llvmpipe -e SDL_VIDEODRIVER=offscreen -e EGL_PLATFORM=surfaceless \
     -v "$REPO:/openmw:Z" "${MP_DATA_MOUNTS[@]}" -v "$MP_CFG:/root/.config/openmw" -v "$MP_USERDATA:/userdata" \
     ${MP_SAVE_MOUNT[@]+"${MP_SAVE_MOUNT[@]}"} \

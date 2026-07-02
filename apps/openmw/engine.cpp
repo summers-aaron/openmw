@@ -511,9 +511,9 @@ void OMW::Engine::pumpTransport()
     // continuous and lets them dead-reckon between snapshots instead of sliding under an idle pose.
     mReplicator->driveRemoteActors();
 
-    // Verbose-only replication throughput (off by default), throttled to ~once per 300 ticks
-    // but always logged on any tick that carried Lua events or with peers connected.
-    if (delta.mTick % 300 == 0 || !outgoingEvents.empty() || mSession->peerCount() > 0)
+    // Verbose-only replication heartbeat, strictly throttled to ~once per 300 ticks. (It used to
+    // log every tick while peers were connected — that drowns the server's interactive console.)
+    if (delta.mTick % 300 == 0)
         Log(Debug::Verbose) << "Replication tick " << delta.mTick << " [" << mSession->peerCount()
                             << " peer(s)]: sent " << delta.mEntities.size() << " changed-entity delta(s) [recv "
                             << receivedEntities << ", applied " << appliedEntities << "], "

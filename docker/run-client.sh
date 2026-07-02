@@ -76,6 +76,7 @@ fi
 
 echo "Connecting client '$NAME' to $SERVER (gpu=$MP_GPU) — a window will open, ~20-40s to load..."
 exec "$MP_RUNTIME" run --rm --name "$NAME" --network host --security-opt label=disable \
+    -e OPENMW_DEBUG_LEVEL="${OPENMW_DEBUG_LEVEL:-INFO}" \
     "${MP_RENDER[@]}" \
     -v "$REPO:/openmw:Z" "${MP_DATA_MOUNTS[@]}" -v "$MP_CFG:/root/.config/openmw" -v "$MP_USERDATA:/userdata" \
     ${MP_SAVE_MOUNT[@]+"${MP_SAVE_MOUNT[@]}"} ${onboard_mount[@]+"${onboard_mount[@]}"} \
