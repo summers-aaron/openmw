@@ -181,6 +181,23 @@ namespace MWBase
         /// Remove a non-primary player by index (index 0, the primary player, cannot be removed).
         virtual void removePlayer(std::size_t index) = 0;
 
+        /// Take a non-primary player out of the world without destroying it (its client
+        /// disconnected): removed from the scene/physics/AI and no longer keeps cells alive, but
+        /// the slot keeps the character's last known state — it still persists to saves and can be
+        /// served/unparked when the player reconnects.
+        virtual void parkPlayer(std::size_t index) = 0;
+
+        /// Bring a parked non-primary player back into the world at its stored cell/position.
+        virtual void unparkPlayer(std::size_t index) = 0;
+
+        /// False while a non-primary player is parked (its client is disconnected).
+        virtual bool isPlayerActive(std::size_t index) const = 0;
+
+        /// Overwrite a non-primary player slot with an uploaded character sheet (a REC_PLAY blob), so
+        /// the server's stored/served copy carries the client's real stats/skills/inventory instead of
+        /// the placeholder built from its avatar appearance. Re-instantiates the slot in the scene.
+        virtual bool applyNetworkCharacter(std::size_t index, const std::string& recordBlob) = 0;
+
         /// Mint a unique RefNum for a host-spawned summoned creature, in a reserved content file so it
         /// never collides with a client's locally-generated refs (which a normal generated RefNum,
         /// counting down from -1, would share). Monotonic index; never reused.

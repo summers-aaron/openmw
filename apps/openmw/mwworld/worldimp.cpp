@@ -3739,6 +3739,62 @@ namespace MWWorld
         return mPlayers.get(index).isActive();
     }
 
+    bool World::applyNetworkCharacter(std::size_t index, const std::string& recordBlob)
+    {
+        // A client uploaded its full character sheet; overwrite its host-side puppet slot with it so
+        // the server's stored/served copy carries the real stats/skills/inventory rather than the
+        // placeholder built from the avatar's appearance. The slot's ref is rebuilt by readRecord, so
+        // take it out of the scene first and re-instantiate afterwards (like park -> unpark).
+        if (index == MWWorld::Players::sPrimaryIndex || index >= mPlayers.size())
+            return false;
+        MWWorld::Player& player = mPlayers.get(index);
+        const MWWorld::Ptr before = player.getPlayer();
+        const bool wasInScene = before.isInCell()
+            && mWorldScene->getActiveCells().find(before.getCell()) != mWorldScene->getActiveCells().end();
+        if (wasInScene)
+            mWorldScene->removeObjectFromScene(before);
+        MWBase::Environment::get().getLuaManager()->removePlayer(before);
+
+        try
+        {
+            ESM::ESMReader reader;
+            reader.open(std::make_unique<std::istringstream>(recordBlob), "<uploaded character>");
+            bool applied = false;
+            while (reader.hasMoreRecs())
+            {
+                const ESM::NAME name = reader.getRecName();
+                reader.getRecHeader();
+                if (name.toInt() == ESM::REC_PLAY)
+                {
+                    player.readRecord(reader, ESM::REC_PLAY);
+                    applied = true;
+                    break;
+                }
+                reader.skipRecord();
+            }
+            if (!applied)
+                return false;
+        }
+        catch (const std::exception& e)
+        {
+            Log(Debug::Error) << "applyNetworkCharacter: could not apply uploaded character: " << e.what();
+            return false;
+        }
+
+        const MWWorld::Ptr after = player.getPlayer();
+        after.getRefData().setRemoteOwned(true); // a client-driven puppet, not locally simulated
+        if (after.isInCell())
+        {
+            mWorldScene->addExtraPlayer(after);
+            mWorldScene->addObjectToScene(after);
+        }
+        MWBase::Environment::get().getLuaManager()->addPlayer(after);
+        Log(Debug::Info) << "applyNetworkCharacter: slot " << index << " now Strength="
+                         << after.getClass().getCreatureStats(after).getAttribute(ESM::Attribute::Strength).getBase()
+                         << " maxHealth=" << after.getClass().getCreatureStats(after).getHealth().getModified();
+        return true;
+    }
+
     bool World::adoptNetworkCharacter(const std::string& recordBlob)
     {
         // Apply a server-supplied REC_PLAY record over the primary player, then re-instantiate the

@@ -273,6 +273,10 @@ namespace MWNet
         /// avatar on the client's first snapshot.
         void bindAvatar(const ESM::RefNum& netId, const MWWorld::Ptr& avatar);
 
+        /// The avatar bound to a network id (present and in a cell), or an empty Ptr. Host-side: used
+        /// to route a client's uploaded character sheet to its puppet slot.
+        MWWorld::Ptr boundAvatar(const ESM::RefNum& netId) const { return findLiveAvatar(netId); }
+
         /// Host: a client disconnected — release its avatar binding, forget its per-entity
         /// replication state, and broadcast a despawn so every client deletes its cosmetic copy.
         /// Returns the avatar Ptr that was bound (empty if none), so the caller can park the

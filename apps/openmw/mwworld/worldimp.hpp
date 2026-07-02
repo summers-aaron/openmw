@@ -265,6 +265,7 @@ namespace MWWorld
         void parkPlayer(std::size_t index) override;
         void unparkPlayer(std::size_t index) override;
         bool isPlayerActive(std::size_t index) const override;
+        bool applyNetworkCharacter(std::size_t index, const std::string& recordBlob) override;
         ESM::RefNum reserveNetworkSummonRefNum() override;
         // Mark this World as belonging to a dedicated server (no local human player), so the navmesh
         // follows the network avatars rather than the stationary primary placeholder.

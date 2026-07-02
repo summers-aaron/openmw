@@ -390,6 +390,34 @@ void OMW::Engine::handleControlMessage(MWNet::PeerId from, const MWNet::ControlM
             sendControl(from, MWNet::LoginAccept{ peerIt->second });
             Log(Debug::Info) << "Peer " << from << " is creating a new character";
         }
+        else if (const auto* upload = std::get_if<MWNet::CharacterData>(&message))
+        {
+            // A client uploaded its full character sheet: apply it to its bound puppet slot so our
+            // stored/served copy carries its real stats/skills/inventory, not the appearance placeholder.
+            const auto peerIt = mPeerNetIds.find(from);
+            if (peerIt == mPeerNetIds.end())
+                return;
+            // The client re-uploads periodically; skip the (ref-rebuilding) apply when the sheet is
+            // unchanged, so an idle character costs nothing beyond the wire bytes.
+            std::string& last = mUploadedBlobs[peerIt->second];
+            if (last == upload->mBlob)
+                return;
+            const MWWorld::Ptr avatar = mReplicator->boundAvatar(peerIt->second);
+            if (avatar.isEmpty())
+                return; // its puppet isn't instantiated yet — the client re-uploads until it is
+            last = upload->mBlob;
+            MWBase::World& world = *MWBase::Environment::get().getWorld();
+            for (std::size_t i = 1; i < world.getPlayerCount(); ++i)
+                if (world.getPlayerPtr(i) == avatar)
+                {
+                    if (world.applyNetworkCharacter(i, upload->mBlob))
+                    {
+                        mReplicator->bindAvatar(peerIt->second, world.getPlayerPtr(i)); // re-bind (ref rebuilt)
+                        Log(Debug::Info) << "Applied uploaded character to slot " << i << " (peer " << from << ")";
+                    }
+                    break;
+                }
+        }
     }
     else
     {
@@ -477,6 +505,7 @@ void OMW::Engine::pumpTransport()
     // or creates it once from a clean state. So the replication machinery (which needs a running
     // world/player) only runs in-game; the handshake itself runs regardless of game state.
     const bool inGame = mStateManager->getState() == MWBase::StateManager::State_Running;
+    ++mPumpTick;
 
     // Reliable channel carries payload kinds distinguished by a leading byte: M10 Lua events,
     // client-reported combat actions, and the login / character-selection handshake. (Unreliable is
@@ -536,6 +565,28 @@ void OMW::Engine::pumpTransport()
             MWBase::Environment::get().getMechanicsManager()->setPlayerName(mPlayerName);
             mPlayerNameApplied = true;
             Log(Debug::Info) << "Named the character after the login identity '" << mPlayerName << "'";
+        }
+
+        // Upload our full character sheet to the host so its stored/served copy carries our real
+        // stats/skills/inventory rather than the appearance-only placeholder puppet it builds from
+        // snapshots. Sent when the character finalizes and re-sent at a low interval afterwards: a
+        // retry (the first upload can arrive before the host has instantiated our puppet) and so
+        // in-session progression (levels, loot) reaches the server's save. Character sheets change
+        // rarely, so once every ~few seconds is negligible traffic.
+        constexpr unsigned sCharacterUploadInterval = 300;
+        if (mReplicator->isLocalPlayerReady() && mSession->receivesAuthoritativeState()
+            && (!mCharacterUploaded || mPumpTick % sCharacterUploadInterval == 0))
+        {
+            MWBase::World& world = *MWBase::Environment::get().getWorld();
+            if (world.getPlayerCount() > 0 && world.getPlayerPtr(0).isInCell())
+            {
+                ESM::Player record;
+                world.getPlayer(0).buildEsmPlayer(record);
+                sendControl(MWNet::sLocalPeer,
+                    MWNet::CharacterData{ 0, MWNet::serializeCharacter(record, world.getContentFiles()) });
+                mCharacterUploaded = true;
+                Log(Debug::Info) << "Uploaded character sheet to the server";
+            }
         }
 
         // Post-tick transform delta on the Unreliable (latest-wins) channel.

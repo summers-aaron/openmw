@@ -167,10 +167,13 @@ namespace OMW
         bool mChoosingCharacter = false; // client: the select UI is up, waiting for a button press
         bool mCreatingNewCharacter = false; // client: chose to create a new character (not resume one)
         bool mPendingNewGame = false; // client: start a new game at the end of the pump (deferred, safe)
+        bool mCharacterUploaded = false; // client: has the full character sheet been sent to the server
+        unsigned mPumpTick = 0; // pumpTransport call counter (drives low-frequency periodic work)
         int mAutoCharacter = -1; // client: roster id to auto-select, skipping the UI (--character)
         std::map<std::string, ESM::RefNum> mLoginNetIds; // host: username -> stable network id
         std::uint32_t mNextLoginId = 1; // host: next network id to hand out (0 is the host)
         std::map<MWNet::PeerId, ESM::RefNum> mPeerNetIds; // host: connected peer -> its login net id
+        std::map<ESM::RefNum, std::string> mUploadedBlobs; // host: last character sheet applied per net id
         MWBase::Environment mEnvironment;
         ToUTF8::FromType mEncoding;
         std::unique_ptr<ToUTF8::Utf8Encoder> mEncoder;
