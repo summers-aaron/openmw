@@ -308,20 +308,24 @@ void OMW::Engine::enterSelectLobby()
     if (mStateManager->getState() != MWBase::StateManager::State_Running)
         return; // start failed; StateManager already surfaced the error and returned to the menu
 
-    // Pin the view to a fixed scenic vantage: teleport the local player into that exterior cell so it
-    // streams in, then hold the camera there in Static mode. The pose was captured from a live client
-    // (yaw/pitch are negated relative to the openmw.camera Lua getters used to log them).
+    // Pin the view to a fixed scenic vantage by placing the local player there in first person, facing
+    // the captured direction. Deliberately NOT a Static (detached) camera: a Static camera leaves a
+    // dangling scene node when the chosen character's newGame tears this world down (a null-deref on a
+    // real GPU), whereas a normal first-person tracking camera is released cleanly — exactly as
+    // starting a New Game from an ordinary in-game session is. First person also hides the body, so the
+    // backdrop reads as a bare camera. (yaw/pitch are negated relative to the openmw.camera Lua getters
+    // used to log the pose.)
     const osg::Vec3d eye(-11586.8, -72834.5, 225.9);
     ESM::Position pos{};
     pos.pos[0] = static_cast<float>(eye.x());
     pos.pos[1] = static_cast<float>(eye.y());
     pos.pos[2] = static_cast<float>(eye.z());
+    pos.rot[2] = 3.131f; // yaw (body facing)
     const ESM::ExteriorCellLocation loc = ESM::positionToExteriorCellLocation(pos.pos[0], pos.pos[1]);
     MWBase::Environment::get().getWorld()->changeToCell(ESM::RefId::esm3ExteriorCell(loc.mX, loc.mY), pos, true);
 
     MWRender::Camera* camera = MWBase::Environment::get().getWorldRendering()->getCamera();
-    camera->setMode(MWRender::Camera::Mode::Static);
-    camera->setStaticPosition(eye);
+    camera->setMode(MWRender::Camera::Mode::FirstPerson, /*force=*/true);
     camera->setYaw(3.131f);
     camera->setPitch(0.296f);
 
