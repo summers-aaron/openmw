@@ -44,6 +44,8 @@
 #include <components/version/version.hpp>
 
 #include <components/esm/generatedrefid.hpp>
+#include <components/esm/position.hpp>
+#include <components/esm/util.hpp>
 #include <components/esm3/loadnpc.hpp>
 #include <components/esm3/player.hpp>
 #include <components/esm3/savedgame.hpp>
@@ -82,6 +84,7 @@
 #include "mwworld/datetimemanager.hpp"
 #include "mwworld/worldimp.hpp"
 
+#include "mwrender/camera.hpp"
 #include "mwrender/vismask.hpp"
 
 #include "mwclass/classes.hpp"
@@ -92,6 +95,8 @@
 
 #include "mwmechanics/creaturestats.hpp"
 #include "mwmechanics/mechanicsmanagerimp.hpp"
+
+#include "mwbase/worldrendering.hpp"
 
 #include "mwnet/actions.hpp"
 #include "mwnet/charactercodec.hpp"
@@ -293,6 +298,47 @@ void OMW::Engine::sendControl(MWNet::PeerId to, const MWNet::ControlMessage& mes
     mSession->sendTo(to, MWNet::Message{ MWNet::Channel::Reliable, std::move(payload) });
 }
 
+void OMW::Engine::enterSelectLobby()
+{
+    // A bypass new-game gives a rendered world without the chargen intro. The lobby player is held
+    // out of the replication stream (not ready) so nothing about it reaches the server: a purely
+    // local backdrop that the chosen character's clean loadGame/newGame then replaces.
+    mReplicator->setLocalPlayerReady(false);
+    mStateManager->newGame(true); // bypass = skip the intro cutscene
+    if (mStateManager->getState() != MWBase::StateManager::State_Running)
+        return; // start failed; StateManager already surfaced the error and returned to the menu
+
+    // Pin the view to a fixed scenic vantage: teleport the local player into that exterior cell so it
+    // streams in, then hold the camera there in Static mode. The pose was captured from a live client
+    // (yaw/pitch are negated relative to the openmw.camera Lua getters used to log them).
+    const osg::Vec3d eye(-11586.8, -72834.5, 225.9);
+    ESM::Position pos{};
+    pos.pos[0] = static_cast<float>(eye.x());
+    pos.pos[1] = static_cast<float>(eye.y());
+    pos.pos[2] = static_cast<float>(eye.z());
+    const ESM::ExteriorCellLocation loc = ESM::positionToExteriorCellLocation(pos.pos[0], pos.pos[1]);
+    MWBase::Environment::get().getWorld()->changeToCell(ESM::RefId::esm3ExteriorCell(loc.mX, loc.mY), pos, true);
+
+    MWRender::Camera* camera = MWBase::Environment::get().getWorldRendering()->getCamera();
+    camera->setMode(MWRender::Camera::Mode::Static);
+    camera->setStaticPosition(eye);
+    camera->setYaw(3.131f);
+    camera->setPitch(0.296f);
+
+    // Open the select UI over the backdrop, or auto-claim the slot for scripted/headless runs.
+    if (mAutoCharacter >= 0)
+    {
+        sendControl(MWNet::sLocalPeer, MWNet::SelectCharacter{ static_cast<std::uint32_t>(mAutoCharacter) });
+        Log(Debug::Info) << "Auto-selecting character slot " << mAutoCharacter;
+    }
+    else
+    {
+        MWBase::Environment::get().getWindowManager()->interactiveMessageBox(
+            "Choose your character:", mCharacterButtons);
+        mChoosingCharacter = true;
+    }
+}
+
 void OMW::Engine::handleControlMessage(MWNet::PeerId from, const MWNet::ControlMessage& message)
 {
     if (mSession->isAuthority())
@@ -447,63 +493,45 @@ void OMW::Engine::handleControlMessage(MWNet::PeerId from, const MWNet::ControlM
                 sendControl(MWNet::sLocalPeer, MWNet::CreateNew{});
                 Log(Debug::Info) << "No characters on this server yet; creating a new one.";
             }
-            else if (mAutoCharacter >= 0)
-            {
-                // --character: scripted/headless runs skip the UI and claim the given slot.
-                sendControl(MWNet::sLocalPeer, MWNet::SelectCharacter{ static_cast<std::uint32_t>(mAutoCharacter) });
-                Log(Debug::Info) << "Auto-selecting character slot " << mAutoCharacter;
-            }
             else
             {
-                std::string text = "Choose your character:";
-                std::vector<std::string> buttons;
+                // Stash the roster and bring up a live scenic backdrop for the select screen. The UI
+                // is opened over that world once it is up (or the slot is auto-claimed for scripted
+                // --character runs) — deferred to a safe point (mPendingLobby), since starting a game
+                // mid message-dispatch crashes.
                 mCharacterChoices.clear();
+                mCharacterButtons.clear();
                 for (const MWNet::CharacterInfo& info : list->mCharacters)
                 {
-                    buttons.push_back(info.mName + " (level " + std::to_string(info.mLevel)
+                    mCharacterButtons.push_back(info.mName + " (level " + std::to_string(info.mLevel)
                         + (info.mCell.empty() ? std::string() : ", " + info.mCell) + ")");
                     mCharacterChoices.push_back(info.mId);
                 }
-                buttons.push_back("New character");
-                MWBase::Environment::get().getWindowManager()->interactiveMessageBox(text, buttons);
-                mChoosingCharacter = true;
+                mCharacterButtons.push_back("New character");
+                mPendingLobby = true;
             }
         }
         else if (const auto* character = std::get_if<MWNet::CharacterData>(&message))
         {
-            // The server sent our character as a loadable mini-save. Write it out and load it through
-            // the real StateManager path — a full teardown + rebuild — so we end up controlling a
-            // first-class local player (input/camera/HUD all bound), exactly as a normal
-            // --load-savegame connect does. requestLoad defers the actual load to a safe point in the
-            // frame (loading mid-network-pump can crash). The replication gate is opened here: the id
-            // is set moments later by LoginAccept, and appendLocalPlayer no-ops until the load lands.
-            const std::filesystem::path path = mCfgMgr.getUserDataPath() / "network-character.omwsave";
-            try
-            {
-                std::ofstream out(path, std::ios::binary);
-                out.write(character->mBlob.data(), static_cast<std::streamsize>(character->mBlob.size()));
-                out.close();
-                if (!out)
-                    throw std::runtime_error("write failed");
-                mStateManager->requestLoad(nullptr, path);
-                mReplicator->setLocalPlayerReady(true);
-                Log(Debug::Info) << "Loading served character (slot " << character->mId << ") from " << path;
-            }
-            catch (const std::exception& e)
-            {
-                Log(Debug::Error) << "Failed to stage served character (slot " << character->mId
-                                  << "): " << e.what();
-            }
+            // The server sent our chosen character. The select-screen backdrop is already a running
+            // local game, so we adopt the character IN PLACE over that player rather than loading a
+            // second game on top (a new-game-then-load double-init segfaults). Adopt mirrors the
+            // create-new "leave the intro and join" hand-off: it re-points the primary player at the
+            // served record, rebinds input/camera/HUD, and opens the replication gate. Deferred to a
+            // safe point (adopt rebuilds the scene; doing it mid message-dispatch crashes).
+            mPendingAdoptBlob = character->mBlob;
+            Log(Debug::Info) << "Adopting served character (slot " << character->mId << ")";
         }
         else if (const auto* accept = std::get_if<MWNet::LoginAccept>(&message))
         {
             mReplicator->setLocalPlayerNetId(accept->mNetId);
             Log(Debug::Info) << "Logged in; adopted network id " << accept->mNetId.mIndex;
-            // Creating a new character: request a fresh game (chargen). Deferred to the end of the
-            // pump (like a load) so we don't tear down/rebuild game state mid message-dispatch. This
-            // is the client's single, clean game start — a resumed character comes in via
-            // CharacterData -> loadGame instead.
-            if (mCreatingNewCharacter && mStateManager->getState() != MWBase::StateManager::State_Running)
+            // Creating a new character: start the chargen intro. Deferred to the end of the pump (like
+            // a load) so we don't tear down/rebuild game state mid message-dispatch. newGame cleans up
+            // first, so this also replaces the select-screen backdrop (a bypass new-game) when the
+            // player chose "New character" from the roster. A resumed character comes in via
+            // CharacterData -> adopt instead.
+            if (mCreatingNewCharacter)
                 mPendingNewGame = true;
         }
         else if (const auto* reject = std::get_if<MWNet::LoginReject>(&message))
@@ -742,6 +770,14 @@ void OMW::Engine::pumpTransport()
     if (inGame)
         mReplicator->driveRemoteActors();
 
+    // Deferred backdrop for the character-select screen (safe here: message dispatch is done). Brings
+    // up a scenic world and opens the select UI over it.
+    if (mPendingLobby && mStateManager->getState() == MWBase::StateManager::State_NoGame)
+    {
+        mPendingLobby = false;
+        enterSelectLobby();
+    }
+
     // Deferred new-game for a client that chose to create a character (safe here: message dispatch is
     // done). Its single, clean game start; the onboard script (if any) runs just as it would have at
     // the initial start.
@@ -752,6 +788,19 @@ void OMW::Engine::pumpTransport()
         mStateManager->newGame(false);
         if (!mStartupScript.empty() && mStateManager->getState() == MWBase::StateManager::State_Running)
             mWindowManager->executeInConsole(mStartupScript);
+    }
+
+    // Deferred adopt of a resumed character over the running select-screen backdrop (safe here:
+    // message dispatch is done). No second game load — the primary player is re-pointed at the served
+    // record in place, then the replication gate opens so this client drives its avatar.
+    if (!mPendingAdoptBlob.empty())
+    {
+        const std::string blob = std::move(mPendingAdoptBlob);
+        mPendingAdoptBlob.clear();
+        if (MWBase::Environment::get().getWorld()->adoptNetworkCharacter(blob))
+            mReplicator->setLocalPlayerReady(true);
+        else
+            Log(Debug::Error) << "Failed to adopt served character";
     }
 
     // Verbose-only replication heartbeat, strictly throttled to ~once per 300 ticks.

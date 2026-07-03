@@ -165,6 +165,9 @@ namespace OMW
         bool mLoginSent = false; // client: has the LoginRequest been sent yet
         bool mPlayerNameApplied = false; // client: has the login name been stamped onto a new character
         std::vector<std::uint32_t> mCharacterChoices; // client: slot ids behind the open select UI's buttons
+        std::vector<std::string> mCharacterButtons; // client: select UI button labels (stashed for the lobby)
+        bool mPendingLobby = false; // client: bring up the select-screen backdrop world at the next safe point
+        std::string mPendingAdoptBlob; // client: served character to adopt in-place at the next safe point (empty = none)
         bool mChoosingCharacter = false; // client: the select UI is up, waiting for a button press
         bool mCreatingNewCharacter = false; // client: chose to create a new character (not resume one)
         bool mPendingNewGame = false; // client: start a new game at the end of the pump (deferred, safe)
@@ -245,6 +248,12 @@ namespace OMW
         /// Drain and dispatch lines typed into the dedicated server's terminal console:
         /// save/stop/players/help are built-ins; anything else runs as a console script command.
         void processServerConsole();
+
+        /// Client: bring up a live "lobby" world as a scenic backdrop for the character-select screen,
+        /// then open the select UI over it. A bypass new-game gives a rendered scene; the local player
+        /// is teleported to a fixed cell and the camera is pinned there in Static mode. Held out of the
+        /// replication stream (not ready) so the lobby is purely local until a character is chosen.
+        void enterSelectLobby();
 
         bool frame(unsigned frameNumber, float dt);
 

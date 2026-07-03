@@ -3811,13 +3811,24 @@ namespace MWWorld
             {
                 const ESM::NAME name = reader.getRecName();
                 reader.getRecHeader();
-                if (name.toInt() == ESM::REC_PLAY)
+                if (name.toInt() == ESM::REC_NPC_)
+                {
+                    // The character's dynamic base NPC record (its real name/appearance) rides ahead
+                    // of the player, as in a real save. Insert it so the REC_PLAY below re-points the
+                    // player at it instead of reverting to the stock "player" record.
+                    ESM::NPC npc;
+                    bool isDeleted = false;
+                    npc.load(reader, isDeleted);
+                    getStore().overrideRecord(npc);
+                }
+                else if (name.toInt() == ESM::REC_PLAY)
                 {
                     mPlayers.primary().readRecord(reader, ESM::REC_PLAY);
                     applied = true;
                     break;
                 }
-                reader.skipRecord();
+                else
+                    reader.skipRecord();
             }
             if (!applied)
                 return false;
