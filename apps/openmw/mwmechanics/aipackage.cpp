@@ -420,6 +420,10 @@ bool MWMechanics::AiPackage::isNearInactiveCell(const MWWorld::ConstPtr& actor, 
     float nearestSqr = std::numeric_limits<float>::max();
     for (std::size_t i = 0; i < world->getPlayerCount(); ++i)
     {
+        // A parked player (its client disconnected) no longer keeps cells alive, so it
+        // cannot anchor the loaded-grid check either.
+        if (!world->isPlayerActive(i))
+            continue;
         const MWWorld::Ptr player = world->getPlayerPtr(i);
         if (!player.isInCell() || player.getCell()->getCell()->getWorldSpace() != worldspace)
             continue;

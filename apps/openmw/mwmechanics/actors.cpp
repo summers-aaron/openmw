@@ -266,6 +266,35 @@ namespace MWMechanics
             return (distanceToNextPathPoint - package.getNextPathPointTolerance(speed, duration, halfExtents)) / speed;
         }
 
+        // Nearest player to the given actor — the primary player or any network player.
+        // Only players in the actor's worldspace count: distances across worldspaces are
+        // meaningless. Parked slots (disconnected peers) keep a cell/position but have no
+        // presence in the scene, so they must not draw reactions — skip them. May return
+        // an empty Ptr (no active player shares the actor's worldspace).
+        MWWorld::Ptr getNearestPlayer(const MWWorld::Ptr& actor)
+        {
+            MWBase::World* const world = MWBase::Environment::get().getWorld();
+            const osg::Vec3f actorPos = actor.getRefData().getPosition().asVec3();
+            const ESM::RefId worldspace = actor.getCell()->getCell()->getWorldSpace();
+            MWWorld::Ptr nearest;
+            float nearestDistSqr = std::numeric_limits<float>::max();
+            for (std::size_t i = 0; i < world->getPlayerCount(); ++i)
+            {
+                if (!world->isPlayerActive(i))
+                    continue;
+                const MWWorld::Ptr player = world->getPlayerPtr(i);
+                if (!player.isInCell() || player.getCell()->getCell()->getWorldSpace() != worldspace)
+                    continue;
+                const float distSqr = (player.getRefData().getPosition().asVec3() - actorPos).length2();
+                if (distSqr < nearestDistSqr)
+                {
+                    nearestDistSqr = distSqr;
+                    nearest = player;
+                }
+            }
+            return nearest;
+        }
+
         void updateHeadTracking(const MWWorld::Ptr& actor, const MWWorld::Ptr& targetActor,
             MWWorld::Ptr& headTrackTarget, float& sqrHeadTrackDistance, bool inCombatOrPursue)
         {
@@ -420,7 +449,8 @@ namespace MWMechanics
 
     void Actors::playIdleDialogue(const MWWorld::Ptr& actor) const
     {
-        if (!actor.getClass().isActor() || actor == getPlayer()
+        MWBase::World* const world = MWBase::Environment::get().getWorld();
+        if (!actor.getClass().isActor() || world->isPlayer(actor)
             || MWBase::Environment::get().getSoundManager()->sayActive(actor))
             return;
 
@@ -432,9 +462,13 @@ namespace MWMechanics
         if (seq.isInCombat() || seq.hasPackage(AiPackageTypeId::Follow) || seq.hasPackage(AiPackageTypeId::Escort))
             return;
 
-        const osg::Vec3f playerPos(getPlayer().getRefData().getPosition().asVec3());
+        // Idle chatter plays for whichever player is closest, not just the primary one.
+        const MWWorld::Ptr player = getNearestPlayer(actor);
+        if (player.isEmpty())
+            return;
+
+        const osg::Vec3f playerPos(player.getRefData().getPosition().asVec3());
         const osg::Vec3f actorPos(actor.getRefData().getPosition().asVec3());
-        MWBase::World* const world = MWBase::Environment::get().getWorld();
         if (world->isSwimming(actor) || (playerPos - actorPos).length2() >= 3000 * 3000)
             return;
 
@@ -444,7 +478,7 @@ namespace MWMechanics
         static const float fVoiceIdleOdds
             = world->getStore().get<ESM::GameSetting>().find("fVoiceIdleOdds")->mValue.getFloat();
         if (Misc::Rng::rollProbability(world->getPrng()) * 10000.f < fVoiceIdleOdds * delta
-            && world->getLOS(getPlayer(), actor))
+            && world->getLOS(player, actor))
             MWBase::Environment::get().getDialogueManager()->say(actor, ESM::RefId::stringRefId("idle"));
     }
 
@@ -476,15 +510,16 @@ namespace MWMechanics
 
     void Actors::updateGreetingState(const MWWorld::Ptr& actor, Actor& actorState, bool turnOnly)
     {
+        MWBase::World* const world = MWBase::Environment::get().getWorld();
         const auto& actorClass = actor.getClass();
-        if (!actorClass.isActor() || actor == getPlayer())
+        if (!actorClass.isActor() || world->isPlayer(actor))
             return;
 
         const CreatureStats& actorStats = actorClass.getCreatureStats(actor);
         const MWMechanics::AiSequence& seq = actorStats.getAiSequence();
         const auto packageId = seq.getTypeId();
 
-        if (seq.isInCombat() || MWBase::Environment::get().getWorld()->isSwimming(actor)
+        if (seq.isInCombat() || world->isSwimming(actor)
             || (packageId != AiPackageTypeId::Wander && packageId != AiPackageTypeId::Travel
                 && packageId != AiPackageTypeId::None))
         {
@@ -514,7 +549,7 @@ namespace MWMechanics
         if (turnOnly)
             return;
 
-        // Play a random voice greeting if the player gets too close
+        // Play a random voice greeting if a player gets too close
         const auto& gmst = MWBase::Environment::get().getESMStore()->get<ESM::GameSetting>();
         static const int iGreetDistanceMultiplier = gmst.find("iGreetDistanceMultiplier")->mValue.getInteger();
         static const int iGreetDuration = gmst.find("iGreetDuration")->mValue.getInteger();
@@ -523,7 +558,15 @@ namespace MWMechanics
         const float helloDistance
             = static_cast<float>(actorStats.getAiSetting(AiSetting::Hello).getModified() * iGreetDistanceMultiplier);
 
-        const MWWorld::Ptr player = getPlayer();
+        // Greet whichever player is nearest — the primary player or a network player.
+        const MWWorld::Ptr player = getNearestPlayer(actor);
+        if (player.isEmpty())
+        {
+            actorState.setTurningToPlayer(false);
+            actorState.setGreetingTimer(0);
+            actorState.setGreetingState(GreetingState::None);
+            return;
+        }
         const osg::Vec3f playerPos(player.getRefData().getPosition().asVec3());
         const osg::Vec3f actorPos(actor.getRefData().getPosition().asVec3());
         const osg::Vec3f dir = playerPos - actorPos;
@@ -534,7 +577,7 @@ namespace MWMechanics
         {
             const CreatureStats& playerStats = player.getClass().getCreatureStats(player);
             if (distSquared <= helloDistance * helloDistance && !playerStats.isDead() && !actorStats.isParalyzed()
-                && !isTargetMagicallyHidden(player) && MWBase::Environment::get().getWorld()->getLOS(player, actor)
+                && !isTargetMagicallyHidden(player) && world->getLOS(player, actor)
                 && MWBase::Environment::get().getMechanicsManager()->awarenessCheck(player, actor))
                 greetingTimer++;
 
@@ -1362,7 +1405,6 @@ namespace MWMechanics
         const float maxTimeToCheck = 2.0f;
         const bool giveWayWhenIdle = Settings::game().mNPCsGiveWay;
 
-        const MWWorld::Ptr player = getPlayer();
         const MWBase::World* const world = MWBase::Environment::get().getWorld();
 
         struct CacheEntry
@@ -1387,8 +1429,12 @@ namespace MWMechanics
         for (const CacheEntry& cached : cache)
         {
             const MWWorld::Ptr& ptr = cached.mPtr;
-            if (ptr == player)
-                continue; // Don't interfere with player controls.
+            // Don't interfere with player controls — any player's, not just the primary
+            // one's — nor with remote-owned actors, whose motion is replicated from the
+            // owning peer and would fight a locally computed correction. They still
+            // remain in the cache above so others give way to them.
+            if (world->isPlayer(ptr) || ptr.getRefData().isRemoteOwned())
+                continue;
 
             const float maxSpeed = cached.mMaxSpeed;
             if (maxSpeed == 0.0)
@@ -1550,11 +1596,14 @@ namespace MWMechanics
             const osg::Vec3f playerPos = player.getRefData().getPosition().asVec3();
 
             // Actors are processed within range of any player, not just the primary one.
+            // Parked slots (disconnected peers) keep their last position but are not in the
+            // scene, so they must not keep actors around it simulated.
             std::vector<osg::Vec3f> playerPositions;
             playerPositions.reserve(world->getPlayerCount());
             playerPositions.push_back(playerPos);
             for (std::size_t i = 1; i < world->getPlayerCount(); ++i)
-                playerPositions.push_back(world->getPlayerPtr(i).getRefData().getPosition().asVec3());
+                if (world->isPlayerActive(i))
+                    playerPositions.push_back(world->getPlayerPtr(i).getRefData().getPosition().asVec3());
 
             /// \todo move update logic to Actor class where appropriate
 
@@ -1583,7 +1632,23 @@ namespace MWMechanics
                 // actor jitters. In single-player nothing is ever flagged remote-owned, so this
                 // is byte-identical.
                 if (actor.getPtr().getRefData().isRemoteOwned())
+                {
+                    // Head-tracking is the exception: it is cosmetic, never leaves this machine,
+                    // and is not carried by snapshots. Run it locally so host-driven NPCs still
+                    // glance at nearby actors (including the local player), and so player avatars
+                    // do not stand eyes-front on everyone else's screen.
+                    if (aiActive && mTimerUpdateHeadTrack == 0
+                        && !actor.getPtr().getClass().getCreatureStats(actor.getPtr()).isDead())
+                    {
+                        const osg::Vec3f actorPos = actor.getPtr().getRefData().getPosition().asVec3();
+                        float distSqr = (playerPositions[0] - actorPos).length2();
+                        for (std::size_t i = 1; i < playerPositions.size(); ++i)
+                            distSqr = std::min(distSqr, (playerPositions[i] - actorPos).length2());
+                        if (distSqr <= actorsProcessingRange * actorsProcessingRange)
+                            updateHeadTracking(actor.getPtr(), mActors, false, actor.getCharacterController());
+                    }
                     continue;
+                }
                 const bool isPlayer = actor.getPtr() == player;
                 CharacterController& ctrl = actor.getCharacterController();
                 MWBase::LuaManager::ActorControls* luaControls
