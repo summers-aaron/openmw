@@ -19,6 +19,10 @@ namespace MWDialogue
 
         bool isThere(const ESM::RefId& topicId, const ESM::RefId& infoId = ESM::RefId()) const;
 
+        void addStampedEntry(const ESM::RefId& id, StampedJournalEntry&& entry);
+        ///< Shared tail of addEntry/addNetworkEntry: advance the quest (restarting same-name
+        /// quests as needed), store the entry, and show the new-entry popup.
+
     public:
         Journal();
 
@@ -36,6 +40,9 @@ namespace MWDialogue
 
         void setJournalIndex(const ESM::RefId& id, int index) override;
         ///< Set the journal index without adding an entry.
+
+        void addNetworkEntry(const ESM::JournalEntry& record, int index) override;
+        ///< Multiplayer: add a pre-rendered entry from the shared world journal (see MWBase).
 
         int getJournalIndex(const ESM::RefId& id) const override;
         ///< Get the journal index.

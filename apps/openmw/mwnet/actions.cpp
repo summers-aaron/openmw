@@ -6,7 +6,7 @@ namespace MWNet
 {
     namespace
     {
-        constexpr std::uint8_t sVersion = 10;
+        constexpr std::uint8_t sVersion = 11;
         // Smallest encoded CombatHit: attacker RefNum (4+4) + victim RefNum (4+4) + damage
         // (float, 4) + health-damage flag (1).
         constexpr std::uint32_t sMinHitBytes = 21;
@@ -40,6 +40,10 @@ namespace MWNet
         constexpr std::uint32_t sMinArrestBytes = 16;
         // Smallest encoded CombatRequest: instigator RefNum (4 + 4) + target RefNum (4 + 4).
         constexpr std::uint32_t sMinCombatRequestBytes = 16;
+        // Smallest encoded JournalDelta: zero-length topic (4) + index (4) + zero-length info id
+        // (4) + zero-length text (4) + zero-length actor name (4) + 3 date ints (12) + origin
+        // RefNum (4 + 4).
+        constexpr std::uint32_t sMinJournalDeltaBytes = 40;
 
         void writeContainerItem(ByteWriter& writer, const ContainerItem& item)
         {
@@ -173,6 +177,20 @@ namespace MWNet
             writer.write(request.mInstigator.mContentFile);
             writer.write(request.mTarget.mIndex);
             writer.write(request.mTarget.mContentFile);
+        }
+        writer.write(static_cast<std::uint32_t>(batch.mJournalDeltas.size()));
+        for (const JournalDelta& delta : batch.mJournalDeltas)
+        {
+            writer.writeString(delta.mTopic);
+            writer.write(delta.mIndex);
+            writer.writeString(delta.mInfoId);
+            writer.writeString(delta.mText);
+            writer.writeString(delta.mActorName);
+            writer.write(delta.mDay);
+            writer.write(delta.mMonth);
+            writer.write(delta.mDayOfMonth);
+            writer.write(delta.mOrigin.mIndex);
+            writer.write(delta.mOrigin.mContentFile);
         }
         return out;
     }
@@ -408,6 +426,23 @@ namespace MWNet
                 || !reader.read(request.mTarget.mIndex) || !reader.read(request.mTarget.mContentFile))
                 return std::nullopt;
             batch.mCombatRequests.push_back(request);
+        }
+
+        std::uint32_t journalCount = 0;
+        if (!reader.read(journalCount))
+            return std::nullopt;
+        if (journalCount > reader.remaining() / sMinJournalDeltaBytes)
+            return std::nullopt;
+        batch.mJournalDeltas.reserve(journalCount);
+        for (std::uint32_t i = 0; i < journalCount; ++i)
+        {
+            JournalDelta delta;
+            if (!reader.readString(delta.mTopic) || !reader.read(delta.mIndex) || !reader.readString(delta.mInfoId)
+                || !reader.readString(delta.mText) || !reader.readString(delta.mActorName) || !reader.read(delta.mDay)
+                || !reader.read(delta.mMonth) || !reader.read(delta.mDayOfMonth) || !reader.read(delta.mOrigin.mIndex)
+                || !reader.read(delta.mOrigin.mContentFile))
+                return std::nullopt;
+            batch.mJournalDeltas.push_back(std::move(delta));
         }
         return batch;
     }

@@ -16,6 +16,8 @@
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
 
+#include "../mwnet/replicator.hpp"
+
 namespace MWDialogue
 {
     Quest& Journal::getOrStartQuest(const ESM::RefId& id)
@@ -95,6 +97,44 @@ namespace MWDialogue
 
         StampedJournalEntry entry = StampedJournalEntry::makeFromQuest(id, index, actor);
 
+        // Multiplayer: the journal is shared co-op world state — report the RENDERED entry (the
+        // acting NPC is usually unresolvable on other machines, so its substituted text must
+        // cross as-is) for the host to apply to the world journal and relay to every peer.
+        // Echoes coming back are deduplicated by the (topic, infoId) scan above.
+        if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+            replicator != nullptr && replicator->isNetworked() && !replicator->isApplyingRemote())
+        {
+            ESM::JournalEntry record;
+            record.mType = ESM::JournalEntry::Type_Journal;
+            entry.write(record);
+            replicator->reportJournalEntry(id, index, record);
+        }
+
+        addStampedEntry(id, std::move(entry));
+    }
+
+    void Journal::addNetworkEntry(const ESM::JournalEntry& record, int index)
+    {
+        // Same dedup as addEntry: if the entry is already here, at most raise the index.
+        for (const JournalEntry& entry : mJournal)
+            if (entry.mTopic == record.mTopic && entry.mInfoId == record.mInfo)
+            {
+                if (getJournalIndex(record.mTopic) < index)
+                {
+                    setJournalIndex(record.mTopic, index);
+                    MWBase::Environment::get().getWindowManager()->messageBox("#{sJournalEntry}");
+                }
+                return;
+            }
+
+        // Store the pre-rendered entry as-is (like readRecord does for a save's REC_JOUR), but
+        // run it through the same quest bookkeeping as a locally added entry — index adjustment,
+        // same-name restarts, Lua questUpdated, and the new-entry popup.
+        addStampedEntry(record.mTopic, StampedJournalEntry(record));
+    }
+
+    void Journal::addStampedEntry(const ESM::RefId& id, StampedJournalEntry&& entry)
+    {
         Quest& quest = getOrStartQuest(id);
         if (quest.addEntry(entry)) // we are doing slicing on purpose here
         {
@@ -120,6 +160,12 @@ namespace MWDialogue
         Quest& quest = getOrStartQuest(id);
 
         quest.setIndex(index);
+
+        // Multiplayer: index-only changes are shared co-op state like full entries. Receivers
+        // apply skip-if-equal, so echoes are harmless.
+        if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+            replicator != nullptr && replicator->isNetworked() && !replicator->isApplyingRemote())
+            replicator->reportJournalIndex(id, index);
     }
 
     void Journal::addTopic(const ESM::RefId& topicId, const ESM::RefId& infoId, const MWWorld::Ptr& actor)

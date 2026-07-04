@@ -168,6 +168,7 @@ namespace OMW
         std::vector<std::string> mCharacterButtons; // client: select UI button labels (stashed for the lobby)
         bool mPendingLobby = false; // client: bring up the select-screen backdrop world at the next safe point
         std::string mPendingAdoptBlob; // client: served character to adopt in-place at the next safe point (empty = none)
+        std::string mPendingWorldJournal; // client: shared world journal to merge once chargen finishes (new character)
         bool mChoosingCharacter = false; // client: the select UI is up, waiting for a button press
         bool mCreatingNewCharacter = false; // client: chose to create a new character (not resume one)
         bool mDebugCharacter = false; // client: TEMPORARY — the new character is the pre-kitted debug drop-in

@@ -21,6 +21,8 @@ namespace MWNet
             messages.push_back(CharacterData{ 3, std::string("\0\1\2binary blob\0", 15) });
             messages.push_back(LoginAccept{ ESM::RefNum{ 5, -1000 } }); // -1000 = the net-player content file
             messages.push_back(LoginReject{ "content files do not match the server" });
+            messages.push_back(WorldJournal{ std::string("\0REC_QUES binary journal\0", 25) });
+            messages.push_back(WorldJournal{ "" }); // fresh world, empty journal
             return messages;
         }
 

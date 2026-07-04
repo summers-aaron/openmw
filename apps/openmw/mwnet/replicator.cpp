@@ -11,6 +11,7 @@
 #include <components/debug/debuglog.hpp>
 #include <components/esm/generatedrefid.hpp>
 #include <components/esm/refid.hpp>
+#include <components/esm3/journalentry.hpp>
 #include <components/esm3/loadcrea.hpp>
 #include <components/esm3/loadench.hpp>
 #include <components/esm3/loadgmst.hpp>
@@ -24,6 +25,7 @@
 #include <components/vfs/pathutil.hpp>
 
 #include "../mwbase/environment.hpp"
+#include "../mwbase/journal.hpp"
 #include "../mwbase/mechanicsmanager.hpp"
 #include "../mwbase/soundmanager.hpp"
 #include "../mwbase/guimode.hpp"
@@ -506,8 +508,13 @@ namespace MWNet
         mOutgoingSummons.clear();
         mOutgoingContainerChanges.clear();
         mOutgoingRevokes.clear();
+        mOutgoingJournalDeltas.clear();
         mDirtyContainers.clear();
         mPendingSpeechSubtitle.reset();
+        // The quest-index record is DERIVED from the Journal singleton (the durable source, which
+        // save load replaces) — drop it and let the next re-assert re-seed from the new journal.
+        mAuthoritativeQuestIndices.clear();
+        mQuestIndicesSeeded = false;
         // Deliberately kept: mAppearances (peers' body identities, so their avatars rebuild
         // immediately), mLocalPlayerNetId / mLocalPlayerReady (the login identity outlives the
         // world), and the item/container/summon session records (mRemovedWorldItems,
@@ -2008,6 +2015,7 @@ namespace MWNet
         batch.mContainerChanges = std::move(mOutgoingContainerChanges); // client -> host take/put requests
         batch.mContainerRevokes = std::move(mOutgoingRevokes); // host -> client over-take corrections
         batch.mSummons = std::move(mOutgoingSummons); // client -> host summon spawn/despawn requests
+        batch.mJournalDeltas = std::move(mOutgoingJournalDeltas); // both ways: shared-journal changes
         mOutgoingHits.clear();
         mOutgoingPlayerDamages.clear();
         mOutgoingBounties.clear();
@@ -2020,6 +2028,33 @@ namespace MWNet
         mOutgoingContainerChanges.clear();
         mOutgoingRevokes.clear();
         mOutgoingSummons.clear();
+        mOutgoingJournalDeltas.clear();
+
+        // Host: periodically re-assert the world journal's quest indices, so a peer that joined
+        // late (or whose deltas fell into the chargen bubble) converges. Index-only deltas;
+        // receivers skip-if-equal, so a converged world stays silent. Seeded lazily from the live
+        // journal — the durable copy the server save carries — so quest state predating this
+        // process still reaches clients.
+        if (mIsAuthority && (mTick % sReplicationRefreshInterval) == 0)
+        {
+            if (!mQuestIndicesSeeded)
+            {
+                mQuestIndicesSeeded = true;
+                for (const auto& [topic, quest] : MWBase::Environment::get().getJournal()->getQuests())
+                {
+                    std::int32_t& known = mAuthoritativeQuestIndices[topic];
+                    known = std::max(known, static_cast<std::int32_t>(quest.getIndex()));
+                }
+            }
+            for (const auto& [topic, index] : mAuthoritativeQuestIndices)
+            {
+                JournalDelta delta;
+                delta.mTopic = topic.serializeText();
+                delta.mIndex = index;
+                delta.mOrigin = mLocalPlayerNetId;
+                batch.mJournalDeltas.push_back(std::move(delta));
+            }
+        }
 
         // Host: periodically re-assert every changed lootable so a peer that arrived after a loot is
         // brought up to date, and so a container whose cell unloaded-and-reloaded (rolling it back to
@@ -2436,6 +2471,118 @@ namespace MWNet
             else
                 soundMgr.playSound3D(osg::Vec3f(sound.mPosition[0], sound.mPosition[1], sound.mPosition[2]), soundId,
                     sound.mVolume, sound.mPitch);
+        }
+    }
+
+    void Replicator::reportJournalEntry(const ESM::RefId& topic, int index, const ESM::JournalEntry& record)
+    {
+        // Off the network the journal is purely local; while applying received state the write is
+        // an echo, not news (the journal hook also checks isApplyingRemote, but double-guarding
+        // here keeps every caller safe).
+        if (!isNetworked() || isApplyingRemote())
+            return;
+        JournalDelta delta;
+        delta.mTopic = topic.serializeText();
+        delta.mIndex = index;
+        delta.mInfoId = record.mInfo.serializeText();
+        delta.mText = record.mText;
+        delta.mActorName = record.mActorName;
+        delta.mDay = record.mDay;
+        delta.mMonth = record.mMonth;
+        delta.mDayOfMonth = record.mDayOfMonth;
+        delta.mOrigin = mLocalPlayerNetId;
+        if (mIsAuthority)
+        {
+            std::int32_t& known = mAuthoritativeQuestIndices[topic];
+            known = std::max(known, delta.mIndex);
+        }
+        mOutgoingJournalDeltas.push_back(std::move(delta));
+    }
+
+    void Replicator::reportJournalIndex(const ESM::RefId& topic, int index)
+    {
+        if (!isNetworked() || isApplyingRemote())
+            return;
+        JournalDelta delta;
+        delta.mTopic = topic.serializeText();
+        delta.mIndex = index;
+        delta.mOrigin = mLocalPlayerNetId;
+        if (mIsAuthority)
+            mAuthoritativeQuestIndices[topic] = index;
+        mOutgoingJournalDeltas.push_back(std::move(delta));
+    }
+
+    namespace
+    {
+        // Apply one received journal delta to the live world journal. Guarded against hostile or
+        // mismatched data: Quest::addEntry / Quest::setIndex throw on a topic/info the content
+        // files don't know, and a dropped delta must never take the process down.
+        void applyOneJournalDelta(const JournalDelta& delta)
+        {
+            MWBase::Journal& journal = *MWBase::Environment::get().getJournal();
+            const ESM::RefId topic = ESM::RefId::deserializeText(delta.mTopic);
+            try
+            {
+                if (delta.mInfoId.empty())
+                {
+                    // Index-only: skip-if-equal — Quest::setIndex fires Lua questUpdated
+                    // unconditionally, so blindly re-applying periodic re-asserts would spam it.
+                    if (journal.getJournalIndex(topic) != delta.mIndex)
+                        journal.setJournalIndex(topic, delta.mIndex);
+                }
+                else
+                {
+                    ESM::JournalEntry record;
+                    record.mType = ESM::JournalEntry::Type_Journal;
+                    record.mTopic = topic;
+                    record.mInfo = ESM::RefId::deserializeText(delta.mInfoId);
+                    record.mText = delta.mText;
+                    record.mActorName = delta.mActorName;
+                    record.mDay = delta.mDay;
+                    record.mMonth = delta.mMonth;
+                    record.mDayOfMonth = delta.mDayOfMonth;
+                    journal.addNetworkEntry(record, delta.mIndex);
+                }
+            }
+            catch (const std::exception& e)
+            {
+                Log(Debug::Warning) << "Dropped journal delta for '" << delta.mTopic << "': " << e.what();
+            }
+        }
+    }
+
+    void Replicator::applyJournalReports(const ActionBatch& batch)
+    {
+        if (batch.mJournalDeltas.empty())
+            return;
+        for (const JournalDelta& delta : batch.mJournalDeltas)
+        {
+            {
+                RemoteApplyScope scope(this);
+                applyOneJournalDelta(delta);
+            }
+            // Record the quest's authoritative index (max: co-op progress only moves forward
+            // across concurrent reports) and relay the delta onward verbatim — origin preserved,
+            // so the reporting peer skips its own echo while everyone else applies it.
+            const ESM::RefId topic = ESM::RefId::deserializeText(delta.mTopic);
+            std::int32_t& known = mAuthoritativeQuestIndices[topic];
+            known = std::max(known, delta.mIndex);
+            mOutgoingJournalDeltas.push_back(delta);
+        }
+    }
+
+    void Replicator::applyJournalDeltas(const ActionBatch& batch)
+    {
+        if (batch.mJournalDeltas.empty())
+            return;
+        for (const JournalDelta& delta : batch.mJournalDeltas)
+        {
+            // Our own report echoed back by the host's rebroadcast: already applied locally when
+            // it was written (and the journal's (topic, infoId) dedup would no-op it anyway).
+            if (delta.mOrigin.isSet() && delta.mOrigin == mLocalPlayerNetId)
+                continue;
+            RemoteApplyScope scope(this);
+            applyOneJournalDelta(delta);
         }
     }
 

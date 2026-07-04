@@ -21,6 +21,7 @@
 namespace ESM
 {
     class RefId;
+    struct JournalEntry;
 }
 
 namespace MWRender
@@ -163,6 +164,19 @@ namespace MWNet
         // Depth of nested LocalSoundScope guards: while > 0, sounds are animation-driven and every
         // peer produces them locally, so reportWorldSound must not replicate them.
         int mLocalSoundDepth = 0;
+        // Both ways: shared-journal changes awaiting send (a client reports its quest progress up;
+        // the host applies authoritatively and relays to every peer).
+        std::vector<JournalDelta> mOutgoingJournalDeltas;
+        // Host only: the world journal's quest indices, periodically re-asserted (index-only
+        // deltas; receivers skip-if-equal) so late joiners and drift converge. Derived from the
+        // live Journal singleton — cleared on world teardown and lazily re-seeded from the journal
+        // the next world loads (the journal, persisted in the server save, is the durable source).
+        std::map<ESM::RefId, std::int32_t> mAuthoritativeQuestIndices;
+        bool mQuestIndicesSeeded = false;
+        // Depth of nested RemoteApplyScope guards: while > 0, this peer is applying received
+        // authoritative state, so the world-state report hooks (journal, and the later globals /
+        // enable-disable / script channels) must not re-report what they observe.
+        int mRemoteApplyDepth = 0;
         // Host only: arrests (a guard caught a player's avatar) awaiting send to that player's client.
         std::vector<ArrestRequest> mOutgoingArrests;
         // Client only: requests for the host to put a host-owned actor into combat with our player
@@ -428,6 +442,53 @@ namespace MWNet
         /// skipping sounds this peer itself originated (the host rebroadcasts to everyone). With
         /// relay (host only), forward each applied sound onward to the other clients verbatim.
         void applyWorldSounds(const ActionBatch& batch, bool relay);
+
+        /// RAII scope marking that this peer is applying received authoritative world state
+        /// (journal deltas — and later globals, ref enable/disable, script runs). The world-state
+        /// report hooks no-op while it is alive, so applying a delta can never re-report it and
+        /// loop it back onto the wire. The single echo/re-entrancy guard for every state channel.
+        class [[nodiscard]] RemoteApplyScope
+        {
+            Replicator* mReplicator;
+
+        public:
+            explicit RemoteApplyScope(Replicator* replicator)
+                : mReplicator(replicator)
+            {
+                if (mReplicator != nullptr)
+                    ++mReplicator->mRemoteApplyDepth;
+            }
+            ~RemoteApplyScope()
+            {
+                if (mReplicator != nullptr)
+                    --mReplicator->mRemoteApplyDepth;
+            }
+            RemoteApplyScope(const RemoteApplyScope&) = delete;
+            RemoteApplyScope& operator=(const RemoteApplyScope&) = delete;
+        };
+
+        /// Whether this peer is currently applying received authoritative state (see
+        /// RemoteApplyScope). World-state report hooks must check this before reporting.
+        bool isApplyingRemote() const { return mRemoteApplyDepth > 0; }
+
+        /// Report a journal entry added locally (the shared co-op journal: any player's quest
+        /// progress advances the world journal for everyone). record is the RENDERED entry —
+        /// exactly what a save would write — so every peer stores identical text. Queued for the
+        /// host to apply authoritatively (from a client) or broadcast (from the host).
+        void reportJournalEntry(const ESM::RefId& topic, int index, const ESM::JournalEntry& record);
+
+        /// Report an index-only journal change (SetJournalIndex).
+        void reportJournalIndex(const ESM::RefId& topic, int index);
+
+        /// Apply journal deltas reported by clients (host only): apply each to the world journal
+        /// under a RemoteApplyScope, record its quest index, and relay it onward verbatim (origin
+        /// preserved, so the reporting peer skips its own echo).
+        void applyJournalReports(const ActionBatch& batch);
+
+        /// Apply broadcast journal deltas (client only): skip our own echoes, then apply to the
+        /// local journal under a RemoteApplyScope. Index-only deltas are skipped when the index
+        /// already matches (a blind re-assert would spam Lua questUpdated handlers).
+        void applyJournalDeltas(const ActionBatch& batch);
 
         /// Report (from a client) that this peer dropped an item into the shared world, for the
         /// host to place authoritatively and replicate back to everyone. cellId is the serialized

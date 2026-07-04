@@ -21,6 +21,7 @@ namespace ESM
 {
     class ESMReader;
     class ESMWriter;
+    struct JournalEntry;
 }
 
 namespace MWBase
@@ -57,6 +58,12 @@ namespace MWBase
 
         virtual void setJournalIndex(const ESM::RefId& id, int index) = 0;
         ///< Set the journal index without adding an entry.
+
+        virtual void addNetworkEntry(const ESM::JournalEntry& record, int index) = 0;
+        ///< Multiplayer: add an entry received from the shared co-op world journal. The entry
+        /// arrives pre-rendered (its text was substituted on the originating machine, whose
+        /// acting NPC is usually unresolvable here), so it is stored as-is — exactly like a
+        /// save's REC_JOUR record. Deduplicated by (topic, infoId) like addEntry.
 
         virtual int getJournalIndex(const ESM::RefId& id) const = 0;
         ///< Get the journal index.

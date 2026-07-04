@@ -3,12 +3,15 @@
 #include <memory>
 #include <sstream>
 
+#include <components/debug/debuglog.hpp>
 #include <components/esm/defs.hpp>
 #include <components/esm3/esmreader.hpp>
 #include <components/esm3/esmwriter.hpp>
 #include <components/esm3/formatversion.hpp>
+#include <components/esm3/journalentry.hpp>
 #include <components/esm3/loadnpc.hpp>
 #include <components/esm3/player.hpp>
+#include <components/esm3/queststate.hpp>
 #include <components/esm3/savedgame.hpp>
 #include <components/loadinglistener/loadinglistener.hpp>
 
@@ -164,6 +167,68 @@ namespace MWNet
             // Malformed blob: leave the fresh empty state rather than something half-restored.
             journal.clear();
             dialogue.clear();
+            return false;
+        }
+    }
+
+    bool mergeJournal(MWBase::Journal& journal, MWBase::DialogueManager& dialogue, const std::string& blob)
+    {
+        try
+        {
+            ESM::ESMReader reader;
+            reader.open(std::make_unique<std::istringstream>(blob), "<network journal>");
+            while (reader.hasMoreRecs())
+            {
+                const ESM::NAME name = reader.getRecName();
+                reader.getRecHeader();
+                switch (name.toInt())
+                {
+                    case ESM::REC_JOUR:
+                    {
+                        // Only the dated journal entries need explicit merging: addNetworkEntry
+                        // dedups by (topic, infoId) and re-runs the quest bookkeeping, which
+                        // regenerates the per-quest (Type_Quest) copies. Topic-history entries
+                        // (Type_Topic) are cosmetic dialogue history — skipped; the known-topic
+                        // SET still merges via REC_DIAS below, so keywords stay available.
+                        ESM::JournalEntry record;
+                        record.load(reader);
+                        if (record.mType == ESM::JournalEntry::Type_Journal)
+                        {
+                            try
+                            {
+                                journal.addNetworkEntry(record, 0);
+                            }
+                            catch (const std::exception& e)
+                            {
+                                Log(Debug::Warning) << "Skipped world-journal entry for '"
+                                                    << record.mTopic << "': " << e.what();
+                            }
+                        }
+                        break;
+                    }
+                    case ESM::REC_QUES:
+                    {
+                        // Raise-only: the world's quest indices lift ours where the world is
+                        // further along, without clobbering anything this character advanced past
+                        // during chargen (in practice chargen quests are its own fresh entries).
+                        ESM::QuestState state;
+                        state.load(reader);
+                        if (state.mState > journal.getJournalIndex(state.mTopic))
+                            journal.setJournalIndex(state.mTopic, state.mState);
+                        break;
+                    }
+                    case ESM::REC_DIAS:
+                        dialogue.readRecord(reader, name.toInt()); // known topics: an additive set
+                        break;
+                    default:
+                        reader.skipRecord();
+                }
+            }
+            return true;
+        }
+        catch (const std::exception& e)
+        {
+            Log(Debug::Error) << "Malformed world-journal blob: " << e.what();
             return false;
         }
     }

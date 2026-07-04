@@ -50,17 +50,27 @@ namespace MWNet
     /// neither copyable nor movable, so it cannot be returned by value.)
     std::unique_ptr<ESM::Player> deserializeCharacter(const std::string& blob);
 
-    /// Serialize the local player's journal — quests and journal entries (REC_QUES / REC_JOUR) plus
-    /// the known dialogue topics (REC_DIAS) — as an opaque record stream, the same records a real
-    /// save writes. Carried inside the character sheet (ESM::Player::mNetJournal): per-character
-    /// state that the replicated world doesn't cover, parked on the server with the character and
-    /// served back on reconnect.
+    /// Serialize a journal — quests and journal entries (REC_QUES / REC_JOUR) plus the known
+    /// dialogue topics (REC_DIAS) — as an opaque record stream, the same records a real save
+    /// writes. Under the shared co-op journal this is the WORLD journal (the host's live
+    /// singleton): served inside every resumed character's sheet (ESM::Player::mNetJournal) and
+    /// via the WorldJournal control message for new characters.
     std::string serializeJournal(const MWBase::Journal& journal, const MWBase::DialogueManager& dialogue,
         const std::vector<std::string>& contentFiles);
 
     /// Restore a serializeJournal blob into the live journal / dialogue managers, replacing their
     /// current contents (clear + read). Returns false (managers left cleared) on malformed input.
     bool restoreJournal(MWBase::Journal& journal, MWBase::DialogueManager& dialogue, const std::string& blob);
+
+    /// Merge a serializeJournal blob ADDITIVELY into the live journal / dialogue managers, unlike
+    /// restoreJournal's replace: journal entries route through the deduplicating
+    /// Journal::addNetworkEntry (which re-runs quest bookkeeping), quest indices only ever raise,
+    /// and known topics union (REC_DIAS reads are additive). Used for a brand-new character
+    /// receiving the shared world journal after chargen, whose own chargen entries must survive.
+    /// Callers on a networked peer should wrap this in a Replicator::RemoteApplyScope so the
+    /// merged entries are not re-reported. Returns false if the blob was malformed (entries
+    /// merged before the malformation stay).
+    bool mergeJournal(MWBase::Journal& journal, MWBase::DialogueManager& dialogue, const std::string& blob);
 }
 
 #endif

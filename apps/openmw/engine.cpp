@@ -486,12 +486,12 @@ void OMW::Engine::handleControlMessage(MWNet::PeerId from, const MWNet::ControlM
             const MWWorld::Ptr stored = world.getPlayerPtr(slot);
             ESM::Player record;
             world.getPlayer(slot).buildEsmPlayer(record);
-            // A parked slot carries its client's last uploaded journal (buildEsmPlayer stamped it).
-            // The absorbed primary character has no per-slot journal: its journal IS the server's
-            // own, loaded from the save — serialize and serve that instead.
-            if (primaryClaim)
-                record.mNetJournal = MWNet::serializeJournal(*MWBase::Environment::get().getJournal(),
-                    *MWBase::Environment::get().getDialogueManager(), world.getContentFiles());
+            // Shared co-op journal: the WORLD journal (the host's live singleton) is authoritative
+            // for every character — serve it in place of whatever per-slot blob the parked
+            // character carried, so a resuming player rejoins the world's quest state rather than
+            // a stale personal snapshot.
+            record.mNetJournal = MWNet::serializeJournal(*MWBase::Environment::get().getJournal(),
+                *MWBase::Environment::get().getDialogueManager(), world.getContentFiles());
             // Serve the character as a loadable mini-save (profile + player), so the client brings it
             // in through the real StateManager::loadGame path (a full teardown + rebuild) rather than
             // a fragile mid-session swap. The profile only needs the content files for loadGame's
@@ -521,9 +521,15 @@ void OMW::Engine::handleControlMessage(MWNet::PeerId from, const MWNet::ControlM
             const auto peerIt = mPeerNetIds.find(from);
             if (peerIt == mPeerNetIds.end())
                 return; // never logged in
-            // Nothing to serve: the client runs character generation and its avatar gets a fresh
-            // slot on its first snapshot (applyAvatarEntity -> addPlayer).
+            // No character to serve: the client runs character generation and its avatar gets a
+            // fresh slot on its first snapshot (applyAvatarEntity -> addPlayer). The shared WORLD
+            // journal still crosses — a new character has no CharacterData to carry it, so it
+            // rides its own control message and is merged client-side once chargen finishes.
             sendControl(from, MWNet::LoginAccept{ peerIt->second });
+            MWBase::World& world = *MWBase::Environment::get().getWorld();
+            sendControl(from,
+                MWNet::WorldJournal{ MWNet::serializeJournal(*MWBase::Environment::get().getJournal(),
+                    *MWBase::Environment::get().getDialogueManager(), world.getContentFiles()) });
             Log(Debug::Info) << "Peer " << from << " is creating a new character";
         }
         else if (const auto* upload = std::get_if<MWNet::CharacterData>(&message))
@@ -621,6 +627,13 @@ void OMW::Engine::handleControlMessage(MWNet::PeerId from, const MWNet::ControlM
             if (mCreatingNewCharacter)
                 mPendingNewGame = true;
         }
+        else if (const auto* worldJournal = std::get_if<MWNet::WorldJournal>(&message))
+        {
+            // The shared world journal for our brand-new character. Deferred (mPendingWorldJournal,
+            // checked each pump): the upcoming newGame wipes the journal, and chargen then writes
+            // this character's own entries — the merge after chargen keeps both.
+            mPendingWorldJournal = worldJournal->mBlob;
+        }
         else if (const auto* reject = std::get_if<MWNet::LoginReject>(&message))
             Log(Debug::Error) << "Login rejected by host: " << reject->mReason;
     }
@@ -697,6 +710,23 @@ void OMW::Engine::pumpTransport()
             Log(Debug::Info) << "Named the character after the login identity '" << mPlayerName << "'";
         }
 
+        // A new character's shared world journal, deferred until chargen finalized (newGame wiped
+        // the journal on the way in, and chargen was still adding this character's own entries).
+        // Merged, not restored: the character keeps its chargen entries — those were reported up
+        // through the normal shared-journal hook — while the world's quest state lifts the rest.
+        if (!mPendingWorldJournal.empty() && mReplicator->isLocalPlayerReady()
+            && mStateManager->getState() == MWBase::StateManager::State_Running)
+        {
+            const std::string blob = std::move(mPendingWorldJournal);
+            mPendingWorldJournal.clear();
+            MWNet::Replicator::RemoteApplyScope scope(mReplicator.get());
+            if (!MWNet::mergeJournal(*MWBase::Environment::get().getJournal(),
+                    *MWBase::Environment::get().getDialogueManager(), blob))
+                Log(Debug::Error) << "Failed to merge the shared world journal";
+            else
+                Log(Debug::Info) << "Merged the shared world journal";
+        }
+
         // Upload our full character sheet to the host so its stored/served copy carries our real
         // stats/skills/inventory rather than the appearance-only placeholder puppet it builds from
         // snapshots. Sent when the character finalizes and re-sent at a low interval afterwards: a
@@ -717,11 +747,9 @@ void OMW::Engine::pumpTransport()
                 // record and clobber the puppet's synthesized (correctly-named) one. Clear it so the
                 // host keeps the puppet's own base record (see Player::readRecord).
                 record.mBaseRecord = ESM::RefId();
-                // The journal (quests, entries, known topics) is per-character state the replicated
-                // world doesn't carry. Ship the live journal with the sheet so the server parks it
-                // with the character and serves it back on reconnect.
-                record.mNetJournal = MWNet::serializeJournal(*MWBase::Environment::get().getJournal(),
-                    *MWBase::Environment::get().getDialogueManager(), world.getContentFiles());
+                // The journal is NOT shipped with the sheet: under the shared co-op journal the
+                // world journal lives on the host (fed live by JournalDelta reports) and is served
+                // from there to every joiner. The mNetJournal field stays empty.
                 sendControl(MWNet::sLocalPeer,
                     MWNet::CharacterData{ 0, MWNet::serializeCharacter(record, world.getContentFiles()) });
                 mCharacterUploaded = true;
@@ -845,6 +873,8 @@ void OMW::Engine::pumpTransport()
                         mReplicator->applyCombatRequests(*actions); // a client's avatar resisted arrest
                         // A client's own-player sounds (casts, swishes): play here and relay onward.
                         mReplicator->applyWorldSounds(*actions, /*relay=*/true);
+                        // A client's quest progress: apply to the world journal, record, relay.
+                        mReplicator->applyJournalReports(*actions);
                     }
                     else if (!chargenBubble) // the bubble also keeps host actions out of the intro cells
                     {
@@ -853,6 +883,7 @@ void OMW::Engine::pumpTransport()
                         mReplicator->applyContainerRevokes(*actions); // drop items we lost a take race for
                         mReplicator->applyNpcSpeech(*actions); // replay voiced lines host NPCs spoke
                         mReplicator->applyWorldSounds(*actions, /*relay=*/false); // replay host one-shot SFX
+                        mReplicator->applyJournalDeltas(*actions); // the shared world journal advanced
                         mReplicator->applyArrests(*actions); // open arrest dialogue a guard triggered
                     }
                     // Authoritative lootable contents flow host -> clients; the host relays them onward.

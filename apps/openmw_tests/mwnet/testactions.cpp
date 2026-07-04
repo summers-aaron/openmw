@@ -195,6 +195,27 @@ namespace MWNet
             EXPECT_EQ(parsed->mCombatRequests[1].mInstigator.mContentFile, 4);
         }
 
+        TEST(MWNetActionsTest, journalDeltasRoundTrip)
+        {
+            ActionBatch batch;
+            // Full rendered entry from a client (origin 3).
+            batch.mJournalDeltas.push_back({ "_mp_quest", 20, "1234567890", "The dreamers are awake.",
+                "Dagoth Gares", 12, 3, 27, ESM::RefNum{ 3, -1000 } });
+            // Index-only re-assert from the host.
+            batch.mJournalDeltas.push_back({ "_mp_quest", 15, "", "", "", 0, 0, 0, ESM::RefNum{ 0, -1000 } });
+            const std::optional<ActionBatch> parsed = deserializeActions(serializeActions(batch));
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(*parsed, batch);
+            ASSERT_EQ(parsed->mJournalDeltas.size(), 2u);
+            EXPECT_EQ(parsed->mJournalDeltas[0].mTopic, "_mp_quest");
+            EXPECT_EQ(parsed->mJournalDeltas[0].mIndex, 20);
+            EXPECT_EQ(parsed->mJournalDeltas[0].mText, "The dreamers are awake.");
+            EXPECT_EQ(parsed->mJournalDeltas[0].mDayOfMonth, 27);
+            EXPECT_EQ(parsed->mJournalDeltas[0].mOrigin, (ESM::RefNum{ 3, -1000 }));
+            EXPECT_TRUE(parsed->mJournalDeltas[1].mInfoId.empty()); // index-only
+            EXPECT_EQ(parsed->mJournalDeltas[1].mIndex, 15);
+        }
+
         TEST(MWNetActionsTest, rejectsEmptyBuffer)
         {
             EXPECT_FALSE(deserializeActions(std::span<const std::byte>{}).has_value());
@@ -210,9 +231,9 @@ namespace MWNet
         TEST(MWNetActionsTest, rejectsImplausibleCount)
         {
             std::vector<std::byte> bytes = serializeActions(ActionBatch{});
-            // version + 13 4-byte 0 counts (hits, playerDamages, drops, taken, containers, changes,
-            // revokes, summons, bounties, speech, sounds, arrests, combatRequests)
-            ASSERT_EQ(bytes.size(), 53u);
+            // version + 14 4-byte 0 counts (hits, playerDamages, drops, taken, containers, changes,
+            // revokes, summons, bounties, speech, sounds, arrests, combatRequests, journalDeltas)
+            ASSERT_EQ(bytes.size(), 57u);
             for (std::size_t i = 0; i < 4; ++i)
                 bytes[1 + i] = std::byte{ 0xff }; // implausible hit count
             EXPECT_FALSE(deserializeActions(bytes).has_value());

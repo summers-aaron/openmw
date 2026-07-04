@@ -85,8 +85,21 @@ namespace MWNet
         friend bool operator==(const LoginReject&, const LoginReject&) = default;
     };
 
+    /// host -> client (after LoginAccept for a NEW character): the shared world journal as an
+    /// opaque blob (the same REC_QUES/REC_JOUR/REC_DIAS records serializeJournal produces). A
+    /// resumed character receives it inside its CharacterData instead; a new character has no
+    /// CharacterData, so the world's quest state — which drives shared world scripts — arrives
+    /// through this and is MERGED into the journal once chargen finishes (the character's own
+    /// chargen entries are kept; they were reported up through the normal shared-journal hook).
+    struct WorldJournal
+    {
+        std::string mBlob;
+
+        friend bool operator==(const WorldJournal&, const WorldJournal&) = default;
+    };
+
     using ControlMessage = std::variant<LoginRequest, CharacterList, SelectCharacter, CreateNew,
-        CharacterData, LoginAccept, LoginReject>;
+        CharacterData, LoginAccept, LoginReject, WorldJournal>;
 
     std::vector<std::byte> serializeControl(const ControlMessage& message);
 

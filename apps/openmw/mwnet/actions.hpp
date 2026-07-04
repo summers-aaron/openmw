@@ -181,6 +181,31 @@ namespace MWNet
         friend bool operator==(const WorldSound&, const WorldSound&) = default;
     };
 
+    /// A shared-journal change. The journal is co-op world state: any player's quest progress
+    /// advances the one world journal for everyone, and content scripts that gate world changes
+    /// on GetJournalIndex converge on every peer. Flows client -> host (a dialogue result script
+    /// or console advanced the quest locally) and host -> clients (authoritative apply, relayed
+    /// onward with the origin preserved so the reporting peer skips its own echo — though the
+    /// journal's (topic, infoId) dedup makes echoes harmless no-ops anyway).
+    /// mInfoId empty => index-only (SetJournalIndex); otherwise the RENDERED entry crosses —
+    /// text is substituted against the acting NPC's locals at add time and that NPC is usually
+    /// unresolvable on other machines, so the receiver stores the text as-is, exactly like a
+    /// save's REC_JOUR record. The originator stamps the in-game date.
+    struct JournalDelta
+    {
+        std::string mTopic; // quest/dialogue RefId, serialized
+        std::int32_t mIndex = 0;
+        std::string mInfoId; // serialized RefId; empty => index-only
+        std::string mText; // pre-rendered entry text
+        std::string mActorName;
+        std::int32_t mDay = 0; // originator's in-game date stamp
+        std::int32_t mMonth = 0;
+        std::int32_t mDayOfMonth = 0;
+        ESM::RefNum mOrigin; // reporting peer's wire id, for echo suppression
+
+        friend bool operator==(const JournalDelta&, const JournalDelta&) = default;
+    };
+
     /// Host -> the owning client: a host guard pursuing that client's avatar for a crime has caught it,
     /// so the client should open the arrest dialogue. The host can't show the client's UI (and opening
     /// it on the host would pull the host's own player into the conversation), so it routes the arrest
@@ -239,13 +264,16 @@ namespace MWNet
         std::vector<ArrestRequest> mArrests;
         // client -> host: make a host-owned actor fight my avatar (resist arrest / scripted aggression).
         std::vector<CombatRequest> mCombatRequests;
+        // both ways: shared-journal changes (client reports its quest progress up; the host
+        // applies authoritatively and relays to every peer).
+        std::vector<JournalDelta> mJournalDeltas;
 
         bool empty() const
         {
             return mHits.empty() && mPlayerDamages.empty() && mDrops.empty() && mItemsTaken.empty()
                 && mContainers.empty() && mContainerChanges.empty() && mContainerRevokes.empty()
                 && mSummons.empty() && mBounties.empty() && mSpeech.empty() && mSounds.empty() && mArrests.empty()
-                && mCombatRequests.empty();
+                && mCombatRequests.empty() && mJournalDeltas.empty();
         }
 
         friend bool operator==(const ActionBatch&, const ActionBatch&) = default;
