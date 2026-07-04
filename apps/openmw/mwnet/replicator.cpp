@@ -13,6 +13,7 @@
 #include <components/esm/refid.hpp>
 #include <components/esm3/journalentry.hpp>
 #include <components/esm3/loadcrea.hpp>
+#include <components/esm3/loadglob.hpp>
 #include <components/esm3/loadench.hpp>
 #include <components/esm3/loadgmst.hpp>
 #include <components/esm3/loadmgef.hpp>
@@ -86,6 +87,8 @@ namespace MWNet
         // Host re-broadcasts full item/container state every this-many ticks so a peer that missed a
         // delta (packet loss, late join) re-converges without waiting for the next real change.
         constexpr std::uint32_t sReplicationRefreshInterval = 300;
+        // Minimum ticks between reports of the SAME global from this peer (see reportGlobal).
+        constexpr std::uint32_t sGlobalReportCooldownTicks = 30;
 
         // A live actor we can sample from / replay onto: present, placed in a cell, and an actor
         // (not a loose item or a stale/deleted Ptr). Guards the many per-actor loops below.
@@ -515,6 +518,13 @@ namespace MWNet
         // save load replaces) — drop it and let the next re-assert re-seed from the new journal.
         mAuthoritativeQuestIndices.clear();
         mQuestIndicesSeeded = false;
+        // Likewise the global overrides derive from the live globals (persisted in the save).
+        mOutgoingGlobalDeltas.clear();
+        mGlobalOverrides.clear();
+        mGlobalsSeeded = false;
+        mGlobalReportTicks.clear();
+        mOutgoingTimeRequests.clear();
+        mTimeSyncPending = false;
         // Deliberately kept: mAppearances (peers' body identities, so their avatars rebuild
         // immediately), mLocalPlayerNetId / mLocalPlayerReady (the login identity outlives the
         // world), and the item/container/summon session records (mRemovedWorldItems,
@@ -2016,6 +2026,8 @@ namespace MWNet
         batch.mContainerRevokes = std::move(mOutgoingRevokes); // host -> client over-take corrections
         batch.mSummons = std::move(mOutgoingSummons); // client -> host summon spawn/despawn requests
         batch.mJournalDeltas = std::move(mOutgoingJournalDeltas); // both ways: shared-journal changes
+        batch.mGlobalDeltas = std::move(mOutgoingGlobalDeltas); // both ways: shared global changes
+        batch.mTimeRequests = std::move(mOutgoingTimeRequests); // client -> host rest/travel time
         mOutgoingHits.clear();
         mOutgoingPlayerDamages.clear();
         mOutgoingBounties.clear();
@@ -2029,6 +2041,68 @@ namespace MWNet
         mOutgoingRevokes.clear();
         mOutgoingSummons.clear();
         mOutgoingJournalDeltas.clear();
+        mOutgoingGlobalDeltas.clear();
+        mOutgoingTimeRequests.clear();
+
+        // Host: broadcast the authoritative game clock — at the periodic cadence to correct the
+        // slow drift of everyone's locally advancing clocks, and immediately after a discontinuous
+        // advance (a rest, a jail term, fast travel) so every peer's sun jumps together.
+        if (mIsAuthority && (mTimeSyncPending || (mTick % sReplicationRefreshInterval) == 0))
+        {
+            mTimeSyncPending = false;
+            MWBase::World& world = *MWBase::Environment::get().getWorld();
+            TimeSync sync;
+            sync.mGameHour = world.getGlobalFloat(MWWorld::Globals::sGameHour);
+            sync.mDay = world.getGlobalInt(MWWorld::Globals::sDay);
+            sync.mMonth = world.getGlobalInt(MWWorld::Globals::sMonth);
+            sync.mYear = world.getGlobalInt(MWWorld::Globals::sYear);
+            sync.mDaysPassed = world.getGlobalInt(MWWorld::Globals::sDaysPassed);
+            sync.mTimeScale = world.getGlobalFloat(MWWorld::Globals::sTimeScale);
+            batch.mTimeSyncs.push_back(sync);
+        }
+
+        // Host: periodically re-assert every changed global (receivers skip-if-equal). Seeded
+        // lazily by diffing the live globals against the content defaults, so quest flags loaded
+        // from the server save reach clients that never see that save.
+        if (mIsAuthority && (mTick % sReplicationRefreshInterval) == 0)
+        {
+            if (!mGlobalsSeeded)
+            {
+                mGlobalsSeeded = true;
+                MWBase::World& world = *MWBase::Environment::get().getWorld();
+                for (const ESM::Global& def : world.getStore().get<ESM::Global>())
+                {
+                    const std::string name = def.mId.serializeText();
+                    if (isUnsyncedGlobal(name))
+                        continue;
+                    const char type = world.getGlobalVariableType(name);
+                    GlobalDelta delta;
+                    delta.mName = name;
+                    delta.mOrigin = mLocalPlayerNetId;
+                    if (type == 'f')
+                    {
+                        const float value = world.getGlobalFloat(name);
+                        if (value == def.mValue.getFloat())
+                            continue;
+                        delta.mType = 'f';
+                        delta.mFloatValue = value;
+                    }
+                    else if (type == 's' || type == 'l')
+                    {
+                        const std::int32_t value = world.getGlobalInt(name);
+                        if (value == def.mValue.getInteger())
+                            continue;
+                        delta.mType = 'i';
+                        delta.mIntValue = value;
+                    }
+                    else
+                        continue;
+                    mGlobalOverrides[name] = std::move(delta);
+                }
+            }
+            for (const auto& [name, delta] : mGlobalOverrides)
+                batch.mGlobalDeltas.push_back(delta);
+        }
 
         // Host: periodically re-assert the world journal's quest indices, so a peer that joined
         // late (or whose deltas fell into the chargen bubble) converges. Index-only deltas;
@@ -2584,6 +2658,125 @@ namespace MWNet
             RemoteApplyScope scope(this);
             applyOneJournalDelta(delta);
         }
+    }
+
+    void Replicator::reportGlobal(std::string_view name, std::uint8_t type, std::int32_t intValue, float floatValue)
+    {
+        if (!isNetworked() || isApplyingRemote() || isUnsyncedGlobal(name))
+            return;
+        std::string key = Misc::StringUtils::lowerCase(name);
+        // Rate-limit per name: a (divergent) client-side script writing a global every frame must
+        // not flood the reliable channel — the host's periodic re-assert settles who wins.
+        std::uint32_t& lastReport = mGlobalReportTicks[key];
+        if (lastReport != 0 && mTick - lastReport < sGlobalReportCooldownTicks)
+            return;
+        lastReport = mTick;
+        GlobalDelta delta;
+        delta.mName = std::move(key);
+        delta.mType = type;
+        delta.mIntValue = intValue;
+        delta.mFloatValue = floatValue;
+        delta.mOrigin = mLocalPlayerNetId;
+        if (mIsAuthority)
+            mGlobalOverrides[delta.mName] = delta;
+        mOutgoingGlobalDeltas.push_back(std::move(delta));
+    }
+
+    namespace
+    {
+        // Apply one received global delta, skip-if-equal (receivers see periodic re-asserts).
+        // Unknown names (mismatched or hostile data) are dropped, never fatal.
+        void applyOneGlobalDelta(const GlobalDelta& delta)
+        {
+            MWBase::World& world = *MWBase::Environment::get().getWorld();
+            const MWWorld::GlobalVariableName name(delta.mName);
+            if (world.getGlobalVariableType(name) == ' ')
+                return; // this content doesn't know the global
+            if (delta.mType == 'f')
+            {
+                if (world.getGlobalFloat(name) != delta.mFloatValue)
+                    world.setGlobalFloat(name, delta.mFloatValue);
+            }
+            else
+            {
+                if (world.getGlobalInt(name) != delta.mIntValue)
+                    world.setGlobalInt(name, delta.mIntValue);
+            }
+        }
+    }
+
+    void Replicator::applyGlobalReports(const ActionBatch& batch)
+    {
+        for (const GlobalDelta& delta : batch.mGlobalDeltas)
+        {
+            // Never accept the excluded families from a peer (time, chargen, per-player crime
+            // state) — a hostile or buggy client must not warp them for the whole server.
+            if (isUnsyncedGlobal(delta.mName))
+                continue;
+            {
+                RemoteApplyScope scope(this);
+                applyOneGlobalDelta(delta);
+            }
+            mGlobalOverrides[delta.mName] = delta;
+            mOutgoingGlobalDeltas.push_back(delta);
+        }
+    }
+
+    void Replicator::applyGlobalDeltas(const ActionBatch& batch)
+    {
+        for (const GlobalDelta& delta : batch.mGlobalDeltas)
+        {
+            if (delta.mOrigin.isSet() && delta.mOrigin == mLocalPlayerNetId)
+                continue; // our own report echoed back — already applied locally
+            if (isUnsyncedGlobal(delta.mName))
+                continue;
+            RemoteApplyScope scope(this);
+            applyOneGlobalDelta(delta);
+        }
+    }
+
+    void Replicator::reportTimeAdvance(float hours)
+    {
+        if (!isNetworkClient())
+            return;
+        mOutgoingTimeRequests.push_back({ hours, mLocalPlayerNetId });
+    }
+
+    void Replicator::applyTimeRequests(const ActionBatch& batch)
+    {
+        if (!mIsAuthority || batch.mTimeRequests.empty())
+            return;
+        MWBase::World& world = *MWBase::Environment::get().getWorld();
+        for (const TimeRequest& request : batch.mTimeRequests)
+        {
+            // Clamp to something sane: a hostile peer must not warp the shared clock years ahead.
+            const float hours = std::clamp(request.mHours, 0.f, 24.f * 31.f);
+            if (hours <= 0.f)
+                continue;
+            // Deliberately NOT under RemoteApplyScope: the advanceTime hook is what marks the
+            // discontinuity so the resulting TimeSync broadcasts to every client this tick (the
+            // hook's client-routing branch is never taken on the authority).
+            world.advanceTime(hours, false);
+        }
+    }
+
+    void Replicator::applyTimeSyncs(const ActionBatch& batch)
+    {
+        if (batch.mTimeSyncs.empty())
+            return;
+        // Only the newest sync matters if several stacked up.
+        const TimeSync& sync = batch.mTimeSyncs.back();
+        MWBase::World& world = *MWBase::Environment::get().getWorld();
+        RemoteApplyScope scope(this);
+        // Through setGlobal*, the DateTimeManager's listen path, so engine time state, the sun,
+        // weather timing and NPC schedules all follow. Date before hour, so a midnight-crossing
+        // sync never renders a transient wrong day.
+        world.setGlobalInt(MWWorld::Globals::sDaysPassed, sync.mDaysPassed);
+        world.setGlobalInt(MWWorld::Globals::sYear, sync.mYear);
+        world.setGlobalInt(MWWorld::Globals::sMonth, sync.mMonth);
+        world.setGlobalInt(MWWorld::Globals::sDay, sync.mDay);
+        world.setGlobalFloat(MWWorld::Globals::sTimeScale, sync.mTimeScale);
+        world.setGlobalFloat(MWWorld::Globals::sGameHour, sync.mGameHour);
     }
 
     bool Replicator::reportArrest(const MWWorld::Ptr& avatar, const MWWorld::Ptr& guard)

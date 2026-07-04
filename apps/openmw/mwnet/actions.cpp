@@ -1,12 +1,14 @@
 #include "actions.hpp"
 
+#include <components/misc/strings/algorithm.hpp>
+
 #include "bytestream.hpp"
 
 namespace MWNet
 {
     namespace
     {
-        constexpr std::uint8_t sVersion = 11;
+        constexpr std::uint8_t sVersion = 12;
         // Smallest encoded CombatHit: attacker RefNum (4+4) + victim RefNum (4+4) + damage
         // (float, 4) + health-damage flag (1).
         constexpr std::uint32_t sMinHitBytes = 21;
@@ -44,6 +46,13 @@ namespace MWNet
         // (4) + zero-length text (4) + zero-length actor name (4) + 3 date ints (12) + origin
         // RefNum (4 + 4).
         constexpr std::uint32_t sMinJournalDeltaBytes = 40;
+        // Smallest encoded GlobalDelta: zero-length name (4) + type (1) + int (4) + float (4) +
+        // origin RefNum (4 + 4).
+        constexpr std::uint32_t sMinGlobalDeltaBytes = 21;
+        // Encoded TimeSync: hour (4) + 4 ints (16) + timescale (4).
+        constexpr std::uint32_t sMinTimeSyncBytes = 24;
+        // Encoded TimeRequest: hours (4) + origin RefNum (4 + 4).
+        constexpr std::uint32_t sMinTimeRequestBytes = 12;
 
         void writeContainerItem(ByteWriter& writer, const ContainerItem& item)
         {
@@ -59,6 +68,26 @@ namespace MWNet
             return reader.readString(item.mRefId) && reader.read(item.mCount) && reader.read(item.mCharge)
                 && reader.read(item.mEnchantCharge) && reader.readString(item.mSoul);
         }
+    }
+
+    bool isUnsyncedGlobal(std::string_view name)
+    {
+        // Lowercased comparison: global names reach the hook in whatever case the script wrote.
+        static const std::string_view unsynced[] = {
+            // The game clock — synced coherently via TimeSync, never per-write.
+            "gamehour", "day", "month", "year", "dayspassed", "timescale",
+            // Gates each client's private chargen bubble; leaking another peer's value would pop
+            // a mid-chargen client into the shared world half-made (or re-open a finished one).
+            "chargenstate",
+            // One player's own dialogue-derived state: crime gold owed to the guard talking to
+            // THEM, their race/vampirism checks. Re-derived per machine, never shared.
+            "pchascrimegold", "pchasgolddiscount", "crimegolddiscount", "crimegoldturnin",
+            "pchasturnin", "pcknownwerewolf", "pcrace", "pcvampire",
+        };
+        for (const std::string_view candidate : unsynced)
+            if (Misc::StringUtils::ciEqual(name, candidate))
+                return true;
+        return false;
     }
 
     std::vector<std::byte> serializeActions(const ActionBatch& batch)
@@ -191,6 +220,33 @@ namespace MWNet
             writer.write(delta.mDayOfMonth);
             writer.write(delta.mOrigin.mIndex);
             writer.write(delta.mOrigin.mContentFile);
+        }
+        writer.write(static_cast<std::uint32_t>(batch.mGlobalDeltas.size()));
+        for (const GlobalDelta& delta : batch.mGlobalDeltas)
+        {
+            writer.writeString(delta.mName);
+            writer.write(delta.mType);
+            writer.write(delta.mIntValue);
+            writer.write(delta.mFloatValue);
+            writer.write(delta.mOrigin.mIndex);
+            writer.write(delta.mOrigin.mContentFile);
+        }
+        writer.write(static_cast<std::uint32_t>(batch.mTimeSyncs.size()));
+        for (const TimeSync& sync : batch.mTimeSyncs)
+        {
+            writer.write(sync.mGameHour);
+            writer.write(sync.mDay);
+            writer.write(sync.mMonth);
+            writer.write(sync.mYear);
+            writer.write(sync.mDaysPassed);
+            writer.write(sync.mTimeScale);
+        }
+        writer.write(static_cast<std::uint32_t>(batch.mTimeRequests.size()));
+        for (const TimeRequest& request : batch.mTimeRequests)
+        {
+            writer.write(request.mHours);
+            writer.write(request.mOrigin.mIndex);
+            writer.write(request.mOrigin.mContentFile);
         }
         return out;
     }
@@ -443,6 +499,52 @@ namespace MWNet
                 || !reader.read(delta.mOrigin.mContentFile))
                 return std::nullopt;
             batch.mJournalDeltas.push_back(std::move(delta));
+        }
+
+        std::uint32_t globalCount = 0;
+        if (!reader.read(globalCount))
+            return std::nullopt;
+        if (globalCount > reader.remaining() / sMinGlobalDeltaBytes)
+            return std::nullopt;
+        batch.mGlobalDeltas.reserve(globalCount);
+        for (std::uint32_t i = 0; i < globalCount; ++i)
+        {
+            GlobalDelta delta;
+            if (!reader.readString(delta.mName) || !reader.read(delta.mType) || !reader.read(delta.mIntValue)
+                || !reader.read(delta.mFloatValue) || !reader.read(delta.mOrigin.mIndex)
+                || !reader.read(delta.mOrigin.mContentFile))
+                return std::nullopt;
+            batch.mGlobalDeltas.push_back(std::move(delta));
+        }
+
+        std::uint32_t timeSyncCount = 0;
+        if (!reader.read(timeSyncCount))
+            return std::nullopt;
+        if (timeSyncCount > reader.remaining() / sMinTimeSyncBytes)
+            return std::nullopt;
+        batch.mTimeSyncs.reserve(timeSyncCount);
+        for (std::uint32_t i = 0; i < timeSyncCount; ++i)
+        {
+            TimeSync sync;
+            if (!reader.read(sync.mGameHour) || !reader.read(sync.mDay) || !reader.read(sync.mMonth)
+                || !reader.read(sync.mYear) || !reader.read(sync.mDaysPassed) || !reader.read(sync.mTimeScale))
+                return std::nullopt;
+            batch.mTimeSyncs.push_back(sync);
+        }
+
+        std::uint32_t timeRequestCount = 0;
+        if (!reader.read(timeRequestCount))
+            return std::nullopt;
+        if (timeRequestCount > reader.remaining() / sMinTimeRequestBytes)
+            return std::nullopt;
+        batch.mTimeRequests.reserve(timeRequestCount);
+        for (std::uint32_t i = 0; i < timeRequestCount; ++i)
+        {
+            TimeRequest request;
+            if (!reader.read(request.mHours) || !reader.read(request.mOrigin.mIndex)
+                || !reader.read(request.mOrigin.mContentFile))
+                return std::nullopt;
+            batch.mTimeRequests.push_back(request);
         }
         return batch;
     }

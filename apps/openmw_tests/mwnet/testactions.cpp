@@ -216,6 +216,44 @@ namespace MWNet
             EXPECT_EQ(parsed->mJournalDeltas[1].mIndex, 15);
         }
 
+        TEST(MWNetActionsTest, globalsAndTimeRoundTrip)
+        {
+            ActionBatch batch;
+            batch.mGlobalDeltas.push_back({ "sixthhouseglobal", 'i', 7, 0.f, ESM::RefNum{ 2, -1000 } });
+            batch.mGlobalDeltas.push_back({ "werewolfclawmult", 'f', 0, 50.f, ESM::RefNum{ 0, -1000 } });
+            batch.mTimeSyncs.push_back({ 13.5f, 16, 8, 427, 42, 30.f });
+            batch.mTimeRequests.push_back({ 8.f, ESM::RefNum{ 2, -1000 } });
+            const std::optional<ActionBatch> parsed = deserializeActions(serializeActions(batch));
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(*parsed, batch);
+            ASSERT_EQ(parsed->mGlobalDeltas.size(), 2u);
+            EXPECT_EQ(parsed->mGlobalDeltas[0].mType, 'i');
+            EXPECT_EQ(parsed->mGlobalDeltas[0].mIntValue, 7);
+            EXPECT_EQ(parsed->mGlobalDeltas[1].mFloatValue, 50.f);
+            ASSERT_EQ(parsed->mTimeSyncs.size(), 1u);
+            EXPECT_EQ(parsed->mTimeSyncs[0].mGameHour, 13.5f);
+            EXPECT_EQ(parsed->mTimeSyncs[0].mDaysPassed, 42);
+            ASSERT_EQ(parsed->mTimeRequests.size(), 1u);
+            EXPECT_EQ(parsed->mTimeRequests[0].mHours, 8.f);
+        }
+
+        TEST(MWNetActionsTest, unsyncedGlobalFamilies)
+        {
+            // The game clock (own TimeSync channel), the chargen gate, and per-player state.
+            EXPECT_TRUE(isUnsyncedGlobal("gamehour"));
+            EXPECT_TRUE(isUnsyncedGlobal("GameHour")); // case-insensitive, like script names
+            EXPECT_TRUE(isUnsyncedGlobal("dayspassed"));
+            EXPECT_TRUE(isUnsyncedGlobal("timescale"));
+            EXPECT_TRUE(isUnsyncedGlobal("chargenstate"));
+            EXPECT_TRUE(isUnsyncedGlobal("pchascrimegold"));
+            EXPECT_TRUE(isUnsyncedGlobal("crimegoldturnin"));
+            EXPECT_TRUE(isUnsyncedGlobal("PCVampire"));
+            // Everything else syncs, including mod globals.
+            EXPECT_FALSE(isUnsyncedGlobal("werewolfclawmult"));
+            EXPECT_FALSE(isUnsyncedGlobal("mymod_progress"));
+            EXPECT_FALSE(isUnsyncedGlobal(""));
+        }
+
         TEST(MWNetActionsTest, rejectsEmptyBuffer)
         {
             EXPECT_FALSE(deserializeActions(std::span<const std::byte>{}).has_value());
@@ -231,9 +269,10 @@ namespace MWNet
         TEST(MWNetActionsTest, rejectsImplausibleCount)
         {
             std::vector<std::byte> bytes = serializeActions(ActionBatch{});
-            // version + 14 4-byte 0 counts (hits, playerDamages, drops, taken, containers, changes,
-            // revokes, summons, bounties, speech, sounds, arrests, combatRequests, journalDeltas)
-            ASSERT_EQ(bytes.size(), 57u);
+            // version + 17 4-byte 0 counts (hits, playerDamages, drops, taken, containers, changes,
+            // revokes, summons, bounties, speech, sounds, arrests, combatRequests, journalDeltas,
+            // globalDeltas, timeSyncs, timeRequests)
+            ASSERT_EQ(bytes.size(), 69u);
             for (std::size_t i = 0; i < 4; ++i)
                 bytes[1 + i] = std::byte{ 0xff }; // implausible hit count
             EXPECT_FALSE(deserializeActions(bytes).has_value());

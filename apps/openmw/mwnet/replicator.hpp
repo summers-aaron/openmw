@@ -177,6 +177,22 @@ namespace MWNet
         // authoritative state, so the world-state report hooks (journal, and the later globals /
         // enable-disable / script channels) must not re-report what they observe.
         int mRemoteApplyDepth = 0;
+        // Both ways: shared global-variable changes awaiting send.
+        std::vector<GlobalDelta> mOutgoingGlobalDeltas;
+        // Host only: globals changed from their content defaults, periodically re-asserted
+        // (receivers skip-if-equal) for late joiners and drift. Seeded lazily by diffing the live
+        // globals against the ESM::Global store defaults, so quest flags loaded from the server
+        // save reach clients. Derived state — cleared on teardown, re-seeded from the next world.
+        std::map<std::string, GlobalDelta, std::less<>> mGlobalOverrides;
+        bool mGlobalsSeeded = false;
+        // Per-name tick of the last global report, bounding flood if a divergent client-side
+        // script writes a global every frame (the host's periodic re-assert settles who wins).
+        std::map<std::string, std::uint32_t, std::less<>> mGlobalReportTicks;
+        // Client -> host: discontinuous time advances (rest/jail/travel) awaiting send.
+        std::vector<TimeRequest> mOutgoingTimeRequests;
+        // Host: a discontinuous advanceTime just ran — broadcast a TimeSync this tick, not at the
+        // next periodic refresh, so every peer's sun jumps together.
+        bool mTimeSyncPending = false;
         // Host only: arrests (a guard caught a player's avatar) awaiting send to that player's client.
         std::vector<ArrestRequest> mOutgoingArrests;
         // Client only: requests for the host to put a host-owned actor into combat with our player
@@ -489,6 +505,35 @@ namespace MWNet
         /// local journal under a RemoteApplyScope. Index-only deltas are skipped when the index
         /// already matches (a blind re-assert would spam Lua questUpdated handlers).
         void applyJournalDeltas(const ActionBatch& batch);
+
+        /// Report a global-variable write (shared co-op state, like the journal). type is the
+        /// setter used ('i' setGlobalInt / 'f' setGlobalFloat). A no-op off the network, while
+        /// applying received state, and for the unsynced families (see isUnsyncedGlobal);
+        /// rate-limited per name against divergent per-frame script writes.
+        void reportGlobal(std::string_view name, std::uint8_t type, std::int32_t intValue, float floatValue);
+
+        /// Apply global deltas reported by clients (host only): apply under a RemoteApplyScope,
+        /// record in the override set, relay onward (origin preserved).
+        void applyGlobalReports(const ActionBatch& batch);
+
+        /// Apply broadcast global deltas (client only): skip our own echoes and no-op values.
+        void applyGlobalDeltas(const ActionBatch& batch);
+
+        /// Route (client only) a discontinuous time advance — a rest step, a jail term, fast
+        /// travel — to the host, which owns the one shared world clock.
+        void reportTimeAdvance(float hours);
+
+        /// Note (host only) that a discontinuous time advance just ran, so the authoritative
+        /// TimeSync goes out this tick rather than at the next periodic refresh.
+        void markTimeDiscontinuity() { mTimeSyncPending = true; }
+
+        /// Apply received time requests (host only): advance the shared clock authoritatively
+        /// (which marks the discontinuity and broadcasts the resulting TimeSync).
+        void applyTimeRequests(const ActionBatch& batch);
+
+        /// Apply the authoritative game clock (client only), through the same setGlobal* path the
+        /// DateTimeManager listens to, so sun, weather timing and schedules follow.
+        void applyTimeSyncs(const ActionBatch& batch);
 
         /// Report (from a client) that this peer dropped an item into the shared world, for the
         /// host to place authoritatively and replicate back to everyone. cellId is the serialized

@@ -567,12 +567,25 @@ namespace MWWorld
 
     void World::setGlobalInt(GlobalVariableName name, int value)
     {
+        // Multiplayer: globals are shared co-op world state (the quest flags scripts branch on).
+        // Report only real changes; the replicator drops the unsynced families (game time — which
+        // has its own TimeSync channel — chargen state, per-player crime globals) and anything
+        // written while applying received state.
+        if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+            replicator != nullptr && replicator->isNetworked() && !replicator->isApplyingRemote()
+            && getGlobalInt(name) != value)
+            replicator->reportGlobal(name.getValue(), 'i', value, static_cast<float>(value));
         mTimeManager->updateGlobalInt(name, value);
         mGlobalVariables[name].setInteger(value);
     }
 
     void World::setGlobalFloat(GlobalVariableName name, float value)
     {
+        // Multiplayer: see setGlobalInt.
+        if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+            replicator != nullptr && replicator->isNetworked() && !replicator->isApplyingRemote()
+            && getGlobalFloat(name) != value)
+            replicator->reportGlobal(name.getValue(), 'f', static_cast<std::int32_t>(value), value);
         mTimeManager->updateGlobalFloat(name, value);
         mGlobalVariables[name].setFloat(value);
     }
@@ -826,6 +839,23 @@ namespace MWWorld
     {
         if (!incremental)
         {
+            // Multiplayer: the shared world has ONE clock. A client's discontinuous advance (a
+            // rest step, a jail term, fast travel) routes to the host — which advances
+            // authoritatively and broadcasts the discontinuity TimeSync — instead of running
+            // locally, where it would fork the sun and NPC schedules until the next sync lurched
+            // them back. The rest's local EFFECTS (healing) still apply on the client. On the
+            // authority, mark the discontinuity so the TimeSync goes out this very tick.
+            if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+                replicator != nullptr && replicator->isNetworked() && !replicator->isApplyingRemote())
+            {
+                if (replicator->isNetworkClient())
+                {
+                    replicator->reportTimeAdvance(static_cast<float>(hours));
+                    return;
+                }
+                replicator->markTimeDiscontinuity();
+            }
+
             // When we fast-forward time, we should recharge magic items
             // in all loaded cells, using game world time
             float duration = static_cast<float>(hours * 3600);

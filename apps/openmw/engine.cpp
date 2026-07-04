@@ -875,6 +875,9 @@ void OMW::Engine::pumpTransport()
                         mReplicator->applyWorldSounds(*actions, /*relay=*/true);
                         // A client's quest progress: apply to the world journal, record, relay.
                         mReplicator->applyJournalReports(*actions);
+                        // A client's global writes and rest/travel time advances, likewise.
+                        mReplicator->applyGlobalReports(*actions);
+                        mReplicator->applyTimeRequests(*actions);
                     }
                     else if (!chargenBubble) // the bubble also keeps host actions out of the intro cells
                     {
@@ -884,6 +887,8 @@ void OMW::Engine::pumpTransport()
                         mReplicator->applyNpcSpeech(*actions); // replay voiced lines host NPCs spoke
                         mReplicator->applyWorldSounds(*actions, /*relay=*/false); // replay host one-shot SFX
                         mReplicator->applyJournalDeltas(*actions); // the shared world journal advanced
+                        mReplicator->applyGlobalDeltas(*actions); // shared globals changed
+                        mReplicator->applyTimeSyncs(*actions); // the authoritative game clock
                         mReplicator->applyArrests(*actions); // open arrest dialogue a guard triggered
                     }
                     // Authoritative lootable contents flow host -> clients; the host relays them onward.

@@ -206,6 +206,58 @@ namespace MWNet
         friend bool operator==(const JournalDelta&, const JournalDelta&) = default;
     };
 
+    /// A shared global-variable change. Globals are co-op world state alongside the journal:
+    /// quest flags scripts branch on must agree on every peer. Flows client -> host (a dialogue
+    /// result or local script wrote it) and host -> clients (authoritative apply + relay, origin
+    /// preserved). The unsynced families — game time (its own TimeSync channel), chargenstate
+    /// (gates each client's private chargen bubble) and the per-player pc*/crime globals — never
+    /// cross; see isUnsyncedGlobal. mType is the SETTER used ('i' via setGlobalInt, 'f' via
+    /// setGlobalFloat); the receiving variant converts to its own storage type either way.
+    struct GlobalDelta
+    {
+        std::string mName; // lowercased global name
+        std::uint8_t mType = 'f';
+        std::int32_t mIntValue = 0;
+        float mFloatValue = 0.f;
+        ESM::RefNum mOrigin;
+
+        friend bool operator==(const GlobalDelta&, const GlobalDelta&) = default;
+    };
+
+    /// Host -> clients: the authoritative game clock. Emitted at a low cadence (each peer's clock
+    /// advances locally between syncs; this corrects drift) and immediately after a discontinuous
+    /// advance (rest, jail, travel), which clients themselves never perform locally — they route a
+    /// TimeRequest instead. Applied through the same setGlobal* path the DateTimeManager listens
+    /// to, so sun position, weather timing and NPC schedules follow.
+    struct TimeSync
+    {
+        float mGameHour = 0.f;
+        std::int32_t mDay = 0;
+        std::int32_t mMonth = 0;
+        std::int32_t mYear = 0;
+        std::int32_t mDaysPassed = 0;
+        float mTimeScale = 1.f;
+
+        friend bool operator==(const TimeSync&, const TimeSync&) = default;
+    };
+
+    /// Client -> host: advance the shared world clock by this many hours (a rest step, a jail
+    /// term, fast travel). The world has ONE clock in co-op — any player's rest advances it for
+    /// everyone — so the client skips its local advance and waits for the discontinuity TimeSync.
+    struct TimeRequest
+    {
+        float mHours = 0.f;
+        ESM::RefNum mOrigin;
+
+        friend bool operator==(const TimeRequest&, const TimeRequest&) = default;
+    };
+
+    /// Should this global stay off the wire? The time family has its own TimeSync channel;
+    /// chargenstate gates each client's private chargen bubble and must never leak between
+    /// peers; the pc*/crime family reflects ONE player's dialogue state (crime gold owed, race
+    /// checks) and is re-derived per machine. Everything else — including mod globals — syncs.
+    bool isUnsyncedGlobal(std::string_view name);
+
     /// Host -> the owning client: a host guard pursuing that client's avatar for a crime has caught it,
     /// so the client should open the arrest dialogue. The host can't show the client's UI (and opening
     /// it on the host would pull the host's own player into the conversation), so it routes the arrest
@@ -267,13 +319,20 @@ namespace MWNet
         // both ways: shared-journal changes (client reports its quest progress up; the host
         // applies authoritatively and relays to every peer).
         std::vector<JournalDelta> mJournalDeltas;
+        // both ways: shared global-variable changes (same flow as journal deltas).
+        std::vector<GlobalDelta> mGlobalDeltas;
+        // host -> clients: the authoritative game clock (at most one meaningful per batch).
+        std::vector<TimeSync> mTimeSyncs;
+        // client -> host: discontinuous time advances (rest/jail/travel) to resolve centrally.
+        std::vector<TimeRequest> mTimeRequests;
 
         bool empty() const
         {
             return mHits.empty() && mPlayerDamages.empty() && mDrops.empty() && mItemsTaken.empty()
                 && mContainers.empty() && mContainerChanges.empty() && mContainerRevokes.empty()
                 && mSummons.empty() && mBounties.empty() && mSpeech.empty() && mSounds.empty() && mArrests.empty()
-                && mCombatRequests.empty() && mJournalDeltas.empty();
+                && mCombatRequests.empty() && mJournalDeltas.empty() && mGlobalDeltas.empty() && mTimeSyncs.empty()
+                && mTimeRequests.empty();
         }
 
         friend bool operator==(const ActionBatch&, const ActionBatch&) = default;
