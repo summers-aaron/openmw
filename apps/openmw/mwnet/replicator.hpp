@@ -257,6 +257,15 @@ namespace MWNet
         void setLocalPlayerReady(bool value) { mLocalPlayerReady = value; }
         bool isLocalPlayerReady() const { return mLocalPlayerReady; }
 
+        /// Drop every reference into — and all per-actor state about — the CURRENT world. Must be
+        /// called whenever the local game is torn down (newGame / loadGame): all of its cells and
+        /// actors die with it, so a held Ptr (an avatar built into the select-lobby backdrop, a
+        /// driven actor's motion entry) would dangle and crash on the next applied snapshot.
+        /// Wire-level session state survives — peer appearances, our net id and readiness, and the
+        /// item/container/summon records that are specifically designed to be re-applied as the
+        /// next world's cells load — so avatars and world changes rebuild from the ongoing stream.
+        void clearWorldState();
+
         /// Client multiplayer-start tick: while the local player isn't ready (still in chargen), watch
         /// for the chargen GUI to close and then finalize the new character (mark chargen done, re-enable
         /// the HUD, allow replication). Pumped every frame from the engine; a no-op once ready, so it

@@ -465,6 +465,56 @@ namespace MWNet
         }
     }
 
+    void Replicator::clearWorldState()
+    {
+        // References into the dying world — the crash source this guards against.
+        mAvatars.clear();
+        mRemoteMotion.clear();
+        // Per-actor sampling/applying state about the old world's actors: rising-edge trackers,
+        // swing/cast/turn latches, hit-reaction baselines, relay caches. All rebuilt naturally
+        // as the next world's snapshots flow.
+        mLastSent.clear();
+        mWasAttacking.clear();
+        mPendingSwing.clear();
+        mWindupPendingRelease.clear();
+        mWasBlocking.clear();
+        mWasCasting.clear();
+        mWasFidgeting.clear();
+        mSampledSwing.clear();
+        mAppliedSwingSeq.clear();
+        mWasAirborne.clear();
+        mTurnState.clear();
+        mPendingCastBolt.clear();
+        mPendingFollow.clear();
+        mAvatarSwing.clear();
+        mAvatarSpeed.clear();
+        mAvatarMoveFlags.clear();
+        mLastHealth.clear();
+        mLastHitReactionTick.clear();
+        mPendingAggro.clear();
+        mLastLocalBounty.reset();
+        // Actions reported from the old world must not leak into the new one.
+        mOutgoingHits.clear();
+        mOutgoingPlayerDamages.clear();
+        mOutgoingBounties.clear();
+        mOutgoingSpeech.clear();
+        mOutgoingArrests.clear();
+        mOutgoingCombatRequests.clear();
+        mOutgoingDrops.clear();
+        mOutgoingTakes.clear();
+        mOutgoingSummons.clear();
+        mOutgoingContainerChanges.clear();
+        mOutgoingRevokes.clear();
+        mDirtyContainers.clear();
+        mPendingSpeechSubtitle.reset();
+        // Deliberately kept: mAppearances (peers' body identities, so their avatars rebuild
+        // immediately), mLocalPlayerNetId / mLocalPlayerReady (the login identity outlives the
+        // world), and the item/container/summon session records (mRemovedWorldItems,
+        // mCachedContainerStates, mAuthoritativeContainers, mReplicatedItems, mNetworkItems,
+        // summon maps) — those are keyed by wire RefNums, hold no Ptrs, and exist precisely to
+        // be re-applied as cells (re)load.
+    }
+
     std::set<ESM::RefNum> Replicator::collectSummons(const std::vector<MWWorld::Ptr>& actors) const
     {
         std::set<ESM::RefNum> summons;

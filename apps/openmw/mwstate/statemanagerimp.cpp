@@ -36,6 +36,8 @@
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
 
+#include "../mwnet/replicator.hpp"
+
 #include "../mwworld/cellstore.hpp"
 #include "../mwworld/class.hpp"
 #include "../mwworld/datetimemanager.hpp"
@@ -63,6 +65,11 @@ void MWState::StateManager::cleanup(bool force)
         MWBase::Environment::get().getWorld()->clear();
         MWBase::Environment::get().getInputManager()->clear();
         MWBase::Environment::get().getMechanicsManager()->clear();
+        // The replicator holds Ptrs into the world being torn down (other peers' avatars — e.g.
+        // ones instantiated into the select-lobby backdrop — and driven-actor motion entries);
+        // drop them or the next applied snapshot dereferences freed cells and crashes.
+        if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+            replicator->clearWorldState();
 
         mCharacterManager.setCurrentCharacter(nullptr);
         mTimePlayed = 0;
