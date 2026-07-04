@@ -1,7 +1,9 @@
 #ifndef OPENMW_MWNULL_NULLSOUNDMANAGER_H
 #define OPENMW_MWNULL_NULLSOUNDMANAGER_H
 
+#include "../mwbase/environment.hpp"
 #include "../mwbase/soundmanager.hpp"
+#include "../mwnet/replicator.hpp"
 
 namespace MWNull
 {
@@ -26,7 +28,14 @@ namespace MWNull
 
         bool isMusicPlaying() override { return false; }
 
-        void say(const MWWorld::ConstPtr& reference, VFS::Path::NormalizedView filename) override {}
+        void say(const MWWorld::ConstPtr& reference, VFS::Path::NormalizedView filename) override
+        {
+            // No audio device to play it on, but a headless dedicated server still drives every
+            // NPC voiced line — mirror the real SoundManager's replication hook so clients hear
+            // the line (and see its staged subtitle) on the same actor.
+            if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+                replicator->reportNpcSpeech(reference, filename.value());
+        }
 
         void say(VFS::Path::NormalizedView filename) override {}
 
