@@ -843,6 +843,8 @@ void OMW::Engine::pumpTransport()
                         mReplicator->applyContainerChanges(*actions); // resolve clients' take/put requests
                         mReplicator->applyAvatarBounty(*actions); // a client cleared its avatar's bounty
                         mReplicator->applyCombatRequests(*actions); // a client's avatar resisted arrest
+                        // A client's own-player sounds (casts, swishes): play here and relay onward.
+                        mReplicator->applyWorldSounds(*actions, /*relay=*/true);
                     }
                     else if (!chargenBubble) // the bubble also keeps host actions out of the intro cells
                     {
@@ -850,7 +852,7 @@ void OMW::Engine::pumpTransport()
                         mReplicator->applyIncomingPlayerBounty(*actions); // crime bounty the host gave our avatar
                         mReplicator->applyContainerRevokes(*actions); // drop items we lost a take race for
                         mReplicator->applyNpcSpeech(*actions); // replay voiced lines host NPCs spoke
-                        mReplicator->applyWorldSounds(*actions); // replay one-shot SFX host logic played
+                        mReplicator->applyWorldSounds(*actions, /*relay=*/false); // replay host one-shot SFX
                         mReplicator->applyArrests(*actions); // open arrest dialogue a guard triggered
                     }
                     // Authoritative lootable contents flow host -> clients; the host relays them onward.

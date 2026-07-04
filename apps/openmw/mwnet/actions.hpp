@@ -157,15 +157,18 @@ namespace MWNet
         friend bool operator==(const NpcSpeech&, const NpcSpeech&) = default;
     };
 
-    /// Host -> clients: a one-shot 3D world sound the host's game logic played — a weapon or armor
-    /// impact, a spell's cast/fail/hit sound, an NPC opening a door, drowning. The host resolves
-    /// those events for the actors it owns, so clients would otherwise stay silent (a headless
-    /// dedicated server does not even play them locally). Animation-driven sounds — footsteps,
-    /// weapon swishes, jump/land, anything emitted from animation text keys — are deliberately NOT
-    /// replicated: every peer animates loaded actors itself from replicated state and produces
-    /// those locally (see Replicator::LocalSoundScope). Anchored on a world object (mObject set,
-    /// resolved to the client's local copy) or at a raw position (mObject unset). Loops never
-    /// cross (stateful). Cosmetic only: plays on whichever peers can resolve the anchor.
+    /// A one-shot 3D world sound game logic played — a weapon or armor impact, a spell's
+    /// cast/fail/hit sound, an NPC opening a door, drowning. Host -> clients for the world the
+    /// host owns; a client also reports sounds of its OWN making (its player's casts, swishes,
+    /// area explosions), which the host replays and relays on to the other clients. Animation-
+    /// driven sounds — footsteps, jump/land, anything emitted from animation text keys — are
+    /// deliberately NOT replicated: every peer animates loaded actors itself from replicated
+    /// state and produces those locally (see Replicator::LocalSoundScope). Anchored on a world
+    /// object (mObject set: a world RefNum, or a player's wire id that each peer resolves to its
+    /// local copy of that player/avatar) or at a raw position (mObject unset). mOrigin is the
+    /// reporting peer's wire id: a receiver skips sounds it originated (the host rebroadcasts to
+    /// everyone, so your own report comes back to you). Loops never cross (stateful). Cosmetic
+    /// only: plays on whichever peers can resolve the anchor.
     struct WorldSound
     {
         ESM::RefNum mObject; // unset => positional sound at mPosition
@@ -173,6 +176,7 @@ namespace MWNet
         std::string mSound; // ESM::Sound record id (serialized RefId)
         float mVolume = 1.f;
         float mPitch = 1.f;
+        ESM::RefNum mOrigin; // reporting peer's wire id, for echo suppression
 
         friend bool operator==(const WorldSound&, const WorldSound&) = default;
     };
@@ -228,7 +232,8 @@ namespace MWNet
         std::vector<PlayerBounty> mBounties;
         // host -> clients: voiced lines a host-owned actor spoke, for clients to replay on that actor.
         std::vector<NpcSpeech> mSpeech;
-        // host -> clients: one-shot world sounds host game logic played, for clients to replay.
+        // host -> clients AND client -> host (own-player sounds, relayed onward): one-shot world
+        // sounds game logic played, for the other peers to replay.
         std::vector<WorldSound> mSounds;
         // host -> the owning client: a guard caught its avatar, so it should open the arrest dialogue.
         std::vector<ArrestRequest> mArrests;

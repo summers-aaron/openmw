@@ -2327,33 +2327,64 @@ namespace MWNet
 
     void Replicator::reportWorldSound(const MWWorld::ConstPtr& object, const ESM::RefId& sound, float volume, float pitch)
     {
-        // Only the host replicates world sounds (it resolves the shared world's events), and never
-        // ones emitted while an animation update runs (LocalSoundScope) — every peer animates its
-        // loaded actors itself and produces those locally, so crossing them would double them.
-        if (!mIsAuthority || mLocalSoundDepth > 0 || object.isEmpty() || sound.empty())
+        // Never replicate a sound emitted while an animation update runs (LocalSoundScope) —
+        // every peer animates its loaded actors itself and produces those locally, so crossing
+        // them would double them. Off the network mLocalPlayerNetId is unset, so SP never reports.
+        if (mLocalSoundDepth > 0 || object.isEmpty() || sound.empty() || !mLocalPlayerNetId.isSet())
             return;
-        // "Health Damage" is owned client-side by the replicated-health flinch (playHitReaction):
-        // every peer already plays it when an actor's replicated health drops.
+        // "Health Damage" is owned everywhere by the replicated-health flinch (applyHitReaction):
+        // every peer already plays it when an actor's (or its own player's) replicated health drops.
         static const ESM::RefId healthDamage = ESM::RefId::stringRefId("Health Damage");
         if (sound == healthDamage)
             return;
-        const ESM::RefNum id = object.getCellRef().getRefNum();
-        // Needs a stable world RefNum the clients can resolve. Players and avatars are skipped like
-        // speech: their owners produce their own feedback, and a host puppet slot's RefNum doesn't
-        // resolve on clients anyway.
-        if (!id.isSet() || isNetPlayer(id) || object.mRef == MWBase::Environment::get().getWorld()->getPlayerPtr().mRef)
-            return;
+        ESM::RefNum id;
+        if (object.mRef == MWBase::Environment::get().getWorld()->getPlayerPtr().mRef)
+        {
+            // This peer's own player — host or client: anchor by our wire id, which every receiver
+            // resolves to its local copy of our player/avatar. This is the ONLY thing a client
+            // reports (its casts, its swishes): the world's actors are the host's to report. Held
+            // back while we aren't broadcast ourselves (lobby/chargen — and a dedicated server's
+            // placeholder player stays off the wire the same way).
+            if (!mLocalPlayerReady)
+                return;
+            id = mLocalPlayerNetId;
+        }
+        else if (mIsAuthority)
+        {
+            // A sound on another player's puppet (an NPC striking an avatar): anchor by that
+            // player's wire id — a puppet slot's world RefNum doesn't resolve on clients.
+            for (const auto& [netId, avatar] : mAvatars)
+                if (avatar.mRef == object.mRef)
+                {
+                    id = netId;
+                    break;
+                }
+            if (!id.isSet())
+            {
+                // A genuine world actor/object: its RefNum resolves on every peer.
+                id = object.getCellRef().getRefNum();
+                if (!id.isSet() || isNetPlayer(id))
+                    return; // transient ref — nothing a client could resolve
+            }
+        }
+        else
+            return; // a client only reports its own player's sounds
         WorldSound worldSound;
         worldSound.mObject = id;
         worldSound.mSound = sound.serializeText();
         worldSound.mVolume = volume;
         worldSound.mPitch = pitch;
+        worldSound.mOrigin = mLocalPlayerNetId;
         mOutgoingSounds.push_back(std::move(worldSound));
     }
 
     void Replicator::reportWorldSound(const osg::Vec3f& position, const ESM::RefId& sound, float volume, float pitch)
     {
-        if (!mIsAuthority || mLocalSoundDepth > 0 || sound.empty())
+        if (mLocalSoundDepth > 0 || sound.empty() || !mLocalPlayerNetId.isSet())
+            return;
+        // Positional sounds (an area spell's explosion) cross from the host always; from a client
+        // they are its own effects, so only once it is broadcast itself.
+        if (!mIsAuthority && !mLocalPlayerReady)
             return;
         WorldSound worldSound; // mObject stays unset: positional
         worldSound.mPosition[0] = position.x();
@@ -2362,10 +2393,11 @@ namespace MWNet
         worldSound.mSound = sound.serializeText();
         worldSound.mVolume = volume;
         worldSound.mPitch = pitch;
+        worldSound.mOrigin = mLocalPlayerNetId;
         mOutgoingSounds.push_back(std::move(worldSound));
     }
 
-    void Replicator::applyWorldSounds(const ActionBatch& batch)
+    void Replicator::applyWorldSounds(const ActionBatch& batch, bool relay)
     {
         if (batch.mSounds.empty())
             return;
@@ -2373,15 +2405,33 @@ namespace MWNet
         MWBase::SoundManager& soundMgr = *MWBase::Environment::get().getSoundManager();
         for (const WorldSound& sound : batch.mSounds)
         {
+            // Our own report echoed back (the host rebroadcasts to every peer): already played here.
+            if (sound.mOrigin.isSet() && sound.mOrigin == mLocalPlayerNetId)
+                continue;
+            // The host relays a client's sound onward verbatim — origin preserved, so the sender
+            // skips its own echo above while everyone else plays it.
+            if (relay)
+                mOutgoingSounds.push_back(sound);
+            // Playing a received sound must never re-report it (a client would re-cross a sound
+            // played on its own player; the host has relayed explicitly above).
+            LocalSoundScope localSound(this);
             const ESM::RefId soundId = ESM::RefId::deserializeText(sound.mSound);
-            if (sound.mObject.isSet())
+            if (isNetPlayer(sound.mObject))
+            {
+                // Anchored on a player: our own player if it names us, else our copy of its avatar.
+                const MWWorld::Ptr anchor = sound.mObject == mLocalPlayerNetId
+                    ? MWBase::Environment::get().getWorld()->getPlayerPtr()
+                    : findLiveAvatar(sound.mObject);
+                if (!anchor.isEmpty() && anchor.isInCell())
+                    soundMgr.playSound3D(anchor, soundId, sound.mVolume, sound.mPitch);
+            }
+            else if (sound.mObject.isSet())
             {
                 const MWWorld::Ptr object = worldModel.getPtr(sound.mObject);
                 // Not materialized here (its cell isn't loaded) — nothing to anchor it on, and it
                 // would be out of earshot anyway.
-                if (object.isEmpty() || !object.isInCell())
-                    continue;
-                soundMgr.playSound3D(object, soundId, sound.mVolume, sound.mPitch);
+                if (!object.isEmpty() && object.isInCell())
+                    soundMgr.playSound3D(object, soundId, sound.mVolume, sound.mPitch);
             }
             else
                 soundMgr.playSound3D(osg::Vec3f(sound.mPosition[0], sound.mPosition[1], sound.mPosition[2]), soundId,

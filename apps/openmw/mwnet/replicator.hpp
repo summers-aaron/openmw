@@ -410,20 +410,24 @@ namespace MWNet
             LocalSoundScope& operator=(const LocalSoundScope&) = delete;
         };
 
-        /// Report (host only) a one-shot 3D world sound game logic played on the given object — a
-        /// combat impact, a spell sound, a door an NPC opened — so clients replay it on their local
-        /// copy. Call sites pre-filter to plain one-shot SFX (no voices — that's reportNpcSpeech —
-        /// no footstep types, no loops). A no-op off the authority, inside a LocalSoundScope, for a
-        /// transient/unset RefNum, or for a player/avatar (their owners produce their own feedback;
-        /// "Health Damage" is likewise skipped — the replicated-health flinch plays it everywhere).
+        /// Report a one-shot 3D world sound game logic played on the given object — a combat
+        /// impact, a spell sound, a door an NPC opened — so the other peers replay it on their
+        /// local copy. The host reports for anything it owns (world actors by RefNum; a sound on a
+        /// player's puppet is re-anchored by that player's wire id); a client reports only sounds
+        /// on its OWN player (its casts, its swishes), which the host relays onward. Call sites
+        /// pre-filter to plain one-shot SFX (no voices — that's reportNpcSpeech — no footstep
+        /// types, no loops). A no-op off the network, inside a LocalSoundScope, for a transient
+        /// RefNum, and for "Health Damage" (the replicated-health flinch plays that everywhere).
         void reportWorldSound(const MWWorld::ConstPtr& object, const ESM::RefId& sound, float volume, float pitch);
 
         /// Same, for a sound at a raw world position (an area spell's explosion).
         void reportWorldSound(const osg::Vec3f& position, const ESM::RefId& sound, float volume, float pitch);
 
-        /// Apply received world sounds (client only): play each on the local copy of the object it
-        /// names (skipped while that object's cell isn't loaded here) or at its raw position.
-        void applyWorldSounds(const ActionBatch& batch);
+        /// Apply received world sounds: play each on the local copy of the object it names — a
+        /// world RefNum, our own player, or another player's avatar — or at its raw position,
+        /// skipping sounds this peer itself originated (the host rebroadcasts to everyone). With
+        /// relay (host only), forward each applied sound onward to the other clients verbatim.
+        void applyWorldSounds(const ActionBatch& batch, bool relay);
 
         /// Report (from a client) that this peer dropped an item into the shared world, for the
         /// host to place authoritatively and replicate back to everyone. cellId is the serialized

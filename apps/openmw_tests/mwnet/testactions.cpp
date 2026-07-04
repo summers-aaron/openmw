@@ -146,8 +146,12 @@ namespace MWNet
         TEST(MWNetActionsTest, worldSoundsRoundTrip)
         {
             ActionBatch batch;
-            batch.mSounds.push_back({ ESM::RefNum{ 42, 0 }, { 0.f, 0.f, 0.f }, "Heavy Armor Hit", 1.f, 0.9f });
-            batch.mSounds.push_back({ ESM::RefNum{}, { 10.f, -20.f, 30.5f }, "mysticism area", 0.5f, 1.f });
+            // Host-originated, anchored on a world actor.
+            batch.mSounds.push_back(
+                { ESM::RefNum{ 42, 0 }, { 0.f, 0.f, 0.f }, "Heavy Armor Hit", 1.f, 0.9f, ESM::RefNum{ 0, -1000 } });
+            // Client-originated positional (an area explosion), unset anchor.
+            batch.mSounds.push_back(
+                { ESM::RefNum{}, { 10.f, -20.f, 30.5f }, "mysticism area", 0.5f, 1.f, ESM::RefNum{ 3, -1000 } });
             const std::optional<ActionBatch> parsed = deserializeActions(serializeActions(batch));
             ASSERT_TRUE(parsed.has_value());
             EXPECT_EQ(*parsed, batch);
@@ -155,9 +159,12 @@ namespace MWNet
             EXPECT_EQ(parsed->mSounds[0].mObject.mIndex, 42u);
             EXPECT_EQ(parsed->mSounds[0].mSound, "Heavy Armor Hit");
             EXPECT_EQ(parsed->mSounds[0].mPitch, 0.9f);
+            EXPECT_EQ(parsed->mSounds[0].mOrigin, (ESM::RefNum{ 0, -1000 }));
+            EXPECT_TRUE(parsed->mSounds[0].mOrigin.isSet()); // the host id {0,-1000} must count as set
             EXPECT_FALSE(parsed->mSounds[1].mObject.isSet());
             EXPECT_EQ(parsed->mSounds[1].mPosition[2], 30.5f);
             EXPECT_EQ(parsed->mSounds[1].mVolume, 0.5f);
+            EXPECT_EQ(parsed->mSounds[1].mOrigin.mIndex, 3u);
         }
 
         TEST(MWNetActionsTest, arrestsRoundTrip)

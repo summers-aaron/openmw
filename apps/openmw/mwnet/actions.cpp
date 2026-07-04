@@ -6,7 +6,7 @@ namespace MWNet
 {
     namespace
     {
-        constexpr std::uint8_t sVersion = 9;
+        constexpr std::uint8_t sVersion = 10;
         // Smallest encoded CombatHit: attacker RefNum (4+4) + victim RefNum (4+4) + damage
         // (float, 4) + health-damage flag (1).
         constexpr std::uint32_t sMinHitBytes = 21;
@@ -34,8 +34,8 @@ namespace MWNet
         // subtitle (4).
         constexpr std::uint32_t sMinSpeechBytes = 16;
         // Smallest encoded WorldSound: object RefNum (4 + 4) + position (3*4) + zero-length sound
-        // id (4) + volume (4) + pitch (4).
-        constexpr std::uint32_t sMinWorldSoundBytes = 32;
+        // id (4) + volume (4) + pitch (4) + origin RefNum (4 + 4).
+        constexpr std::uint32_t sMinWorldSoundBytes = 40;
         // Smallest encoded ArrestRequest: target RefNum (4 + 4) + guard RefNum (4 + 4).
         constexpr std::uint32_t sMinArrestBytes = 16;
         // Smallest encoded CombatRequest: instigator RefNum (4 + 4) + target RefNum (4 + 4).
@@ -155,6 +155,8 @@ namespace MWNet
             writer.writeString(sound.mSound);
             writer.write(sound.mVolume);
             writer.write(sound.mPitch);
+            writer.write(sound.mOrigin.mIndex);
+            writer.write(sound.mOrigin.mContentFile);
         }
         writer.write(static_cast<std::uint32_t>(batch.mArrests.size()));
         for (const ArrestRequest& arrest : batch.mArrests)
@@ -372,7 +374,8 @@ namespace MWNet
             for (int axis = 0; axis < 3; ++axis)
                 if (!reader.read(sound.mPosition[axis]))
                     return std::nullopt;
-            if (!reader.readString(sound.mSound) || !reader.read(sound.mVolume) || !reader.read(sound.mPitch))
+            if (!reader.readString(sound.mSound) || !reader.read(sound.mVolume) || !reader.read(sound.mPitch)
+                || !reader.read(sound.mOrigin.mIndex) || !reader.read(sound.mOrigin.mContentFile))
                 return std::nullopt;
             batch.mSounds.push_back(std::move(sound));
         }
