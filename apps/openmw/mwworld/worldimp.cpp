@@ -3839,10 +3839,19 @@ namespace MWWorld
             return false;
         }
 
+        // readRecord re-pointed the primary player at the character's own base record — the dynamic
+        // NPC record shipped ahead of it (inserted above), which carries its real name and body. Hold
+        // on to it: setupPlayer below re-points the primary at the stock "Player" record. That is
+        // right for an ordinary start (chargen overrides that record in the store, so it IS the
+        // character), but an adopted character's identity lives only in the shipped dynamic record —
+        // without re-asserting it the character reverts to the stock name and race.
+        const ESM::NPC* adoptedBase = getPlayerPtr().get<ESM::NPC>()->mBase;
+
         // "This is a real, loaded character now, not a new game" — mirrors StateManager::loadGame so
         // the HUD and the built-in player Lua scripts treat it as such.
         MWBase::Environment::get().getWindowManager()->setNewGame(false);
         setupPlayer();
+        mPlayers.primary().set(adoptedBase); // re-assert the adopted identity before the body renders
         renderPlayer();
         MWBase::Environment::get().getWindowManager()->updatePlayer();
         MWBase::Environment::get().getMechanicsManager()->playerLoaded();
