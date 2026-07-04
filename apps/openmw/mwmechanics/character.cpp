@@ -42,6 +42,8 @@
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
 
+#include "../mwnet/replicator.hpp"
+
 #include "../mwworld/class.hpp"
 #include "../mwworld/esmstore.hpp"
 #include "../mwworld/inventorystore.hpp"
@@ -1016,6 +1018,9 @@ namespace MWMechanics
 
         if (evt.substr(0, 7) == "sound: ")
         {
+            // Animation-driven: every peer runs this actor's animations locally, so each machine
+            // produces this sound itself — the authority must not also replicate it.
+            MWNet::Replicator::LocalSoundScope localSound(MWBase::Environment::get().getReplicator());
             MWBase::SoundManager* sndMgr = MWBase::Environment::get().getSoundManager();
             sndMgr->playSound3D(mPtr, ESM::RefId::stringRefId(evt.substr(7)), 1.0f, 1.0f);
             return;
@@ -1050,6 +1055,8 @@ namespace MWMechanics
             const ESM::RefId sound = charClass.getSoundIdFromSndGen(mPtr, soundgen);
             if (!sound.empty())
             {
+                // Animation-driven (footsteps, roars, land): local on every peer, like "sound:".
+                MWNet::Replicator::LocalSoundScope localSound(MWBase::Environment::get().getReplicator());
                 MWBase::SoundManager* sndMgr = MWBase::Environment::get().getSoundManager();
                 if (soundgen == "left" || soundgen == "right")
                 {
@@ -1414,6 +1421,9 @@ namespace MWMechanics
 
                 if (downSoundId && !downSoundId->empty())
                 {
+                    // Draw state replicates: every peer runs updateWeaponState for its loaded
+                    // actors and plays the sheathe/draw sounds itself.
+                    MWNet::Replicator::LocalSoundScope localSound(MWBase::Environment::get().getReplicator());
                     sndMgr->playSound3D(mPtr, *downSoundId, 1.0f, 1.0f);
                 }
             }
@@ -1475,7 +1485,12 @@ namespace MWMechanics
                             {
                                 const ESM::RefId& upSoundId = mWeapon.getClass().getUpSoundId(mWeapon);
                                 if (!upSoundId.empty())
+                                {
+                                    // Local on every peer, like the sheathe sound above.
+                                    MWNet::Replicator::LocalSoundScope localSound(
+                                        MWBase::Environment::get().getReplicator());
                                     sndMgr->playSound3D(mPtr, upSoundId, 1.0f, 1.0f);
+                                }
                             }
                         }
                     }
@@ -1486,6 +1501,9 @@ namespace MWMechanics
                         const ESM::Sound* sound = store.get<ESM::Sound>().searchRandom("WolfEquip", prng);
                         if (sound)
                         {
+                            // Local on every peer, like the draw sound above.
+                            MWNet::Replicator::LocalSoundScope localSound(
+                                MWBase::Environment::get().getReplicator());
                             sndMgr->playSound3D(mPtr, sound->mId, 1.0f, 1.0f);
                         }
                     }

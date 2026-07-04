@@ -143,6 +143,23 @@ namespace MWNet
             EXPECT_TRUE(parsed->mSpeech[1].mText.empty());
         }
 
+        TEST(MWNetActionsTest, worldSoundsRoundTrip)
+        {
+            ActionBatch batch;
+            batch.mSounds.push_back({ ESM::RefNum{ 42, 0 }, { 0.f, 0.f, 0.f }, "Heavy Armor Hit", 1.f, 0.9f });
+            batch.mSounds.push_back({ ESM::RefNum{}, { 10.f, -20.f, 30.5f }, "mysticism area", 0.5f, 1.f });
+            const std::optional<ActionBatch> parsed = deserializeActions(serializeActions(batch));
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(*parsed, batch);
+            ASSERT_EQ(parsed->mSounds.size(), 2u);
+            EXPECT_EQ(parsed->mSounds[0].mObject.mIndex, 42u);
+            EXPECT_EQ(parsed->mSounds[0].mSound, "Heavy Armor Hit");
+            EXPECT_EQ(parsed->mSounds[0].mPitch, 0.9f);
+            EXPECT_FALSE(parsed->mSounds[1].mObject.isSet());
+            EXPECT_EQ(parsed->mSounds[1].mPosition[2], 30.5f);
+            EXPECT_EQ(parsed->mSounds[1].mVolume, 0.5f);
+        }
+
         TEST(MWNetActionsTest, arrestsRoundTrip)
         {
             ActionBatch batch;
@@ -186,9 +203,9 @@ namespace MWNet
         TEST(MWNetActionsTest, rejectsImplausibleCount)
         {
             std::vector<std::byte> bytes = serializeActions(ActionBatch{});
-            // version + 12 4-byte 0 counts (hits, playerDamages, drops, taken, containers, changes,
-            // revokes, summons, bounties, speech, arrests, combatRequests)
-            ASSERT_EQ(bytes.size(), 49u);
+            // version + 13 4-byte 0 counts (hits, playerDamages, drops, taken, containers, changes,
+            // revokes, summons, bounties, speech, sounds, arrests, combatRequests)
+            ASSERT_EQ(bytes.size(), 53u);
             for (std::size_t i = 0; i < 4; ++i)
                 bytes[1 + i] = std::byte{ 0xff }; // implausible hit count
             EXPECT_FALSE(deserializeActions(bytes).has_value());

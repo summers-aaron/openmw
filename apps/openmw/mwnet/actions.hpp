@@ -157,6 +157,26 @@ namespace MWNet
         friend bool operator==(const NpcSpeech&, const NpcSpeech&) = default;
     };
 
+    /// Host -> clients: a one-shot 3D world sound the host's game logic played — a weapon or armor
+    /// impact, a spell's cast/fail/hit sound, an NPC opening a door, drowning. The host resolves
+    /// those events for the actors it owns, so clients would otherwise stay silent (a headless
+    /// dedicated server does not even play them locally). Animation-driven sounds — footsteps,
+    /// weapon swishes, jump/land, anything emitted from animation text keys — are deliberately NOT
+    /// replicated: every peer animates loaded actors itself from replicated state and produces
+    /// those locally (see Replicator::LocalSoundScope). Anchored on a world object (mObject set,
+    /// resolved to the client's local copy) or at a raw position (mObject unset). Loops never
+    /// cross (stateful). Cosmetic only: plays on whichever peers can resolve the anchor.
+    struct WorldSound
+    {
+        ESM::RefNum mObject; // unset => positional sound at mPosition
+        float mPosition[3] = { 0.f, 0.f, 0.f };
+        std::string mSound; // ESM::Sound record id (serialized RefId)
+        float mVolume = 1.f;
+        float mPitch = 1.f;
+
+        friend bool operator==(const WorldSound&, const WorldSound&) = default;
+    };
+
     /// Host -> the owning client: a host guard pursuing that client's avatar for a crime has caught it,
     /// so the client should open the arrest dialogue. The host can't show the client's UI (and opening
     /// it on the host would pull the host's own player into the conversation), so it routes the arrest
@@ -208,6 +228,8 @@ namespace MWNet
         std::vector<PlayerBounty> mBounties;
         // host -> clients: voiced lines a host-owned actor spoke, for clients to replay on that actor.
         std::vector<NpcSpeech> mSpeech;
+        // host -> clients: one-shot world sounds host game logic played, for clients to replay.
+        std::vector<WorldSound> mSounds;
         // host -> the owning client: a guard caught its avatar, so it should open the arrest dialogue.
         std::vector<ArrestRequest> mArrests;
         // client -> host: make a host-owned actor fight my avatar (resist arrest / scripted aggression).
@@ -217,7 +239,7 @@ namespace MWNet
         {
             return mHits.empty() && mPlayerDamages.empty() && mDrops.empty() && mItemsTaken.empty()
                 && mContainers.empty() && mContainerChanges.empty() && mContainerRevokes.empty()
-                && mSummons.empty() && mBounties.empty() && mSpeech.empty() && mArrests.empty()
+                && mSummons.empty() && mBounties.empty() && mSpeech.empty() && mSounds.empty() && mArrests.empty()
                 && mCombatRequests.empty();
         }
 

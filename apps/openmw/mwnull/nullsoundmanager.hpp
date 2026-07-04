@@ -68,6 +68,11 @@ namespace MWNull
         MWBase::Sound* playSound3D(const MWWorld::ConstPtr& reference, const ESM::RefId& soundId, float volume, float pitch,
             Type type, PlayMode mode, float offset) override
         {
+            // No audio device, but a headless host still resolves the shared world's sound-making
+            // events — replicate one-shot world SFX exactly like the real SoundManager does.
+            if (type == Type::Sfx && (static_cast<int>(mode) & static_cast<int>(PlayMode::Loop)) == 0)
+                if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+                    replicator->reportWorldSound(reference, soundId, volume, pitch);
             return nullptr;
         }
 
@@ -80,6 +85,9 @@ namespace MWNull
         MWBase::Sound* playSound3D(const osg::Vec3f& initialPos, const ESM::RefId& soundId, float volume, float pitch, Type type,
             PlayMode mode, float offset) override
         {
+            if (type == Type::Sfx && (static_cast<int>(mode) & static_cast<int>(PlayMode::Loop)) == 0)
+                if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+                    replicator->reportWorldSound(initialPos, soundId, volume, pitch);
             return nullptr;
         }
 

@@ -158,6 +158,11 @@ namespace MWNet
         std::vector<PlayerBounty> mOutgoingBounties;
         // Host only: voiced lines host-owned actors spoke this tick, awaiting broadcast to clients.
         std::vector<NpcSpeech> mOutgoingSpeech;
+        // Host only: one-shot world sounds game logic played this tick, awaiting broadcast.
+        std::vector<WorldSound> mOutgoingSounds;
+        // Depth of nested LocalSoundScope guards: while > 0, sounds are animation-driven and every
+        // peer produces them locally, so reportWorldSound must not replicate them.
+        int mLocalSoundDepth = 0;
         // Host only: arrests (a guard caught a player's avatar) awaiting send to that player's client.
         std::vector<ArrestRequest> mOutgoingArrests;
         // Client only: requests for the host to put a host-owned actor into combat with our player
@@ -378,6 +383,47 @@ namespace MWNet
         /// Apply received speech reports (client only): play each voiced line on the host-owned actor
         /// it names, if that actor's cell is loaded here (you only hear NPCs near you).
         void applyNpcSpeech(const ActionBatch& batch);
+
+        /// RAII scope marking every sound played while it is alive as animation-driven and
+        /// local-only. Each peer animates its loaded actors itself (walk cycles, swings, idles all
+        /// run locally from replicated state), so the sounds those animations emit — footsteps,
+        /// weapon swishes, jump/land, any text-key sound — are produced on every machine already;
+        /// if the authority also replicated them they would play twice on clients. Wrap the
+        /// character/object animation updates in this so reportWorldSound ignores what they emit.
+        class [[nodiscard]] LocalSoundScope
+        {
+            Replicator* mReplicator;
+
+        public:
+            explicit LocalSoundScope(Replicator* replicator)
+                : mReplicator(replicator)
+            {
+                if (mReplicator != nullptr)
+                    ++mReplicator->mLocalSoundDepth;
+            }
+            ~LocalSoundScope()
+            {
+                if (mReplicator != nullptr)
+                    --mReplicator->mLocalSoundDepth;
+            }
+            LocalSoundScope(const LocalSoundScope&) = delete;
+            LocalSoundScope& operator=(const LocalSoundScope&) = delete;
+        };
+
+        /// Report (host only) a one-shot 3D world sound game logic played on the given object — a
+        /// combat impact, a spell sound, a door an NPC opened — so clients replay it on their local
+        /// copy. Call sites pre-filter to plain one-shot SFX (no voices — that's reportNpcSpeech —
+        /// no footstep types, no loops). A no-op off the authority, inside a LocalSoundScope, for a
+        /// transient/unset RefNum, or for a player/avatar (their owners produce their own feedback;
+        /// "Health Damage" is likewise skipped — the replicated-health flinch plays it everywhere).
+        void reportWorldSound(const MWWorld::ConstPtr& object, const ESM::RefId& sound, float volume, float pitch);
+
+        /// Same, for a sound at a raw world position (an area spell's explosion).
+        void reportWorldSound(const osg::Vec3f& position, const ESM::RefId& sound, float volume, float pitch);
+
+        /// Apply received world sounds (client only): play each on the local copy of the object it
+        /// names (skipped while that object's cell isn't loaded here) or at its raw position.
+        void applyWorldSounds(const ActionBatch& batch);
 
         /// Report (from a client) that this peer dropped an item into the shared world, for the
         /// host to place authoritatively and replicate back to everyone. cellId is the serialized

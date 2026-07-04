@@ -498,6 +498,7 @@ namespace MWNet
         mOutgoingPlayerDamages.clear();
         mOutgoingBounties.clear();
         mOutgoingSpeech.clear();
+        mOutgoingSounds.clear();
         mOutgoingArrests.clear();
         mOutgoingCombatRequests.clear();
         mOutgoingDrops.clear();
@@ -1999,6 +2000,7 @@ namespace MWNet
         batch.mPlayerDamages = std::move(mOutgoingPlayerDamages);
         batch.mBounties = std::move(mOutgoingBounties); // host -> client new total bounties
         batch.mSpeech = std::move(mOutgoingSpeech); // host -> clients voiced NPC lines
+        batch.mSounds = std::move(mOutgoingSounds); // host -> clients one-shot world sounds
         batch.mArrests = std::move(mOutgoingArrests); // host -> client open-arrest-dialogue
         batch.mCombatRequests = std::move(mOutgoingCombatRequests); // client -> host host-actor-fight-me
         batch.mDrops = std::move(mOutgoingDrops);
@@ -2014,6 +2016,7 @@ namespace MWNet
         mOutgoingCombatRequests.clear();
         mOutgoingDrops.clear();
         mOutgoingTakes.clear();
+        mOutgoingSounds.clear();
         mOutgoingContainerChanges.clear();
         mOutgoingRevokes.clear();
         mOutgoingSummons.clear();
@@ -2319,6 +2322,70 @@ namespace MWNet
             // sends it; each client decides whether to display it).
             if (!speech.mText.empty() && Settings::gui().mSubtitles)
                 MWBase::Environment::get().getWindowManager()->messageBox(speech.mText);
+        }
+    }
+
+    void Replicator::reportWorldSound(const MWWorld::ConstPtr& object, const ESM::RefId& sound, float volume, float pitch)
+    {
+        // Only the host replicates world sounds (it resolves the shared world's events), and never
+        // ones emitted while an animation update runs (LocalSoundScope) — every peer animates its
+        // loaded actors itself and produces those locally, so crossing them would double them.
+        if (!mIsAuthority || mLocalSoundDepth > 0 || object.isEmpty() || sound.empty())
+            return;
+        // "Health Damage" is owned client-side by the replicated-health flinch (playHitReaction):
+        // every peer already plays it when an actor's replicated health drops.
+        static const ESM::RefId healthDamage = ESM::RefId::stringRefId("Health Damage");
+        if (sound == healthDamage)
+            return;
+        const ESM::RefNum id = object.getCellRef().getRefNum();
+        // Needs a stable world RefNum the clients can resolve. Players and avatars are skipped like
+        // speech: their owners produce their own feedback, and a host puppet slot's RefNum doesn't
+        // resolve on clients anyway.
+        if (!id.isSet() || isNetPlayer(id) || object.mRef == MWBase::Environment::get().getWorld()->getPlayerPtr().mRef)
+            return;
+        WorldSound worldSound;
+        worldSound.mObject = id;
+        worldSound.mSound = sound.serializeText();
+        worldSound.mVolume = volume;
+        worldSound.mPitch = pitch;
+        mOutgoingSounds.push_back(std::move(worldSound));
+    }
+
+    void Replicator::reportWorldSound(const osg::Vec3f& position, const ESM::RefId& sound, float volume, float pitch)
+    {
+        if (!mIsAuthority || mLocalSoundDepth > 0 || sound.empty())
+            return;
+        WorldSound worldSound; // mObject stays unset: positional
+        worldSound.mPosition[0] = position.x();
+        worldSound.mPosition[1] = position.y();
+        worldSound.mPosition[2] = position.z();
+        worldSound.mSound = sound.serializeText();
+        worldSound.mVolume = volume;
+        worldSound.mPitch = pitch;
+        mOutgoingSounds.push_back(std::move(worldSound));
+    }
+
+    void Replicator::applyWorldSounds(const ActionBatch& batch)
+    {
+        if (batch.mSounds.empty())
+            return;
+        MWWorld::WorldModel& worldModel = *MWBase::Environment::get().getWorldModel();
+        MWBase::SoundManager& soundMgr = *MWBase::Environment::get().getSoundManager();
+        for (const WorldSound& sound : batch.mSounds)
+        {
+            const ESM::RefId soundId = ESM::RefId::deserializeText(sound.mSound);
+            if (sound.mObject.isSet())
+            {
+                const MWWorld::Ptr object = worldModel.getPtr(sound.mObject);
+                // Not materialized here (its cell isn't loaded) — nothing to anchor it on, and it
+                // would be out of earshot anyway.
+                if (object.isEmpty() || !object.isInCell())
+                    continue;
+                soundMgr.playSound3D(object, soundId, sound.mVolume, sound.mPitch);
+            }
+            else
+                soundMgr.playSound3D(osg::Vec3f(sound.mPosition[0], sound.mPosition[1], sound.mPosition[2]), soundId,
+                    sound.mVolume, sound.mPitch);
         }
     }
 

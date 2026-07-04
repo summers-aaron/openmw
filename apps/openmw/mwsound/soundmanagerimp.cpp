@@ -580,6 +580,15 @@ namespace MWSound
     Sound* SoundManager::playSound3D(const MWWorld::ConstPtr& ptr, const ESM::RefId& soundId, float volume, float pitch,
         Type type, PlayMode mode, float offset)
     {
+        // Multiplayer: the host resolves the shared world's sound-making events (combat impacts,
+        // spell sounds, doors NPCs open), so replicate plain one-shot SFX to clients — like say(),
+        // before any output guard, since a headless server must still put them on the wire. Voices
+        // cross via reportNpcSpeech, and the replicator drops animation-driven sounds (every peer
+        // produces those locally) and anything it can't anchor.
+        if (type == Type::Sfx && (static_cast<int>(mode) & static_cast<int>(PlayMode::Loop)) == 0)
+            if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+                replicator->reportWorldSound(ptr, soundId, volume, pitch);
+
         if (remove3DSoundAtDistance(mode, ptr))
             return nullptr;
 
@@ -611,6 +620,12 @@ namespace MWSound
     Sound* SoundManager::playSound3D(const osg::Vec3f& initialPos, const ESM::RefId& soundId, float volume, float pitch,
         Type type, PlayMode mode, float offset)
     {
+        // Multiplayer: positional world sounds (an area spell's explosion) cross like the
+        // object-anchored ones above.
+        if (type == Type::Sfx && (static_cast<int>(mode) & static_cast<int>(PlayMode::Loop)) == 0)
+            if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+                replicator->reportWorldSound(initialPos, soundId, volume, pitch);
+
         if (!mOutput->isInitialized())
             return nullptr;
 
