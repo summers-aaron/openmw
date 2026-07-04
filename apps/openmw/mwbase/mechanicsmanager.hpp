@@ -97,8 +97,11 @@ namespace MWBase
         ///< This is used by every service to determine the price of objects given the trading skills of the player and
         ///< NPC.
 
-        virtual int getDerivedDisposition(const MWWorld::Ptr& ptr, bool clamp = true) = 0;
-        ///< Calculate the diposition of an NPC toward the player.
+        virtual int getDerivedDisposition(
+            const MWWorld::Ptr& ptr, bool clamp = true, const MWWorld::Ptr& towards = MWWorld::Ptr())
+            = 0;
+        ///< Calculate the diposition of an NPC toward the given player (the primary player if
+        ///< \a towards is empty).
 
         virtual int countDeaths(const ESM::RefId& id) const = 0;
         ///< Return the number of deaths for actors with the given ID.

@@ -479,7 +479,7 @@ namespace MWMechanics
             = world->getStore().get<ESM::GameSetting>().find("fVoiceIdleOdds")->mValue.getFloat();
         if (Misc::Rng::rollProbability(world->getPrng()) * 10000.f < fVoiceIdleOdds * delta
             && world->getLOS(player, actor))
-            MWBase::Environment::get().getDialogueManager()->say(actor, ESM::RefId::stringRefId("idle"));
+            MWBase::Environment::get().getDialogueManager()->say(actor, ESM::RefId::stringRefId("idle"), player);
     }
 
     void Actors::updateMovementSpeed(const MWWorld::Ptr& actor) const
@@ -585,7 +585,8 @@ namespace MWMechanics
             if (greetingTimer >= initialDelay)
             {
                 greetingState = GreetingState::InProgress;
-                if (!MWBase::Environment::get().getDialogueManager()->say(actor, ESM::RefId::stringRefId("hello")))
+                if (!MWBase::Environment::get().getDialogueManager()->say(
+                        actor, ESM::RefId::stringRefId("hello"), player))
                     greetingState = GreetingState::Done;
                 greetingTimer = 0;
             }

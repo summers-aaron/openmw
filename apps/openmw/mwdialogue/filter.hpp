@@ -20,6 +20,10 @@ namespace MWDialogue
     class Filter
     {
         MWWorld::Ptr mActor;
+        // The player all PC-keyed conditions (PC skills/stats/faction, SameRace, disposition...)
+        // are evaluated against. Normally the primary player, but a bark aimed at a network
+        // player's avatar is filtered against that player instead.
+        MWWorld::Ptr mPlayer;
         int mChoice;
         bool mTalkedToPlayer;
 
@@ -55,7 +59,10 @@ namespace MWDialogue
     public:
         using Response = std::pair<const ESM::Dialogue*, const ESM::DialInfo*>;
 
-        Filter(const MWWorld::Ptr& actor, int choice, bool talkedToPlayer);
+        Filter(const MWWorld::Ptr& actor, int choice, bool talkedToPlayer,
+            const MWWorld::Ptr& player = MWWorld::Ptr());
+        ///< \param player evaluate PC-keyed conditions against this player instead of the
+        /// primary one; an empty Ptr means the primary player.
 
         std::vector<Response> list(const ESM::Dialogue& dialogue, bool fallbackToInfoRefusal, bool searchAll,
             bool invertDisposition = false) const;

@@ -91,8 +91,10 @@ namespace MWMechanics
         ///< This is used by every service to determine the price of objects given the trading skills of the player and
         ///< NPC.
 
-        int getDerivedDisposition(const MWWorld::Ptr& ptr, bool clamp = true) override;
-        ///< Calculate the diposition of an NPC toward the player.
+        int getDerivedDisposition(
+            const MWWorld::Ptr& ptr, bool clamp = true, const MWWorld::Ptr& towards = MWWorld::Ptr()) override;
+        ///< Calculate the diposition of an NPC toward the given player (the primary player if
+        ///< \a towards is empty).
 
         int countDeaths(const ESM::RefId& id) const override;
         ///< Return the number of deaths for actors with the given ID.

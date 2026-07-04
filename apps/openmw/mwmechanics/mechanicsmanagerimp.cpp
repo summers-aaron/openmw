@@ -485,13 +485,13 @@ namespace MWMechanics
         mUpdatePlayer = true;
     }
 
-    int MechanicsManager::getDerivedDisposition(const MWWorld::Ptr& ptr, bool clamp)
+    int MechanicsManager::getDerivedDisposition(const MWWorld::Ptr& ptr, bool clamp, const MWWorld::Ptr& towards)
     {
         const MWMechanics::NpcStats& npcStats = ptr.getClass().getNpcStats(ptr);
         float x = static_cast<float>(npcStats.getBaseDisposition() + npcStats.getCrimeDispositionModifier());
 
         MWWorld::LiveCellRef<ESM::NPC>* npc = ptr.get<ESM::NPC>();
-        MWWorld::Ptr playerPtr = getPlayer();
+        MWWorld::Ptr playerPtr = towards.isEmpty() ? getPlayer() : towards;
         MWWorld::LiveCellRef<ESM::NPC>* player = playerPtr.get<ESM::NPC>();
         const MWMechanics::NpcStats& playerStats = playerPtr.getClass().getNpcStats(playerPtr);
 
@@ -1194,7 +1194,8 @@ namespace MWMechanics
             {
                 // NPC will complain about theft even if he will do nothing about it
                 if (type == OT_Theft || type == OT_Pickpocket)
-                    MWBase::Environment::get().getDialogueManager()->say(neighbor, ESM::RefId::stringRefId("thief"));
+                    MWBase::Environment::get().getDialogueManager()->say(
+                        neighbor, ESM::RefId::stringRefId("thief"), player);
 
                 crimeSeen = true;
             }
@@ -1343,7 +1344,8 @@ namespace MWMechanics
                 reported = true;
 
                 if (type == OT_Trespassing)
-                    MWBase::Environment::get().getDialogueManager()->say(actor, ESM::RefId::stringRefId("intruder"));
+                    MWBase::Environment::get().getDialogueManager()->say(
+                        actor, ESM::RefId::stringRefId("intruder"), player);
             }
         }
 
@@ -1795,7 +1797,7 @@ namespace MWMechanics
 
         // Must be done after the target is set up, so that CreatureTargetted dialogue filter works properly
         if (shout)
-            MWBase::Environment::get().getDialogueManager()->say(ptr, ESM::RefId::stringRefId("attack"));
+            MWBase::Environment::get().getDialogueManager()->say(ptr, ESM::RefId::stringRefId("attack"), target);
     }
 
     void MechanicsManager::stopCombat(const MWWorld::Ptr& actor)

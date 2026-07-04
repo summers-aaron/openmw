@@ -164,7 +164,7 @@ bool MWDialogue::Filter::testActor(const ESM::DialInfo& info) const
 
 bool MWDialogue::Filter::testPlayer(const ESM::DialInfo& info) const
 {
-    const MWWorld::Ptr player = MWMechanics::getPlayer();
+    const MWWorld::Ptr& player = mPlayer;
     MWMechanics::NpcStats& stats = player.getClass().getNpcStats(player);
 
     // check player faction and rank
@@ -221,7 +221,8 @@ bool MWDialogue::Filter::testDisposition(const ESM::DialInfo& info, bool invert)
     if (isCreature)
         return true;
 
-    int actorDisposition = MWBase::Environment::get().getMechanicsManager()->getDerivedDisposition(mActor);
+    int actorDisposition
+        = MWBase::Environment::get().getMechanicsManager()->getDerivedDisposition(mActor, true, mPlayer);
     // For service refusal, the disposition check is inverted. However, a value of 0 still means "always succeed".
     return invert ? (info.mData.mDisposition == 0 || actorDisposition < info.mData.mDisposition)
                   : (actorDisposition >= info.mData.mDisposition);
@@ -321,7 +322,7 @@ bool MWDialogue::Filter::testSelectStructNumeric(const SelectWrapper& select) co
 
         case ESM::DialogueCondition::Function_PcHealthPercent:
         {
-            MWWorld::Ptr player = MWMechanics::getPlayer();
+            const MWWorld::Ptr& player = mPlayer;
             return select.selectCompare(
                 static_cast<int>(player.getClass().getCreatureStats(player).getHealth().getRatio() * 100));
         }
@@ -330,7 +331,7 @@ bool MWDialogue::Filter::testSelectStructNumeric(const SelectWrapper& select) co
         case ESM::DialogueCondition::Function_PcFatigue:
         case ESM::DialogueCondition::Function_PcHealth:
         {
-            MWWorld::Ptr player = MWMechanics::getPlayer();
+            const MWWorld::Ptr& player = mPlayer;
 
             float value = player.getClass().getCreatureStats(player).getDynamic(select.getArgument()).getCurrent();
 
@@ -351,7 +352,7 @@ bool MWDialogue::Filter::testSelectStructNumeric(const SelectWrapper& select) co
 
 int MWDialogue::Filter::getSelectStructInteger(const SelectWrapper& select) const
 {
-    MWWorld::Ptr player = MWMechanics::getPlayer();
+    const MWWorld::Ptr& player = mPlayer;
 
     switch (select.getFunction())
     {
@@ -573,7 +574,7 @@ int MWDialogue::Filter::getSelectStructInteger(const SelectWrapper& select) cons
 
 bool MWDialogue::Filter::getSelectStructBoolean(const SelectWrapper& select) const
 {
-    MWWorld::Ptr player = MWMechanics::getPlayer();
+    const MWWorld::Ptr& player = mPlayer;
 
     switch (select.getFunction())
     {
@@ -667,7 +668,7 @@ bool MWDialogue::Filter::getSelectStructBoolean(const SelectWrapper& select) con
 
         case ESM::DialogueCondition::Function_ShouldAttack:
 
-            return MWBase::Environment::get().getMechanicsManager()->isAggressive(mActor, MWMechanics::getPlayer());
+            return MWBase::Environment::get().getMechanicsManager()->isAggressive(mActor, mPlayer);
 
         case ESM::DialogueCondition::Function_Werewolf:
 
@@ -711,8 +712,9 @@ bool MWDialogue::Filter::hasFactionRankReputationRequirements(
     return stats.getFactionReputation(factionId) >= faction.mData.mRankData.at(rank).mFactReputation;
 }
 
-MWDialogue::Filter::Filter(const MWWorld::Ptr& actor, int choice, bool talkedToPlayer)
+MWDialogue::Filter::Filter(const MWWorld::Ptr& actor, int choice, bool talkedToPlayer, const MWWorld::Ptr& player)
     : mActor(actor)
+    , mPlayer(player.isEmpty() ? MWMechanics::getPlayer() : player)
     , mChoice(choice)
     , mTalkedToPlayer(talkedToPlayer)
 {

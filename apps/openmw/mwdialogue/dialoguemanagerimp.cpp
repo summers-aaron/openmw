@@ -626,6 +626,11 @@ namespace MWDialogue
 
     bool DialogueManager::say(const MWWorld::Ptr& actor, const ESM::RefId& topic)
     {
+        return say(actor, topic, MWWorld::Ptr());
+    }
+
+    bool DialogueManager::say(const MWWorld::Ptr& actor, const ESM::RefId& topic, const MWWorld::Ptr& reactingTo)
+    {
         MWBase::SoundManager* sndMgr = MWBase::Environment::get().getSoundManager();
         if (sndMgr->sayActive(actor))
         {
@@ -649,7 +654,13 @@ namespace MWDialogue
         const ESM::Dialogue* dial = store.get<ESM::Dialogue>().find(topic);
 
         const MWMechanics::CreatureStats& creatureStats = actor.getClass().getCreatureStats(actor);
-        Filter filter(actor, 0, creatureStats.hasTalkedToPlayer());
+        // A bark aimed at a specific player — a network avatar being greeted, a player combat
+        // target — is filtered against that player's PC conditions (race, faction, disposition...)
+        // rather than always the primary player's. A non-player prompt keeps the primary player.
+        MWWorld::Ptr filterPlayer;
+        if (!reactingTo.isEmpty() && MWBase::Environment::get().getWorld()->isPlayer(reactingTo))
+            filterPlayer = reactingTo;
+        Filter filter(actor, 0, creatureStats.hasTalkedToPlayer(), filterPlayer);
         const ESM::DialInfo* info = filter.search(*dial, false).second;
         if (info != nullptr)
         {

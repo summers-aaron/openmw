@@ -68,6 +68,11 @@ namespace MWBase
 
         virtual bool say(const MWWorld::Ptr& actor, const ESM::RefId& topic) = 0;
 
+        virtual bool say(const MWWorld::Ptr& actor, const ESM::RefId& topic, const MWWorld::Ptr& reactingTo) = 0;
+        ///< Say a voice line prompted by \a reactingTo (the player being greeted, a combat target...).
+        /// If that actor is a player, PC dialogue conditions are evaluated against it rather than
+        /// the primary player; otherwise this behaves like the two-argument overload.
+
         virtual void keywordSelected(std::string_view keyword, ResponseCallback* callback) = 0;
         virtual void goodbyeSelected() = 0;
         virtual void questionAnswered(int answer, ResponseCallback* callback) = 0;

@@ -235,7 +235,7 @@ namespace MWMechanics
             if (currentAction->isFleeing())
             {
                 storage.startFleeing();
-                MWBase::Environment::get().getDialogueManager()->say(actor, ESM::RefId::stringRefId("flee"));
+                MWBase::Environment::get().getDialogueManager()->say(actor, ESM::RefId::stringRefId("flee"), target);
                 return false;
             }
             else
@@ -289,7 +289,7 @@ namespace MWMechanics
                 if (spell->mEffects.mList.empty() || spell->mEffects.mList[0].mData.mRange != ESM::RT_Target)
                     canShout = false;
             }
-            storage.startAttackIfReady(actor, characterController, weapon, isRangedCombat, canShout);
+            storage.startAttackIfReady(actor, target, characterController, weapon, isRangedCombat, canShout);
         }
 
         // If actor uses custom destination it has to try to rebuild path because environment can change
@@ -339,7 +339,7 @@ namespace MWMechanics
                     currentAction = std::make_unique<ActionFlee>();
                     actionCooldown = currentAction->getActionCooldown();
                     storage.startFleeing();
-                    MWBase::Environment::get().getDialogueManager()->say(actor, ESM::RefId::stringRefId("flee"));
+                    MWBase::Environment::get().getDialogueManager()->say(actor, ESM::RefId::stringRefId("flee"), target);
                 }
             }
             else
@@ -646,8 +646,8 @@ namespace MWMechanics
         mCombatMove = false;
     }
 
-    void AiCombatStorage::startAttackIfReady(const MWWorld::Ptr& actor, CharacterController& characterController,
-        const ESM::Weapon* weapon, bool distantCombat, bool canShout)
+    void AiCombatStorage::startAttackIfReady(const MWWorld::Ptr& actor, const MWWorld::Ptr& target,
+        CharacterController& characterController, const ESM::Weapon* weapon, bool distantCombat, bool canShout)
     {
         if (mReadyToAttack && characterController.readyToStartAttack())
         {
@@ -677,7 +677,8 @@ namespace MWMechanics
                         = store.get<ESM::GameSetting>().find("iVoiceAttackOdds")->mValue.getInteger();
                     if (Misc::Rng::roll0to99(prng) < iVoiceAttackOdds)
                     {
-                        MWBase::Environment::get().getDialogueManager()->say(actor, ESM::RefId::stringRefId("attack"));
+                        MWBase::Environment::get().getDialogueManager()->say(
+                            actor, ESM::RefId::stringRefId("attack"), target);
                     }
                 }
                 mAttackCooldown = std::min(baseDelay + 0.01f * Misc::Rng::roll0to99(prng), baseDelay + 0.9f);

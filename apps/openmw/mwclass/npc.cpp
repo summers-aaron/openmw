@@ -844,7 +844,7 @@ namespace MWClass
             int chance = store.get<ESM::GameSetting>().find("iVoiceHitOdds")->mValue.getInteger();
             auto& prng = MWBase::Environment::get().getWorld()->getPrng();
             if (Misc::Rng::roll0to99(prng) < chance)
-                MWBase::Environment::get().getDialogueManager()->say(ptr, ESM::RefId::stringRefId("hit"));
+                MWBase::Environment::get().getDialogueManager()->say(ptr, ESM::RefId::stringRefId("hit"), attacker);
 
             // Check for knockdown
             float agilityTerm

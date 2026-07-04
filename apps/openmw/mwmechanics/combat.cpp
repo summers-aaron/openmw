@@ -755,7 +755,7 @@ namespace MWMechanics
             return false;
 
         if (complain)
-            MWBase::Environment::get().getDialogueManager()->say(target, ESM::RefId::stringRefId("hit"));
+            MWBase::Environment::get().getDialogueManager()->say(target, ESM::RefId::stringRefId("hit"), attacker);
         return true;
     }
 
