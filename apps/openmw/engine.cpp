@@ -43,10 +43,15 @@
 
 #include <components/version/version.hpp>
 
+#include <components/esm/attr.hpp>
 #include <components/esm/generatedrefid.hpp>
 #include <components/esm/position.hpp>
 #include <components/esm/util.hpp>
+#include <components/esm3/loadbody.hpp>
+#include <components/esm3/loadclas.hpp>
 #include <components/esm3/loadnpc.hpp>
+#include <components/esm3/loadrace.hpp>
+#include <components/esm3/loadskil.hpp>
 #include <components/esm3/player.hpp>
 #include <components/esm3/savedgame.hpp>
 
@@ -95,6 +100,7 @@
 
 #include "mwmechanics/creaturestats.hpp"
 #include "mwmechanics/mechanicsmanagerimp.hpp"
+#include "mwmechanics/npcstats.hpp"
 
 #include "mwbase/worldrendering.hpp"
 
@@ -343,6 +349,73 @@ void OMW::Engine::enterSelectLobby()
     }
 }
 
+// TEMPORARY testing shortcut, reached from the lobby's "Debug character" button. The bypass new
+// game (no chargen intro) has just run, leaving the default "player" record: make it an Imperial,
+// give it a class, max out attributes and skills, and drop it at Seyda Neen — a ready-to-play
+// character in two clicks. The kit must come AFTER race/class: each of those rebuilds the
+// player's stats from its record.
+void OMW::Engine::setupDebugCharacter()
+{
+    MWBase::World& world = *mEnvironment.getWorld();
+    MWBase::MechanicsManager& mechanics = *mEnvironment.getMechanicsManager();
+    const MWWorld::ESMStore& store = *mEnvironment.getESMStore();
+    const MWWorld::Ptr player = world.getPlayerPtr();
+
+    const ESM::RefId imperial = ESM::RefId::stringRefId("Imperial");
+    if (store.get<ESM::Race>().search(imperial) != nullptr)
+    {
+        // First playable male head/hair of the race, exactly as the race-select dialog lists them.
+        // Fall back to the record's current part if the store has none (mismatched content files).
+        const auto firstBodyPart = [&](ESM::BodyPart::MeshPart part, const ESM::RefId& fallback) {
+            for (const ESM::BodyPart& bodypart : store.get<ESM::BodyPart>())
+            {
+                if (bodypart.mData.mFlags & (ESM::BodyPart::BPF_NotPlayable | ESM::BodyPart::BPF_Female))
+                    continue;
+                if (bodypart.mData.mType != ESM::BodyPart::MT_Skin
+                    || bodypart.mData.mPart != static_cast<int>(part))
+                    continue;
+                if (ESM::isFirstPersonBodyPart(bodypart))
+                    continue;
+                if (bodypart.mRace == imperial)
+                    return bodypart.mId;
+            }
+            return fallback;
+        };
+        const ESM::NPC* base = player.get<ESM::NPC>()->mBase;
+        mechanics.setPlayerRace(imperial, /*male=*/true, firstBodyPart(ESM::BodyPart::MP_Head, base->mHead),
+            firstBodyPart(ESM::BodyPart::MP_Hair, base->mHair));
+    }
+    const ESM::RefId warrior = ESM::RefId::stringRefId("Warrior");
+    if (store.get<ESM::Class>().search(warrior) != nullptr)
+        mechanics.setPlayerClass(warrior);
+
+    MWMechanics::CreatureStats& creatureStats = player.getClass().getCreatureStats(player);
+    MWMechanics::NpcStats& npcStats = player.getClass().getNpcStats(player);
+    for (const ESM::Attribute& attribute : store.get<ESM::Attribute>())
+        creatureStats.setAttribute(attribute.mId, 100.f);
+    for (const ESM::Skill& skill : store.get<ESM::Skill>())
+        npcStats.getSkill(skill.mId).setBase(100.f);
+    npcStats.updateHealth();
+    npcStats.recalculateMagicka();
+    for (int i = 0; i < 3; ++i)
+    {
+        MWMechanics::DynamicStat<float> stat = creatureStats.getDynamic(i);
+        stat.setCurrent(stat.getModified());
+        creatureStats.setDynamic(i, stat);
+    }
+
+    // Arrive in Seyda Neen, like the old onboarding script's CenterOnCell. If the cell doesn't
+    // exist in these content files, the bypass start's default position is kept.
+    ESM::Position pos;
+    const ESM::RefId cell = world.findExteriorPosition("Seyda Neen", pos);
+    if (!cell.empty())
+    {
+        world.changeToCell(cell, pos, true);
+        world.adjustPosition(world.getPlayerPtr(), false);
+    }
+    Log(Debug::Info) << "Debug character ready (Imperial, maxed stats)";
+}
+
 void OMW::Engine::handleControlMessage(MWNet::PeerId from, const MWNet::ControlMessage& message)
 {
     if (mSession->isAuthority())
@@ -494,10 +567,12 @@ void OMW::Engine::handleControlMessage(MWNet::PeerId from, const MWNet::ControlM
         // and appendLocalPlayer needs both the id (set here) and ready before it broadcasts.
         if (const auto* list = std::get_if<MWNet::CharacterList>(&message))
         {
-            // The server's claimable roster. Nothing to pick from -> new character; otherwise show
-            // a select UI (a button per character + "New character"), answered in pumpTransport
-            // once a button is pressed.
-            if (list->mCharacters.empty())
+            // The server's claimable roster. Show a select UI (a button per character +
+            // "New character" + the debug drop-in), answered in pumpTransport once a button is
+            // pressed. An empty roster still gets the lobby so the debug shortcut stays reachable
+            // on a fresh server — except for scripted --character runs, which must not block on
+            // UI and keep the old auto-create.
+            if (list->mCharacters.empty() && mAutoCharacter >= 0)
             {
                 mCreatingNewCharacter = true;
                 sendControl(MWNet::sLocalPeer, MWNet::CreateNew{});
@@ -518,6 +593,8 @@ void OMW::Engine::handleControlMessage(MWNet::PeerId from, const MWNet::ControlM
                     mCharacterChoices.push_back(info.mId);
                 }
                 mCharacterButtons.push_back("New character");
+                // TEMPORARY: fast-testing drop-in — an Imperial with maxed stats, no chargen intro.
+                mCharacterButtons.push_back("Debug character (Imperial, max stats)");
                 mPendingLobby = true;
             }
         }
@@ -580,8 +657,10 @@ void OMW::Engine::pumpTransport()
         sendControl(MWNet::sLocalPeer, request); // a client has one peer (the host); id is ignored
         mLoginSent = true;
     }
-    // Character-select UI is up: answer the host once a button is pressed. The last button is always
-    // "New character"; the rest map to mCharacterChoices slot ids.
+    // Character-select UI is up: answer the host once a button is pressed. The buttons after the
+    // roster are always "New character" then the TEMPORARY debug drop-in; the rest map to
+    // mCharacterChoices slot ids. Both creation flavors run the same CreateNew handshake — the
+    // debug one only changes what the deferred new game does locally.
     if (mChoosingCharacter)
     {
         const int button = MWBase::Environment::get().getWindowManager()->readPressedButton();
@@ -593,6 +672,7 @@ void OMW::Engine::pumpTransport()
             else
             {
                 mCreatingNewCharacter = true;
+                mDebugCharacter = static_cast<std::size_t>(button) == mCharacterChoices.size() + 1;
                 sendControl(MWNet::sLocalPeer, MWNet::CreateNew{});
             }
         }
@@ -800,7 +880,11 @@ void OMW::Engine::pumpTransport()
     {
         mPendingNewGame = false;
         mReplicator->setLocalPlayerReady(false); // held back until chargen finishes
-        mStateManager->newGame(false);
+        // TEMPORARY: the debug drop-in bypasses the chargen intro (a bypass start marks chargen
+        // done, so the replication gate reopens on the next pump) and pre-kits the character.
+        mStateManager->newGame(/*bypass=*/mDebugCharacter);
+        if (mDebugCharacter && mStateManager->getState() == MWBase::StateManager::State_Running)
+            setupDebugCharacter();
         if (!mStartupScript.empty() && mStateManager->getState() == MWBase::StateManager::State_Running)
             mWindowManager->executeInConsole(mStartupScript);
     }

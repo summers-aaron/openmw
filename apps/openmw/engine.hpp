@@ -170,6 +170,7 @@ namespace OMW
         std::string mPendingAdoptBlob; // client: served character to adopt in-place at the next safe point (empty = none)
         bool mChoosingCharacter = false; // client: the select UI is up, waiting for a button press
         bool mCreatingNewCharacter = false; // client: chose to create a new character (not resume one)
+        bool mDebugCharacter = false; // client: TEMPORARY — the new character is the pre-kitted debug drop-in
         bool mPendingNewGame = false; // client: start a new game at the end of the pump (deferred, safe)
         bool mCharacterUploaded = false; // client: has the full character sheet been sent to the server
         unsigned mPumpTick = 0; // pumpTransport call counter (drives low-frequency periodic work)
@@ -254,6 +255,11 @@ namespace OMW
         /// is teleported to a fixed cell and the camera is pinned there in Static mode. Held out of the
         /// replication stream (not ready) so the lobby is purely local until a character is chosen.
         void enterSelectLobby();
+
+        /// Client, TEMPORARY testing shortcut (the lobby's "Debug character" button): the bypass
+        /// new game just ran (no chargen intro); kit the fresh player as an Imperial with maxed
+        /// attributes and skills and drop it at Seyda Neen, ready to play.
+        void setupDebugCharacter();
 
         bool frame(unsigned frameNumber, float dt);
 
