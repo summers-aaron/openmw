@@ -202,10 +202,21 @@ namespace MWNet
         // persisted in the server save as REC_NETWORK_STATE); on a client the received states,
         // kept even for unloaded cells and re-applied as each cell loads (applyRefStates).
         std::map<ESM::RefNum, bool> mRefStates;
+        // Both ways: global script start/stop transitions awaiting send.
+        std::vector<ScriptRun> mOutgoingScriptRuns;
+        // Host only: the latest start/stop state per script name, periodically re-asserted
+        // (receivers skip-if-equal). Seeded lazily by diffing the live GlobalScripts running set
+        // against the content defaults ("main" + the StartScript store), so a save-loaded world's
+        // stopped/started scripts reach late joiners. Derived — cleared and re-seeded on teardown.
+        std::map<ESM::RefId, ScriptRun> mScriptOverrides;
+        bool mScriptsSeeded = false;
 
         /// Apply one recorded ref state where the ref is materialized (no-op otherwise, and for
         /// players), under a RemoteApplyScope so the enable/disable hook doesn't re-report it.
         void applyRefState(const ESM::RefNum& ref, bool enabled);
+
+        /// Apply one received script transition (skip-if-equal), under a RemoteApplyScope.
+        void applyOneScriptRun(const ScriptRun& run);
         // Host only: arrests (a guard caught a player's avatar) awaiting send to that player's client.
         std::vector<ArrestRequest> mOutgoingArrests;
         // Client only: requests for the host to put a host-owned actor into combat with our player
@@ -568,6 +579,17 @@ namespace MWNet
         /// while my cell was unloaded" window on clients and host alike. Idempotent and cheap
         /// when converged.
         void applyRefStates();
+
+        /// Report a global script starting (running=true, with its target if any) or stopping —
+        /// quest machinery like StartScript/StopScript. A no-op off the network and while
+        /// applying received state.
+        void reportScriptRun(const ESM::RefId& name, bool running, const MWWorld::Ptr& target);
+
+        /// Apply script transitions reported by clients (host only): apply, record, relay.
+        void applyScriptRunReports(const ActionBatch& batch);
+
+        /// Apply broadcast script transitions (client only): skip our own echoes, skip-if-equal.
+        void applyScriptRuns(const ActionBatch& batch);
 
         /// Server-save persistence for the ref-state record (REC_NETWORK_STATE): without it, a
         /// host restart would strand clients on content defaults (they never load the save).

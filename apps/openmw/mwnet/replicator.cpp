@@ -16,6 +16,7 @@
 #include <components/esm3/journalentry.hpp>
 #include <components/esm3/loadcrea.hpp>
 #include <components/esm3/loadglob.hpp>
+#include <components/esm3/loadsscr.hpp>
 #include <components/esm3/loadench.hpp>
 #include <components/esm3/loadgmst.hpp>
 #include <components/esm3/loadmgef.hpp>
@@ -30,6 +31,7 @@
 #include "../mwbase/environment.hpp"
 #include "../mwbase/journal.hpp"
 #include "../mwbase/mechanicsmanager.hpp"
+#include "../mwbase/scriptmanager.hpp"
 #include "../mwbase/soundmanager.hpp"
 #include "../mwbase/guimode.hpp"
 #include "../mwbase/windowmanager.hpp"
@@ -50,6 +52,8 @@
 #include "../mwrender/animation.hpp"
 #include "../mwrender/blendmask.hpp"
 #include "../mwrender/bonegroup.hpp"
+
+#include "../mwscript/globalscripts.hpp"
 
 #include "../mwworld/cellref.hpp"
 #include "../mwworld/cellstore.hpp"
@@ -528,6 +532,10 @@ namespace MWNet
         mOutgoingTimeRequests.clear();
         mTimeSyncPending = false;
         mOutgoingRefEnables.clear();
+        // The script overrides derive from GlobalScripts (persisted in the save as REC_GSCR).
+        mOutgoingScriptRuns.clear();
+        mScriptOverrides.clear();
+        mScriptsSeeded = false;
         // On the authority the ref-state record belongs to the world being torn down — the next
         // world seeds it from its own save's REC_NETWORK_STATE (or starts clean). On a client it
         // is the cache of received states and SURVIVES, so a rejoining world (new character flow)
@@ -2038,6 +2046,7 @@ namespace MWNet
         batch.mGlobalDeltas = std::move(mOutgoingGlobalDeltas); // both ways: shared global changes
         batch.mTimeRequests = std::move(mOutgoingTimeRequests); // client -> host rest/travel time
         batch.mRefEnables = std::move(mOutgoingRefEnables); // both ways: scripted enable/disable
+        batch.mScriptRuns = std::move(mOutgoingScriptRuns); // both ways: StartScript/StopScript
         mOutgoingHits.clear();
         mOutgoingPlayerDamages.clear();
         mOutgoingBounties.clear();
@@ -2054,6 +2063,47 @@ namespace MWNet
         mOutgoingGlobalDeltas.clear();
         mOutgoingTimeRequests.clear();
         mOutgoingRefEnables.clear();
+        mOutgoingScriptRuns.clear();
+
+        // Host: periodically re-assert the global script overrides (receivers skip-if-equal),
+        // seeded by diffing the live running set against the content defaults — exactly the set
+        // addStartup starts on every machine — so a save-loaded world's quest scripts reach
+        // clients that never see that save.
+        if (mIsAuthority && (mTick % sReplicationRefreshInterval) == 0)
+        {
+            if (!mScriptsSeeded)
+            {
+                mScriptsSeeded = true;
+                const MWScript::GlobalScripts& scripts
+                    = MWBase::Environment::get().getScriptManager()->getGlobalScripts();
+                const MWWorld::ESMStore& store = *MWBase::Environment::get().getESMStore();
+                std::set<ESM::RefId> defaults;
+                defaults.insert(ESM::RefId::stringRefId("main"));
+                for (auto it = store.get<ESM::StartScript>().begin(); it != store.get<ESM::StartScript>().end(); ++it)
+                    defaults.insert(it->mId);
+                for (const auto& [name, desc] : scripts.getScripts())
+                {
+                    const bool runsByDefault = defaults.count(name) > 0;
+                    if (desc->mRunning == runsByDefault)
+                        continue;
+                    ScriptRun run;
+                    run.mScript = name.serializeText();
+                    run.mRunning = desc->mRunning;
+                    if (const MWWorld::Ptr* target = desc->getPtrIfPresent();
+                        target != nullptr && !target->isEmpty())
+                    {
+                        run.mTargetRef = target->getCellRef().getRefNum();
+                        run.mTargetId = target->getCellRef().getRefId().serializeText();
+                    }
+                    else if (const ESM::RefId targetId = desc->getId(); !targetId.empty())
+                        run.mTargetId = targetId.serializeText();
+                    run.mOrigin = mLocalPlayerNetId;
+                    mScriptOverrides[name] = std::move(run);
+                }
+            }
+            for (const auto& [name, run] : mScriptOverrides)
+                batch.mScriptRuns.push_back(run);
+        }
 
         // Host: periodically re-assert every scripted ref state, so late joiners see the Dreamers
         // that appeared before they arrived. Receivers apply change-guarded, so this is silent
@@ -2853,6 +2903,70 @@ namespace MWNet
     {
         for (const auto& [ref, enabled] : mRefStates)
             applyRefState(ref, enabled);
+    }
+
+    void Replicator::reportScriptRun(const ESM::RefId& name, bool running, const MWWorld::Ptr& target)
+    {
+        if (!isNetworked() || isApplyingRemote())
+            return;
+        ScriptRun run;
+        run.mScript = name.serializeText();
+        run.mRunning = running;
+        if (!target.isEmpty())
+        {
+            run.mTargetRef = target.getCellRef().getRefNum();
+            run.mTargetId = target.getCellRef().getRefId().serializeText();
+        }
+        run.mOrigin = mLocalPlayerNetId;
+        if (mIsAuthority)
+            mScriptOverrides[name] = run;
+        mOutgoingScriptRuns.push_back(std::move(run));
+    }
+
+    void Replicator::applyOneScriptRun(const ScriptRun& run)
+    {
+        MWScript::GlobalScripts& scripts = MWBase::Environment::get().getScriptManager()->getGlobalScripts();
+        const ESM::RefId name = ESM::RefId::deserializeText(run.mScript);
+        // Skip-if-equal: periodic re-asserts and echoes must not restart a script (addScript's
+        // restart branch would re-point its target) or churn state.
+        if (scripts.isRunning(name) == run.mRunning)
+            return;
+        RemoteApplyScope scope(this);
+        if (!run.mRunning)
+        {
+            scripts.removeScript(name);
+            return;
+        }
+        // Resolve the target: by RefNum where the ref is materialized here, else by record id.
+        // Unresolved targets start the script untargeted — rare (vanilla StartScript is almost
+        // always untargeted), and a mis-targeted run self-corrects if the script no-ops.
+        MWWorld::Ptr target;
+        if (run.mTargetRef.isSet())
+            target = MWBase::Environment::get().getWorldModel()->getPtr(run.mTargetRef);
+        if (target.isEmpty() && !run.mTargetId.empty())
+            target = MWBase::Environment::get().getWorld()->searchPtr(
+                ESM::RefId::deserializeText(run.mTargetId), /*activeOnly=*/false);
+        scripts.addScript(name, target);
+    }
+
+    void Replicator::applyScriptRunReports(const ActionBatch& batch)
+    {
+        for (const ScriptRun& run : batch.mScriptRuns)
+        {
+            applyOneScriptRun(run);
+            mScriptOverrides[ESM::RefId::deserializeText(run.mScript)] = run;
+            mOutgoingScriptRuns.push_back(run); // relay verbatim, origin preserved
+        }
+    }
+
+    void Replicator::applyScriptRuns(const ActionBatch& batch)
+    {
+        for (const ScriptRun& run : batch.mScriptRuns)
+        {
+            if (run.mOrigin.isSet() && run.mOrigin == mLocalPlayerNetId)
+                continue; // our own report echoed back — already applied locally
+            applyOneScriptRun(run);
+        }
     }
 
     std::size_t Replicator::countSavedGameRecords() const

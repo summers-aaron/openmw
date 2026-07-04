@@ -8,7 +8,7 @@ namespace MWNet
 {
     namespace
     {
-        constexpr std::uint8_t sVersion = 13;
+        constexpr std::uint8_t sVersion = 14;
         // Smallest encoded CombatHit: attacker RefNum (4+4) + victim RefNum (4+4) + damage
         // (float, 4) + health-damage flag (1).
         constexpr std::uint32_t sMinHitBytes = 21;
@@ -55,6 +55,9 @@ namespace MWNet
         constexpr std::uint32_t sMinTimeRequestBytes = 12;
         // Encoded RefEnable: ref RefNum (4 + 4) + flag (1) + origin RefNum (4 + 4).
         constexpr std::uint32_t sMinRefEnableBytes = 17;
+        // Smallest encoded ScriptRun: zero-length script (4) + flag (1) + target RefNum (4 + 4) +
+        // zero-length target id (4) + origin RefNum (4 + 4).
+        constexpr std::uint32_t sMinScriptRunBytes = 25;
 
         void writeContainerItem(ByteWriter& writer, const ContainerItem& item)
         {
@@ -258,6 +261,17 @@ namespace MWNet
             writer.write(static_cast<std::uint8_t>(refEnable.mEnabled ? 1 : 0));
             writer.write(refEnable.mOrigin.mIndex);
             writer.write(refEnable.mOrigin.mContentFile);
+        }
+        writer.write(static_cast<std::uint32_t>(batch.mScriptRuns.size()));
+        for (const ScriptRun& run : batch.mScriptRuns)
+        {
+            writer.writeString(run.mScript);
+            writer.write(static_cast<std::uint8_t>(run.mRunning ? 1 : 0));
+            writer.write(run.mTargetRef.mIndex);
+            writer.write(run.mTargetRef.mContentFile);
+            writer.writeString(run.mTargetId);
+            writer.write(run.mOrigin.mIndex);
+            writer.write(run.mOrigin.mContentFile);
         }
         return out;
     }
@@ -574,6 +588,24 @@ namespace MWNet
                 return std::nullopt;
             refEnable.mEnabled = enabled != 0;
             batch.mRefEnables.push_back(refEnable);
+        }
+
+        std::uint32_t scriptRunCount = 0;
+        if (!reader.read(scriptRunCount))
+            return std::nullopt;
+        if (scriptRunCount > reader.remaining() / sMinScriptRunBytes)
+            return std::nullopt;
+        batch.mScriptRuns.reserve(scriptRunCount);
+        for (std::uint32_t i = 0; i < scriptRunCount; ++i)
+        {
+            ScriptRun run;
+            std::uint8_t running = 0;
+            if (!reader.readString(run.mScript) || !reader.read(running) || !reader.read(run.mTargetRef.mIndex)
+                || !reader.read(run.mTargetRef.mContentFile) || !reader.readString(run.mTargetId)
+                || !reader.read(run.mOrigin.mIndex) || !reader.read(run.mOrigin.mContentFile))
+                return std::nullopt;
+            run.mRunning = running != 0;
+            batch.mScriptRuns.push_back(std::move(run));
         }
         return batch;
     }

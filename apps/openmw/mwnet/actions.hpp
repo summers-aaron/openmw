@@ -274,6 +274,25 @@ namespace MWNet
         friend bool operator==(const RefEnable&, const RefEnable&) = default;
     };
 
+    /// A global script started or stopped outside the content defaults (StartScript/StopScript —
+    /// quest machinery like escort timers and staged events). Only entries differing from the
+    /// default running set ("main" + the ESM::StartScript store, which addStartup starts on every
+    /// machine identically) are seeded; live transitions cross as they happen. Targeted starts
+    /// carry the target's RefNum and record id; a receiver that can resolve neither starts the
+    /// script untargeted (rare — vanilla StartScript is almost always untargeted). Script LOCALS
+    /// deliberately do not cross: they converge because every machine runs the same scripts over
+    /// the now-synced journal/globals/clock.
+    struct ScriptRun
+    {
+        std::string mScript; // script RefId, serialized
+        bool mRunning = true;
+        ESM::RefNum mTargetRef; // unset for untargeted scripts
+        std::string mTargetId; // serialized RefId; empty for untargeted
+        ESM::RefNum mOrigin; // reporting peer's wire id, for echo suppression
+
+        friend bool operator==(const ScriptRun&, const ScriptRun&) = default;
+    };
+
     /// Host -> the owning client: a host guard pursuing that client's avatar for a crime has caught it,
     /// so the client should open the arrest dialogue. The host can't show the client's UI (and opening
     /// it on the host would pull the host's own player into the conversation), so it routes the arrest
@@ -343,6 +362,8 @@ namespace MWNet
         std::vector<TimeRequest> mTimeRequests;
         // both ways: scripted ref enable/disable state (same flow as journal/global deltas).
         std::vector<RefEnable> mRefEnables;
+        // both ways: global script start/stop transitions (same flow as journal/global deltas).
+        std::vector<ScriptRun> mScriptRuns;
 
         bool empty() const
         {
@@ -350,7 +371,7 @@ namespace MWNet
                 && mContainers.empty() && mContainerChanges.empty() && mContainerRevokes.empty()
                 && mSummons.empty() && mBounties.empty() && mSpeech.empty() && mSounds.empty() && mArrests.empty()
                 && mCombatRequests.empty() && mJournalDeltas.empty() && mGlobalDeltas.empty() && mTimeSyncs.empty()
-                && mTimeRequests.empty() && mRefEnables.empty();
+                && mTimeRequests.empty() && mRefEnables.empty() && mScriptRuns.empty();
         }
 
         friend bool operator==(const ActionBatch&, const ActionBatch&) = default;

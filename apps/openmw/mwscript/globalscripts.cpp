@@ -12,6 +12,7 @@
 #include "../mwbase/environment.hpp"
 #include "../mwbase/scriptmanager.hpp"
 #include "../mwbase/world.hpp"
+#include "../mwnet/replicator.hpp"
 #include "../mwworld/worldmodel.hpp"
 
 #include "interpretercontext.hpp"
@@ -125,6 +126,20 @@ namespace MWScript
     {
     }
 
+    namespace
+    {
+        // Multiplayer: a StartScript/StopScript transition is shared world state (quest
+        // machinery like escort timers and staged events). Reported for the host to apply,
+        // record and relay; a no-op in single-player, and while applying received transitions
+        // (RemoteApplyScope) or a save (readRecord builds descs directly, not through here).
+        void reportScriptRun(const ESM::RefId& name, bool running, const MWWorld::Ptr& target)
+        {
+            if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+                replicator != nullptr && replicator->isNetworked() && !replicator->isApplyingRemote())
+                replicator->reportScriptRun(name, running, target);
+        }
+    }
+
     void GlobalScripts::addScript(const ESM::RefId& name, const MWWorld::Ptr& target)
     {
         const auto iter = mScripts.find(name);
@@ -139,6 +154,7 @@ namespace MWScript
                 desc->mRunning = true;
                 desc->mLocals.configure(*script);
                 mScripts.insert(std::make_pair(name, desc));
+                reportScriptRun(name, true, target);
             }
             else
             {
@@ -150,6 +166,7 @@ namespace MWScript
             iter->second->mRunning = true;
             MWWorld::Ptr ptr = target;
             iter->second->mTarget = ptr;
+            reportScriptRun(name, true, target);
         }
     }
 
@@ -158,7 +175,11 @@ namespace MWScript
         const auto iter = mScripts.find(name);
 
         if (iter != mScripts.end())
+        {
+            if (iter->second->mRunning)
+                reportScriptRun(name, false, MWWorld::Ptr());
             iter->second->mRunning = false;
+        }
     }
 
     bool GlobalScripts::isRunning(const ESM::RefId& name) const
