@@ -31,15 +31,20 @@ docker/run-client.sh <IP>     # second client (auto-named, runs alongside the fi
 Set `NAME=…` only if you want a specific, fixed container name (re-running with the same `NAME`
 replaces that one).
 
-Host a specific save instead of a new game — point `--save` at a host `.omwsave` file:
+The client takes no arguments beyond the server address. Everything else happens in-game on
+connect: the server offers its stored characters — pick one to resume it, or choose
+**New character** to create one through the normal character-creation intro (prison ship, census
+office) and join the shared world from there.
+
+Host a specific save instead of a new world — point the **server** at a host `.omwsave` file:
 
 ```sh
-docker/run-server.sh --save ~/openmw-mp-userdata/saves/test/MP.omwsave        # server hosts the save
-docker/run-client.sh <IP> --save ~/openmw-mp-userdata/saves/test/MP.omwsave   # each client loads it too
+docker/run-server.sh --save ~/openmw-mp-userdata/saves/test/MP.omwsave   # server hosts the save
+docker/run-client.sh <IP>                                                # clients just connect
 ```
 
-The save is mounted read-only; the server and every client must load the **same** save so they share
-one world. (`OPENMW_SAVE=<path>` is the env equivalent of `--save`.)
+The save is mounted read-only. Clients never load a save themselves; the server serves each client
+its character over the wire. (`OPENMW_SAVE=<path>` is the env equivalent of `--save`.)
 
 ## Scripts
 
@@ -47,7 +52,7 @@ one world. (`OPENMW_SAVE=<path>` is the env equivalent of `--save`.)
 |---|---|
 | `build-host.sh` | Build the image (once) and compile openmw incrementally. Also `all`, `clean`, specific targets, `--configure`, `--shell`. |
 | `run-server.sh` | Headless dedicated server (software GL, no window). `--listen PORT`, plus any openmw args. |
-| `run-client.sh` | Rendering client (`<SERVER_IP[:PORT]>`). Auto-detects GPU, starts a new game unless you pass `--load-savegame`. |
+| `run-client.sh` | Rendering client (`<SERVER_IP[:PORT]>`). Auto-detects GPU; character select / creation happens in-game on connect. |
 | `_mp-common.sh` | Shared helpers sourced by the run scripts (not run directly). |
 | `Dockerfile.server` | The Ubuntu-based build/run image (OpenSceneGraph, Bullet, MyGUI 3.4.3 from source, Recast, …). |
 
@@ -60,7 +65,7 @@ All host-specific paths default to this machine but can be overridden:
 | `OPENMW_DATA` | _(read from openmw.cfg)_ | force a specific Morrowind `Data Files` path |
 | `OPENMW_CONFIG` | `~/.config/openmw` | openmw config dir (copied per instance) |
 | `OPENMW_USERDATA` | client: throwaway temp dir; server: `~/openmw-mp-server-data` | dir mounted at `/userdata` for saves. Clients get a wiped copy each run; the **server's is persistent** (bind-mounted read-write) so `SIGUSR1` saves survive restarts |
-| `OPENMW_SAVE` | _(none)_ | a host `.omwsave` to load (same as `--save`) |
+| `OPENMW_SAVE` | _(none)_ | server only: a host `.omwsave` to host (same as `--save`) |
 | `IMAGE` | `openmw.server:latest` | build/run image tag |
 | `CONTAINER_RUNTIME` | auto | `podman` or `docker` |
 | `PORT` | `25565` | default port when none is in the address |

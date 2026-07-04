@@ -783,8 +783,8 @@ void OMW::Engine::pumpTransport()
     }
 
     // Deferred new-game for a client that chose to create a character (safe here: message dispatch is
-    // done). Its single, clean game start; the onboard script (if any) runs just as it would have at
-    // the initial start.
+    // done). Its single, clean game start: the normal chargen intro, exactly as an offline new game.
+    // A --script-run startup script (if any) runs just as it would have at an ordinary start.
     if (mPendingNewGame)
     {
         mPendingNewGame = false;

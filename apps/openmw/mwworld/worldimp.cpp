@@ -3869,9 +3869,9 @@ namespace MWWorld
         // start flow it launched with. A joining client typically arrives here mid character
         // generation — the vanilla intro has controls and the GUI disabled and only re-enables them
         // at the end of a sequence we just teleported out of — so without this the player is left
-        // as a bodiless camera with no HUD. Mirrors what docker/onboard.txt does by script: mark
-        // chargen finished (which also opens the replication gate), re-enable the control switches
-        // the intro turned off, and re-allow the GUI windows a new game starts with disallowed.
+        // as a bodiless camera with no HUD. So finish chargen by hand: mark it done (which also
+        // opens the replication gate), re-enable the control switches the intro turned off, and
+        // re-allow the GUI windows a new game starts with disallowed.
         setGlobalInt(Globals::sCharGenState, -1);
         MWBase::InputManager& input = *MWBase::Environment::get().getInputManager();
         for (const auto sw :
