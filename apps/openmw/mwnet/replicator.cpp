@@ -11,6 +11,8 @@
 #include <components/debug/debuglog.hpp>
 #include <components/esm/generatedrefid.hpp>
 #include <components/esm/refid.hpp>
+#include <components/esm3/esmreader.hpp>
+#include <components/esm3/esmwriter.hpp>
 #include <components/esm3/journalentry.hpp>
 #include <components/esm3/loadcrea.hpp>
 #include <components/esm3/loadglob.hpp>
@@ -525,7 +527,14 @@ namespace MWNet
         mGlobalReportTicks.clear();
         mOutgoingTimeRequests.clear();
         mTimeSyncPending = false;
-        // Deliberately kept: mAppearances (peers' body identities, so their avatars rebuild
+        mOutgoingRefEnables.clear();
+        // On the authority the ref-state record belongs to the world being torn down — the next
+        // world seeds it from its own save's REC_NETWORK_STATE (or starts clean). On a client it
+        // is the cache of received states and SURVIVES, so a rejoining world (new character flow)
+        // re-applies them as cells load instead of waiting a full re-assert interval.
+        if (mIsAuthority)
+            mRefStates.clear();
+    // Deliberately kept: mAppearances (peers' body identities, so their avatars rebuild
         // immediately), mLocalPlayerNetId / mLocalPlayerReady (the login identity outlives the
         // world), and the item/container/summon session records (mRemovedWorldItems,
         // mCachedContainerStates, mAuthoritativeContainers, mReplicatedItems, mNetworkItems,
@@ -2028,6 +2037,7 @@ namespace MWNet
         batch.mJournalDeltas = std::move(mOutgoingJournalDeltas); // both ways: shared-journal changes
         batch.mGlobalDeltas = std::move(mOutgoingGlobalDeltas); // both ways: shared global changes
         batch.mTimeRequests = std::move(mOutgoingTimeRequests); // client -> host rest/travel time
+        batch.mRefEnables = std::move(mOutgoingRefEnables); // both ways: scripted enable/disable
         mOutgoingHits.clear();
         mOutgoingPlayerDamages.clear();
         mOutgoingBounties.clear();
@@ -2043,6 +2053,14 @@ namespace MWNet
         mOutgoingJournalDeltas.clear();
         mOutgoingGlobalDeltas.clear();
         mOutgoingTimeRequests.clear();
+        mOutgoingRefEnables.clear();
+
+        // Host: periodically re-assert every scripted ref state, so late joiners see the Dreamers
+        // that appeared before they arrived. Receivers apply change-guarded, so this is silent
+        // when converged.
+        if (mIsAuthority && (mTick % sReplicationRefreshInterval) == 0)
+            for (const auto& [ref, enabled] : mRefStates)
+                batch.mRefEnables.push_back({ ref, enabled, mLocalPlayerNetId });
 
         // Host: broadcast the authoritative game clock — at the periodic cadence to correct the
         // slow drift of everyone's locally advancing clocks, and immediately after a discontinuous
@@ -2777,6 +2795,94 @@ namespace MWNet
         world.setGlobalInt(MWWorld::Globals::sDay, sync.mDay);
         world.setGlobalFloat(MWWorld::Globals::sTimeScale, sync.mTimeScale);
         world.setGlobalFloat(MWWorld::Globals::sGameHour, sync.mGameHour);
+    }
+
+    void Replicator::reportRefEnabled(const ESM::RefNum& ref, bool enabled)
+    {
+        if (!isNetworked() || isApplyingRemote() || !ref.hasContentFile())
+            return;
+        if (mIsAuthority)
+            mRefStates[ref] = enabled;
+        mOutgoingRefEnables.push_back({ ref, enabled, mLocalPlayerNetId });
+    }
+
+    void Replicator::applyRefState(const ESM::RefNum& ref, bool enabled)
+    {
+        const MWWorld::Ptr ptr = MWBase::Environment::get().getWorldModel()->getPtr(ref);
+        // Not materialized here (its cell isn't loaded): the recorded state re-applies when the
+        // cell loads (applyRefStates). Players can never be disabled — refuse hostile data that
+        // names one rather than letting World::disable throw.
+        if (ptr.isEmpty() || !ptr.isInCell() || MWBase::Environment::get().getWorld()->isPlayer(ptr))
+            return;
+        RemoteApplyScope scope(this);
+        if (enabled)
+            MWBase::Environment::get().getWorld()->enable(ptr);
+        else
+            MWBase::Environment::get().getWorld()->disable(ptr);
+    }
+
+    void Replicator::applyRefEnableReports(const ActionBatch& batch)
+    {
+        for (const RefEnable& refEnable : batch.mRefEnables)
+        {
+            if (!refEnable.mRef.hasContentFile())
+                continue; // only content refs are shared this way
+            mRefStates[refEnable.mRef] = refEnable.mEnabled;
+            applyRefState(refEnable.mRef, refEnable.mEnabled);
+            // Relay onward verbatim (origin preserved): the reporting peer skips its echo, every
+            // other peer applies. Even if the host couldn't resolve the ref yet, the record above
+            // re-asserts it once its cell loads.
+            mOutgoingRefEnables.push_back(refEnable);
+        }
+    }
+
+    void Replicator::applyRefEnables(const ActionBatch& batch)
+    {
+        for (const RefEnable& refEnable : batch.mRefEnables)
+        {
+            if (refEnable.mOrigin.isSet() && refEnable.mOrigin == mLocalPlayerNetId)
+                continue; // our own report echoed back — already applied locally
+            if (!refEnable.mRef.hasContentFile())
+                continue;
+            mRefStates[refEnable.mRef] = refEnable.mEnabled;
+            applyRefState(refEnable.mRef, refEnable.mEnabled);
+        }
+    }
+
+    void Replicator::applyRefStates()
+    {
+        for (const auto& [ref, enabled] : mRefStates)
+            applyRefState(ref, enabled);
+    }
+
+    std::size_t Replicator::countSavedGameRecords() const
+    {
+        return (mIsAuthority && !mRefStates.empty()) ? 1 : 0;
+    }
+
+    void Replicator::write(ESM::ESMWriter& writer) const
+    {
+        if (countSavedGameRecords() == 0)
+            return;
+        writer.startRecord(ESM::REC_NETWORK_STATE);
+        for (const auto& [ref, enabled] : mRefStates)
+        {
+            writer.writeFormId(ref, /*wide=*/true, "REFN");
+            writer.writeHNT("ENAB", static_cast<std::uint8_t>(enabled ? 1 : 0));
+        }
+        writer.endRecord(ESM::REC_NETWORK_STATE);
+    }
+
+    void Replicator::readRecord(ESM::ESMReader& reader)
+    {
+        mRefStates.clear();
+        while (reader.isNextSub("REFN"))
+        {
+            const ESM::RefNum ref = reader.getFormId(/*wide=*/true, "REFN");
+            std::uint8_t enabled = 1;
+            reader.getHNT(enabled, "ENAB");
+            mRefStates[ref] = enabled != 0;
+        }
     }
 
     bool Replicator::reportArrest(const MWWorld::Ptr& avatar, const MWWorld::Ptr& guard)

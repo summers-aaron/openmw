@@ -878,6 +878,8 @@ void OMW::Engine::pumpTransport()
                         // A client's global writes and rest/travel time advances, likewise.
                         mReplicator->applyGlobalReports(*actions);
                         mReplicator->applyTimeRequests(*actions);
+                        // A client's scripted ref enable/disable (dialogue-result Enable etc.).
+                        mReplicator->applyRefEnableReports(*actions);
                     }
                     else if (!chargenBubble) // the bubble also keeps host actions out of the intro cells
                     {
@@ -889,6 +891,7 @@ void OMW::Engine::pumpTransport()
                         mReplicator->applyJournalDeltas(*actions); // the shared world journal advanced
                         mReplicator->applyGlobalDeltas(*actions); // shared globals changed
                         mReplicator->applyTimeSyncs(*actions); // the authoritative game clock
+                        mReplicator->applyRefEnables(*actions); // scripted refs appeared/vanished
                         mReplicator->applyArrests(*actions); // open arrest dialogue a guard triggered
                     }
                     // Authoritative lootable contents flow host -> clients; the host relays them onward.

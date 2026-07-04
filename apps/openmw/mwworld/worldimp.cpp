@@ -775,6 +775,14 @@ namespace MWWorld
         {
             reference.getRefData().enable();
 
+            // Multiplayer: a scripted enable is shared world state (a Dreamer appearing after a
+            // quest stage) — report it so every peer's copy of the ref flips too. Only content
+            // refs (the shared namespace); dynamic refs ride the item/summon channels.
+            if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+                replicator != nullptr && replicator->isNetworked() && !replicator->isApplyingRemote()
+                && reference.getCellRef().getRefNum().hasContentFile())
+                replicator->reportRefEnabled(reference.getCellRef().getRefNum(), true);
+
             if (mWorldScene->getActiveCells().find(reference.getCell()) != mWorldScene->getActiveCells().end()
                 && reference.getCellRef().getCount())
                 mWorldScene->addObjectToScene(reference);
@@ -819,6 +827,12 @@ namespace MWWorld
             throw std::runtime_error("can not disable player object");
 
         reference.getRefData().disable();
+
+        // Multiplayer: see World::enable.
+        if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+            replicator != nullptr && replicator->isNetworked() && !replicator->isApplyingRemote()
+            && reference.getCellRef().getRefNum().hasContentFile())
+            replicator->reportRefEnabled(reference.getCellRef().getRefNum(), false);
 
         if (reference.getCellRef().getRefNum().hasContentFile())
         {

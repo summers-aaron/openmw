@@ -254,6 +254,20 @@ namespace MWNet
             EXPECT_FALSE(isUnsyncedGlobal(""));
         }
 
+        TEST(MWNetActionsTest, refEnablesRoundTrip)
+        {
+            ActionBatch batch;
+            batch.mRefEnables.push_back({ ESM::RefNum{ 12345, 0 }, true, ESM::RefNum{ 0, -1000 } });
+            batch.mRefEnables.push_back({ ESM::RefNum{ 678, 2 }, false, ESM::RefNum{ 3, -1000 } });
+            const std::optional<ActionBatch> parsed = deserializeActions(serializeActions(batch));
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(*parsed, batch);
+            ASSERT_EQ(parsed->mRefEnables.size(), 2u);
+            EXPECT_TRUE(parsed->mRefEnables[0].mEnabled);
+            EXPECT_FALSE(parsed->mRefEnables[1].mEnabled);
+            EXPECT_EQ(parsed->mRefEnables[1].mRef.mContentFile, 2);
+        }
+
         TEST(MWNetActionsTest, rejectsEmptyBuffer)
         {
             EXPECT_FALSE(deserializeActions(std::span<const std::byte>{}).has_value());
@@ -269,10 +283,10 @@ namespace MWNet
         TEST(MWNetActionsTest, rejectsImplausibleCount)
         {
             std::vector<std::byte> bytes = serializeActions(ActionBatch{});
-            // version + 17 4-byte 0 counts (hits, playerDamages, drops, taken, containers, changes,
+            // version + 18 4-byte 0 counts (hits, playerDamages, drops, taken, containers, changes,
             // revokes, summons, bounties, speech, sounds, arrests, combatRequests, journalDeltas,
-            // globalDeltas, timeSyncs, timeRequests)
-            ASSERT_EQ(bytes.size(), 69u);
+            // globalDeltas, timeSyncs, timeRequests, refEnables)
+            ASSERT_EQ(bytes.size(), 73u);
             for (std::size_t i = 0; i < 4; ++i)
                 bytes[1 + i] = std::byte{ 0xff }; // implausible hit count
             EXPECT_FALSE(deserializeActions(bytes).has_value());

@@ -116,6 +116,7 @@ namespace ESM
         REC_GSCR = esm3Recname("GSCR"),
         REC_PLAY = esm3Recname("PLAY"),
         REC_PLAYER_EXTRA = esm3Recname("PLEX"), // additional (non-primary) players
+        REC_NETWORK_STATE = esm3Recname("NETW"), // multiplayer replicator state (scripted ref enable/disable)
         REC_CSTA = esm3Recname("CSTA"),
         REC_GMAP = esm3Recname("GMAP"),
         REC_DIAS = esm3Recname("DIAS"),

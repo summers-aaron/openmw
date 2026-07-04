@@ -258,6 +258,22 @@ namespace MWNet
     /// checks) and is re-derived per machine. Everything else — including mod globals — syncs.
     bool isUnsyncedGlobal(std::string_view name);
 
+    /// A scripted ref enable/disable — the world mutation quest scripts actually perform (Dreamers
+    /// appearing after a quest stage). With the journal, globals and clock synced, every peer's
+    /// own scripts usually converge on the same change; this channel is the authoritative
+    /// correction that also covers divergence (Random, per-player GetDistance) and peers whose
+    /// cell was unloaded when the script ran (re-applied at cell load and periodically
+    /// re-asserted). Only content refs cross — dynamic refs ride the item/summon channels.
+    /// Idempotent on both ends (World::enable/disable no-op on an unchanged flag).
+    struct RefEnable
+    {
+        ESM::RefNum mRef;
+        bool mEnabled = true;
+        ESM::RefNum mOrigin; // reporting peer's wire id, for echo suppression
+
+        friend bool operator==(const RefEnable&, const RefEnable&) = default;
+    };
+
     /// Host -> the owning client: a host guard pursuing that client's avatar for a crime has caught it,
     /// so the client should open the arrest dialogue. The host can't show the client's UI (and opening
     /// it on the host would pull the host's own player into the conversation), so it routes the arrest
@@ -325,6 +341,8 @@ namespace MWNet
         std::vector<TimeSync> mTimeSyncs;
         // client -> host: discontinuous time advances (rest/jail/travel) to resolve centrally.
         std::vector<TimeRequest> mTimeRequests;
+        // both ways: scripted ref enable/disable state (same flow as journal/global deltas).
+        std::vector<RefEnable> mRefEnables;
 
         bool empty() const
         {
@@ -332,7 +350,7 @@ namespace MWNet
                 && mContainers.empty() && mContainerChanges.empty() && mContainerRevokes.empty()
                 && mSummons.empty() && mBounties.empty() && mSpeech.empty() && mSounds.empty() && mArrests.empty()
                 && mCombatRequests.empty() && mJournalDeltas.empty() && mGlobalDeltas.empty() && mTimeSyncs.empty()
-                && mTimeRequests.empty();
+                && mTimeRequests.empty() && mRefEnables.empty();
         }
 
         friend bool operator==(const ActionBatch&, const ActionBatch&) = default;

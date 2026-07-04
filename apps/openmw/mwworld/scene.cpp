@@ -533,10 +533,15 @@ namespace MWWorld
         mPreloader->notifyLoaded(&cell);
 
         // Multiplayer: the cell is fully loaded, including any save items that were already picked up on
-        // another peer while it was unloaded here. Delete those now so they don't reappear on the shelf.
-        // No-op on a peer that has seen no removals, and in single-player.
+        // another peer while it was unloaded here. Delete those now so they don't reappear on the shelf,
+        // and re-assert any scripted enable/disable states the shared world accumulated while this cell
+        // was unloaded (the Dreamer that appeared behind our back). No-op on a peer that has seen no
+        // removals/changes, and in single-player.
         if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+        {
             replicator->purgeRemovedItems();
+            replicator->applyRefStates();
+        }
     }
 
     bool Scene::isCellOccupiedByNonPrimaryPlayer(const CellStore* cell) const

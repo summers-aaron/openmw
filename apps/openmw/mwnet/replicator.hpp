@@ -22,6 +22,8 @@ namespace ESM
 {
     class RefId;
     struct JournalEntry;
+    class ESMReader;
+    class ESMWriter;
 }
 
 namespace MWRender
@@ -193,6 +195,17 @@ namespace MWNet
         // Host: a discontinuous advanceTime just ran — broadcast a TimeSync this tick, not at the
         // next periodic refresh, so every peer's sun jumps together.
         bool mTimeSyncPending = false;
+        // Both ways: scripted ref enable/disable changes awaiting send.
+        std::vector<RefEnable> mOutgoingRefEnables;
+        // Every content ref whose enabled state a script changed this session, dual-role like
+        // mRemovedWorldItems: on the host the authoritative record (periodically re-asserted, and
+        // persisted in the server save as REC_NETWORK_STATE); on a client the received states,
+        // kept even for unloaded cells and re-applied as each cell loads (applyRefStates).
+        std::map<ESM::RefNum, bool> mRefStates;
+
+        /// Apply one recorded ref state where the ref is materialized (no-op otherwise, and for
+        /// players), under a RemoteApplyScope so the enable/disable hook doesn't re-report it.
+        void applyRefState(const ESM::RefNum& ref, bool enabled);
         // Host only: arrests (a guard caught a player's avatar) awaiting send to that player's client.
         std::vector<ArrestRequest> mOutgoingArrests;
         // Client only: requests for the host to put a host-owned actor into combat with our player
@@ -534,6 +547,35 @@ namespace MWNet
         /// Apply the authoritative game clock (client only), through the same setGlobal* path the
         /// DateTimeManager listens to, so sun, weather timing and schedules follow.
         void applyTimeSyncs(const ActionBatch& batch);
+
+        /// Report a scripted enable/disable of a content ref (the world mutation quest scripts
+        /// perform — a Dreamer appearing). A no-op off the network and while applying received
+        /// state; dynamic refs never cross (they ride the item/summon channels).
+        void reportRefEnabled(const ESM::RefNum& ref, bool enabled);
+
+        /// Apply ref enable/disable reported by clients (host only): record, apply where the ref
+        /// is materialized, and relay onward (origin preserved; the record re-asserts later for
+        /// cells the host hasn't loaded).
+        void applyRefEnableReports(const ActionBatch& batch);
+
+        /// Apply broadcast ref enable/disable (client only): record (kept even for unloaded
+        /// cells), then apply where materialized. Echoes are no-ops (enable/disable are
+        /// change-guarded) on top of the origin skip.
+        void applyRefEnables(const ActionBatch& batch);
+
+        /// Re-assert every recorded ref state that resolves right now. Called after each cell
+        /// finishes loading (next to purgeRemovedItems), closing the "the Dreamer was enabled
+        /// while my cell was unloaded" window on clients and host alike. Idempotent and cheap
+        /// when converged.
+        void applyRefStates();
+
+        /// Server-save persistence for the ref-state record (REC_NETWORK_STATE): without it, a
+        /// host restart would strand clients on content defaults (they never load the save).
+        /// Written/read by StateManager alongside the other subsystem records; empty (and
+        /// counted 0) off the authority.
+        std::size_t countSavedGameRecords() const;
+        void write(ESM::ESMWriter& writer) const;
+        void readRecord(ESM::ESMReader& reader);
 
         /// Report (from a client) that this peer dropped an item into the shared world, for the
         /// host to place authoritatively and replicate back to everyone. cellId is the serialized

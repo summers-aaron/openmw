@@ -8,7 +8,7 @@ namespace MWNet
 {
     namespace
     {
-        constexpr std::uint8_t sVersion = 12;
+        constexpr std::uint8_t sVersion = 13;
         // Smallest encoded CombatHit: attacker RefNum (4+4) + victim RefNum (4+4) + damage
         // (float, 4) + health-damage flag (1).
         constexpr std::uint32_t sMinHitBytes = 21;
@@ -53,6 +53,8 @@ namespace MWNet
         constexpr std::uint32_t sMinTimeSyncBytes = 24;
         // Encoded TimeRequest: hours (4) + origin RefNum (4 + 4).
         constexpr std::uint32_t sMinTimeRequestBytes = 12;
+        // Encoded RefEnable: ref RefNum (4 + 4) + flag (1) + origin RefNum (4 + 4).
+        constexpr std::uint32_t sMinRefEnableBytes = 17;
 
         void writeContainerItem(ByteWriter& writer, const ContainerItem& item)
         {
@@ -247,6 +249,15 @@ namespace MWNet
             writer.write(request.mHours);
             writer.write(request.mOrigin.mIndex);
             writer.write(request.mOrigin.mContentFile);
+        }
+        writer.write(static_cast<std::uint32_t>(batch.mRefEnables.size()));
+        for (const RefEnable& refEnable : batch.mRefEnables)
+        {
+            writer.write(refEnable.mRef.mIndex);
+            writer.write(refEnable.mRef.mContentFile);
+            writer.write(static_cast<std::uint8_t>(refEnable.mEnabled ? 1 : 0));
+            writer.write(refEnable.mOrigin.mIndex);
+            writer.write(refEnable.mOrigin.mContentFile);
         }
         return out;
     }
@@ -545,6 +556,24 @@ namespace MWNet
                 || !reader.read(request.mOrigin.mContentFile))
                 return std::nullopt;
             batch.mTimeRequests.push_back(request);
+        }
+
+        std::uint32_t refEnableCount = 0;
+        if (!reader.read(refEnableCount))
+            return std::nullopt;
+        if (refEnableCount > reader.remaining() / sMinRefEnableBytes)
+            return std::nullopt;
+        batch.mRefEnables.reserve(refEnableCount);
+        for (std::uint32_t i = 0; i < refEnableCount; ++i)
+        {
+            RefEnable refEnable;
+            std::uint8_t enabled = 0;
+            if (!reader.read(refEnable.mRef.mIndex) || !reader.read(refEnable.mRef.mContentFile)
+                || !reader.read(enabled) || !reader.read(refEnable.mOrigin.mIndex)
+                || !reader.read(refEnable.mOrigin.mContentFile))
+                return std::nullopt;
+            refEnable.mEnabled = enabled != 0;
+            batch.mRefEnables.push_back(refEnable);
         }
         return batch;
     }

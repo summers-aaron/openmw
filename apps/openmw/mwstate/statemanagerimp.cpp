@@ -307,6 +307,9 @@ void MWState::StateManager::saveGame(std::string_view description, const Slot* s
             + MWBase::Environment::get().getMechanicsManager()->countSavedGameRecords()
             + MWBase::Environment::get().getInputManager()->countSavedGameRecords()
             + MWBase::Environment::get().getWindowManager()->countSavedGameRecords();
+        // Multiplayer host: the replicator's scripted ref-state record (0 records otherwise).
+        if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+            recordCount += replicator->countSavedGameRecords();
         writer.setRecordCount(static_cast<int>(recordCount));
 
         writer.save(stream);
@@ -332,6 +335,10 @@ void MWState::StateManager::saveGame(std::string_view description, const Slot* s
         MWBase::Environment::get().getMechanicsManager()->write(writer, listener);
         MWBase::Environment::get().getInputManager()->write(writer, listener);
         MWBase::Environment::get().getWindowManager()->write(writer, listener);
+        // Multiplayer host: persist the scripted ref-state record — clients never load this save,
+        // so without it a server restart would strand them on content defaults.
+        if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+            replicator->write(writer);
 
         // Ensure we have written the number of records that was estimated
         if (static_cast<size_t>(writer.getRecordCount()) != recordCount + 1) // 1 extra for TES3 record
@@ -525,6 +532,13 @@ void MWState::StateManager::loadGame(const Character* character, const std::file
                 case ESM::REC_QUES:
 
                     MWBase::Environment::get().getJournal()->readRecord(reader, n.toInt());
+                    break;
+
+                case ESM::REC_NETWORK_STATE:
+                    if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+                        replicator->readRecord(reader);
+                    else
+                        reader.skipRecord();
                     break;
 
                 case ESM::REC_DIAS:
