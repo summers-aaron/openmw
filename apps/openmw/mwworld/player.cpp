@@ -272,6 +272,7 @@ namespace MWWorld
         mCurrentCrimeId = -1;
         mPaidCrimeId = -1;
         mPreviousItems.clear();
+        mNetJournal.clear();
         mLastKnownExteriorPosition = osg::Vec3f(0, 0, 0);
 
         mSaveSkills.fill(0.f);
@@ -319,6 +320,11 @@ namespace MWWorld
         // synthesized at instantiation, and it carries the character's name and body — the restored
         // slot must be re-pointed at it (see readRecord).
         player.mBaseRecord = mPlayer.mBase->mId;
+
+        // The character's journal, carried opaquely (uploaded by its client; parked/served with the
+        // slot). A local player's live journal is not kept here — the upload path stamps a fresh
+        // serialization over this (see Engine::pumpTransport).
+        player.mNetJournal = mNetJournal;
     }
 
     void Player::write(ESM::ESMWriter& writer, Loading::Listener& progress, std::size_t index) const
@@ -331,7 +337,9 @@ namespace MWWorld
         // records carrying their index; World reads that index back to route the record.
         if (index == 0)
         {
-            player.mBaseRecord = ESM::RefId(); // never written for the primary: byte-identical SP saves
+            // Never written for the primary: byte-identical SP saves.
+            player.mBaseRecord = ESM::RefId();
+            player.mNetJournal.clear();
             writer.startRecord(ESM::REC_PLAY);
             player.save(writer);
             writer.endRecord(ESM::REC_PLAY);
@@ -390,6 +398,10 @@ namespace MWWorld
                 if (const ESM::NPC* base
                     = MWBase::Environment::get().getESMStore()->get<ESM::NPC>().search(player.mBaseRecord))
                     mPlayer.mBase = base;
+            // The character's journal blob travels with the sheet: keep it with the slot (host apply /
+            // save restore) or expose it to the adopting client (getNetJournal). Absent for a
+            // single-player save, which stores the journal in its own records.
+            mNetJournal = player.mNetJournal;
             MWBase::Environment::get().getWorldModel()->registerPtr(getPlayer());
             if (reader.mActorIdConverter)
                 reader.mActorIdConverter->mMappings.emplace(

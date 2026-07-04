@@ -413,6 +413,12 @@ void OMW::Engine::handleControlMessage(MWNet::PeerId from, const MWNet::ControlM
             const MWWorld::Ptr stored = world.getPlayerPtr(slot);
             ESM::Player record;
             world.getPlayer(slot).buildEsmPlayer(record);
+            // A parked slot carries its client's last uploaded journal (buildEsmPlayer stamped it).
+            // The absorbed primary character has no per-slot journal: its journal IS the server's
+            // own, loaded from the save — serialize and serve that instead.
+            if (primaryClaim)
+                record.mNetJournal = MWNet::serializeJournal(*MWBase::Environment::get().getJournal(),
+                    *MWBase::Environment::get().getDialogueManager(), world.getContentFiles());
             // Serve the character as a loadable mini-save (profile + player), so the client brings it
             // in through the real StateManager::loadGame path (a full teardown + rebuild) rather than
             // a fragile mid-session swap. The profile only needs the content files for loadGame's
@@ -631,6 +637,11 @@ void OMW::Engine::pumpTransport()
                 // record and clobber the puppet's synthesized (correctly-named) one. Clear it so the
                 // host keeps the puppet's own base record (see Player::readRecord).
                 record.mBaseRecord = ESM::RefId();
+                // The journal (quests, entries, known topics) is per-character state the replicated
+                // world doesn't carry. Ship the live journal with the sheet so the server parks it
+                // with the character and serves it back on reconnect.
+                record.mNetJournal = MWNet::serializeJournal(*MWBase::Environment::get().getJournal(),
+                    *MWBase::Environment::get().getDialogueManager(), world.getContentFiles());
                 sendControl(MWNet::sLocalPeer,
                     MWNet::CharacterData{ 0, MWNet::serializeCharacter(record, world.getContentFiles()) });
                 mCharacterUploaded = true;
@@ -801,8 +812,19 @@ void OMW::Engine::pumpTransport()
     {
         const std::string blob = std::move(mPendingAdoptBlob);
         mPendingAdoptBlob.clear();
-        if (MWBase::Environment::get().getWorld()->adoptNetworkCharacter(blob))
+        MWBase::World& world = *MWBase::Environment::get().getWorld();
+        if (world.adoptNetworkCharacter(blob))
+        {
+            // The served sheet carried the character's journal (readRecord left it on the primary
+            // slot); restore it over the backdrop session's empty one. A character served without
+            // one (e.g. parked by an older server) just keeps the empty journal.
+            const std::string& journal = world.getPlayer(0).getNetJournal();
+            if (!journal.empty()
+                && !MWNet::restoreJournal(*MWBase::Environment::get().getJournal(),
+                    *MWBase::Environment::get().getDialogueManager(), journal))
+                Log(Debug::Error) << "Failed to restore the served character's journal";
             mReplicator->setLocalPlayerReady(true);
+        }
         else
             Log(Debug::Error) << "Failed to adopt served character";
     }

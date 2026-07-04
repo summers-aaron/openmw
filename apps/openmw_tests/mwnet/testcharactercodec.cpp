@@ -27,6 +27,7 @@ namespace MWNet
             player.mSaveAttributes[0] = 55.f;
             player.mSaveSkills[0] = 33.f;
             player.mBaseRecord = ESM::RefId::generated(7); // dynamic avatar record id
+            player.mNetJournal = std::string("journal\0blob", 12); // opaque and binary-safe
         }
 
         TEST(MWNetCharacterCodecTest, roundTripsScalarState)
@@ -46,6 +47,7 @@ namespace MWNet
             EXPECT_FLOAT_EQ(parsed->mSaveAttributes[0], 55.f);
             EXPECT_FLOAT_EQ(parsed->mSaveSkills[0], 33.f);
             EXPECT_EQ(parsed->mBaseRecord, original.mBaseRecord);
+            EXPECT_EQ(parsed->mNetJournal, original.mNetJournal);
         }
 
         TEST(MWNetCharacterCodecTest, rejectsGarbageBlob)

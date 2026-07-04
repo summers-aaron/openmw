@@ -79,8 +79,16 @@ namespace ESM
             esm.getHNT(mSaveSkills, "WWSK");
         }
 
-        // Trailing and optional: only multi-player saves write it (never legacy/single-player ones).
+        // Trailing and optional: only multi-player saves write these (never legacy/single-player ones).
         mBaseRecord = esm.getHNORefId("BREC");
+
+        mNetJournal.clear();
+        if (esm.isNextSub("JBLB"))
+        {
+            esm.getSubHeader();
+            mNetJournal.resize(esm.getSubSize());
+            esm.getExact(mNetJournal.data(), mNetJournal.size());
+        }
     }
 
     void Player::save(ESMWriter& esm) const
@@ -114,6 +122,13 @@ namespace ESM
         // Written only when set (non-primary players), keeping single-player saves byte-identical.
         if (!mBaseRecord.empty())
             esm.writeHNRefId("BREC", mBaseRecord);
+
+        if (!mNetJournal.empty())
+        {
+            esm.startSubRecord("JBLB");
+            esm.write(mNetJournal.data(), mNetJournal.size());
+            esm.endRecord("JBLB");
+        }
     }
 
 }

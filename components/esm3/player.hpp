@@ -41,6 +41,13 @@ namespace ESM
         // (written only when non-empty, so single-player saves are byte-identical).
         ESM::RefId mBaseRecord;
 
+        // A network character's journal (quests, entries, known topics), serialized as an opaque
+        // nested record stream (see MWNet::serializeJournal). Per-character state that the shared
+        // world doesn't carry: it travels inside the character sheet so the server can park it and
+        // serve it back on reconnect without understanding it. Empty for the primary player
+        // (written only when non-empty, so single-player saves are byte-identical).
+        std::string mNetJournal;
+
         void load(ESMReader& esm);
         void save(ESMWriter& esm) const;
     };

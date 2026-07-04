@@ -12,6 +12,12 @@ namespace ESM
     struct NPC;
 }
 
+namespace MWBase
+{
+    class Journal;
+    class DialogueManager;
+}
+
 namespace MWNet
 {
     /// Serialize a full character — an ESM::Player save record (inventory, stats, skills, spells,
@@ -43,6 +49,18 @@ namespace MWNet
     /// corrupt blob is rejected cleanly rather than crashing. (Heap-allocated because ESM::Player is
     /// neither copyable nor movable, so it cannot be returned by value.)
     std::unique_ptr<ESM::Player> deserializeCharacter(const std::string& blob);
+
+    /// Serialize the local player's journal — quests and journal entries (REC_QUES / REC_JOUR) plus
+    /// the known dialogue topics (REC_DIAS) — as an opaque record stream, the same records a real
+    /// save writes. Carried inside the character sheet (ESM::Player::mNetJournal): per-character
+    /// state that the replicated world doesn't cover, parked on the server with the character and
+    /// served back on reconnect.
+    std::string serializeJournal(const MWBase::Journal& journal, const MWBase::DialogueManager& dialogue,
+        const std::vector<std::string>& contentFiles);
+
+    /// Restore a serializeJournal blob into the live journal / dialogue managers, replacing their
+    /// current contents (clear + read). Returns false (managers left cleared) on malformed input.
+    bool restoreJournal(MWBase::Journal& journal, MWBase::DialogueManager& dialogue, const std::string& blob);
 }
 
 #endif

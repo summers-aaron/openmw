@@ -66,12 +66,20 @@ namespace MWWorld
         // cells alive — until the player reconnects (World::parkPlayer / unparkPlayer).
         bool mActive = true;
 
+        // A network character's serialized journal, carried opaquely with the character sheet
+        // (ESM::Player::mNetJournal): the host stores it here when a client's upload is applied and
+        // serves it back on reconnect; a client finds the served copy here after an adopt. Never
+        // set for a single-player / host-primary player.
+        std::string mNetJournal;
+
     public:
         /// The default RefId of the primary player.
         static ESM::RefId getPrimaryRefId();
 
         bool isActive() const { return mActive; }
         void setActive(bool value) { mActive = value; }
+
+        const std::string& getNetJournal() const { return mNetJournal; }
 
         Player(const ESM::NPC* player, ESM::RefId playerId = getPrimaryRefId());
 
