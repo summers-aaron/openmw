@@ -906,8 +906,15 @@ namespace MWNet
         {
             // launchMagicBolt resolves its own projectile effects and no-ops for self/touch
             // spells (no projectile); cosmetic means it flies and explodes but applies nothing.
-            world.launchMagicBolt(
-                ESM::RefId::deserializeText(bolt->second.mSpell), actor, osg::Vec3f(), ESM::RefNum(), true);
+            try
+            {
+                world.launchMagicBolt(
+                    ESM::RefId::deserializeText(bolt->second.mSpell), actor, osg::Vec3f(), ESM::RefNum(), true);
+            }
+            catch (const std::exception&)
+            {
+                // cast id from the wire we can't resolve (content mismatch) — skip the bolt
+            }
             mPendingCastBolt.erase(bolt);
         }
     }

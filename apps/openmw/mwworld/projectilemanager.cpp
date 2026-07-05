@@ -72,6 +72,13 @@ namespace
             sourceName = spell->mName;
             effects = &spell->mEffects;
         }
+        // A bare enchantment id: a replicated enchanted-item cast arrives as the enchantment itself
+        // (the item stays in the remote caster's inventory and is not replicated). No name to show —
+        // enchantment records are anonymous.
+        else if (const ESM::Enchantment* enchantment = esmStore.get<ESM::Enchantment>().search(id))
+        {
+            effects = &enchantment->mEffects;
+        }
         else // check if it's an enchanted item
         {
             MWWorld::ManualRef ref(esmStore, id);
@@ -613,6 +620,10 @@ namespace MWWorld
             const ESM::EffectList* effects;
             if (const ESM::Spell* spell = esmStore.get<ESM::Spell>().search(magicBoltState.mSpellId))
                 effects = &spell->mEffects;
+            // A bare enchantment id — a replicated enchanted-item cast (see getMagicBoltData).
+            else if (const ESM::Enchantment* enchantment
+                = esmStore.get<ESM::Enchantment>().search(magicBoltState.mSpellId))
+                effects = &enchantment->mEffects;
             else
             {
                 MWWorld::ManualRef ref(esmStore, magicBoltState.mSpellId);
