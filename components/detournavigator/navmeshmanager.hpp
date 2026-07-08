@@ -13,6 +13,9 @@
 
 #include <map>
 #include <memory>
+#include <optional>
+#include <span>
+#include <vector>
 
 class dtNavMesh;
 
@@ -53,7 +56,10 @@ namespace DetourNavigator
 
         void removeOffMeshConnections(const ObjectId id);
 
-        void update(const osg::Vec3f& playerPosition, const UpdateGuard* guard);
+        /// Maintain tiles around every focus point (one per player in this worldspace). The total
+        /// tile budget is split evenly across foci; tile-build jobs are prioritized by distance to
+        /// the nearest focus.
+        void update(std::span<const osg::Vec3f> playerPositions, const UpdateGuard* guard);
 
         void wait(WaitConditionType waitConditionType, Loading::Listener* listener);
 
@@ -75,12 +81,12 @@ namespace DetourNavigator
         AsyncNavMeshUpdater mAsyncNavMeshUpdater;
         std::map<AgentBounds, SharedNavMeshCacheItem> mCache;
         std::size_t mGenerationCounter = 0;
-        std::optional<TilePosition> mPlayerTile;
+        std::optional<std::vector<TilePosition>> mFoci;
         std::size_t mLastRecastMeshManagerRevision = 0;
 
         inline SharedNavMeshCacheItem getCached(const AgentBounds& agentBounds) const;
 
-        inline void update(const AgentBounds& agentBounds, const TilePosition& playerTile,
+        inline void update(const AgentBounds& agentBounds, std::span<const TilePosition> foci, int maxTilesPerFocus,
             const TilesPositionsRange& range, const SharedNavMeshCacheItem& cached,
             const std::map<osg::Vec2i, ChangeType>& changedTiles);
     };

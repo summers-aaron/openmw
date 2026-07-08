@@ -15,6 +15,8 @@
 
 #include <DetourNavMesh.h>
 
+#include <algorithm>
+
 namespace
 {
     /// Safely reset shared_ptr with definite underlying object destrutor call.
@@ -153,7 +155,7 @@ namespace DetourNavigator
         if (cached != mCache.end())
             return;
         mCache.emplace(agentBounds, std::make_shared<GuardedNavMeshCacheItem>(++mGenerationCounter, mSettings));
-        mPlayerTile.reset();
+        mFoci.reset();
         Log(Debug::Debug) << "cache add for agent=" << agentBounds;
     }
 
@@ -165,7 +167,7 @@ namespace DetourNavigator
         if (!resetIfUnique(it->second))
             return false;
         mCache.erase(agentBounds);
-        mPlayerTile.reset();
+        mFoci.reset();
         return true;
     }
 
@@ -190,29 +192,43 @@ namespace DetourNavigator
             mRecastMeshManager.addChangedTile(tile, ChangeType::update);
     }
 
-    void NavMeshManager::update(const osg::Vec3f& playerPosition, const UpdateGuard* guard)
+    void NavMeshManager::update(std::span<const osg::Vec3f> playerPositions, const UpdateGuard* guard)
     {
-        const TilePosition playerTile = toNavMeshTilePosition(mSettings.mRecast, playerPosition);
-        if (mLastRecastMeshManagerRevision == mRecastMeshManager.getRevision() && mPlayerTile.has_value()
-            && *mPlayerTile == playerTile)
+        if (playerPositions.empty())
+            return;
+        std::vector<TilePosition> foci;
+        foci.reserve(playerPositions.size());
+        for (const osg::Vec3f& playerPosition : playerPositions)
+            foci.push_back(toNavMeshTilePosition(mSettings.mRecast, playerPosition));
+        std::sort(foci.begin(), foci.end());
+        foci.erase(std::unique(foci.begin(), foci.end()), foci.end());
+        if (mLastRecastMeshManagerRevision == mRecastMeshManager.getRevision() && mFoci.has_value()
+            && *mFoci == foci)
             return;
         mLastRecastMeshManagerRevision = mRecastMeshManager.getRevision();
-        mPlayerTile = playerTile;
-        mRecastMeshManager.setRange(makeRange(mSettings, mWorldspace, mCellGridBounds, mMaxRadius, playerTile), guard);
+        mFoci = foci;
+        // Split the fixed tile budget evenly across foci so several players in one worldspace each
+        // keep tiles around them without overflowing the navmesh's tile capacity; a single player
+        // gets the whole budget, matching the historical behavior.
+        const int maxTilesPerFocus = std::max(1, mSettings.mMaxTilesNumber / static_cast<int>(foci.size()));
+        const int radius = getMaxRadius(maxTilesPerFocus);
+        TilesPositionsRange range = makeRange(mSettings, mWorldspace, mCellGridBounds, radius, foci.front());
+        for (std::size_t i = 1; i < foci.size(); ++i)
+            range = getUnion(range, makeRange(mSettings, mWorldspace, mCellGridBounds, radius, foci[i]));
+        mRecastMeshManager.setRange(range, guard);
         const auto changedTiles = mRecastMeshManager.takeChangedTiles(guard);
-        const TilesPositionsRange range = mRecastMeshManager.getLimitedObjectsRange();
+        const TilesPositionsRange limitedRange = mRecastMeshManager.getLimitedObjectsRange();
         for (const auto& [agentBounds, cached] : mCache)
-            update(agentBounds, playerTile, range, cached, changedTiles);
+            update(agentBounds, foci, maxTilesPerFocus, limitedRange, cached, changedTiles);
     }
 
-    void NavMeshManager::update(const AgentBounds& agentBounds, const TilePosition& playerTile,
-        const TilesPositionsRange& range, const SharedNavMeshCacheItem& cached,
+    void NavMeshManager::update(const AgentBounds& agentBounds, std::span<const TilePosition> foci,
+        int maxTilesPerFocus, const TilesPositionsRange& range, const SharedNavMeshCacheItem& cached,
         const std::map<osg::Vec2i, ChangeType>& changedTiles)
     {
         std::map<osg::Vec2i, ChangeType> tilesToPost;
-        const int maxTiles = mSettings.mMaxTilesNumber;
         for (const auto& [k, v] : changedTiles)
-            if (shouldAddTile(k, playerTile, maxTiles))
+            if (shouldAddTile(k, foci, maxTilesPerFocus))
                 tilesToPost.emplace(k, v);
         {
             const auto locked = cached->lockConst();
@@ -220,7 +236,7 @@ namespace DetourNavigator
             getTilesPositions(range, [&](const TilePosition& tile) {
                 if (changedTiles.find(tile) != changedTiles.end() || locked->isEmptyTile(tile))
                     return;
-                const bool shouldAdd = shouldAddTile(tile, playerTile, maxTiles);
+                const bool shouldAdd = shouldAddTile(tile, foci, maxTilesPerFocus);
                 const bool presentInNavMesh = navMesh.getTileAt(tile.x(), tile.y(), 0) != nullptr;
                 if (shouldAdd && !presentInNavMesh)
                     tilesToPost.emplace(tile, ChangeType::add);
@@ -228,12 +244,13 @@ namespace DetourNavigator
                     tilesToPost.emplace(tile, ChangeType::remove);
             });
             locked->forEachTilePosition([&](const TilePosition& tile) {
-                if (!shouldAddTile(tile, playerTile, maxTiles))
+                if (!shouldAddTile(tile, foci, maxTilesPerFocus))
                     tilesToPost.emplace(tile, ChangeType::remove);
             });
         }
-        mAsyncNavMeshUpdater.post(agentBounds, cached, playerTile, mWorldspace, tilesToPost);
-        Log(Debug::Debug) << "Cache update posted for agent=" << agentBounds << " playerTile=" << playerTile
+        mAsyncNavMeshUpdater.post(agentBounds, cached, foci, mWorldspace, tilesToPost);
+        Log(Debug::Debug) << "Cache update posted for agent=" << agentBounds << " foci=" << foci.size()
+                          << " firstFocus=" << foci.front()
                           << " recastMeshManagerRevision=" << mLastRecastMeshManagerRevision;
     }
 

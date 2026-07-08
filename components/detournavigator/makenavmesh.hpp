@@ -37,6 +37,17 @@ namespace DetourNavigator
         return expectedTilesCount <= maxTiles;
     }
 
+    /// Multi-focus membership: a tile is kept when it is within budget of ANY focus (one focus per
+    /// player sharing the worldspace). maxTiles is the per-focus budget — the caller decides how
+    /// the total tile budget is split across foci.
+    inline bool shouldAddTile(const TilePosition& changedTile, std::span<const TilePosition> foci, int maxTiles)
+    {
+        for (const TilePosition& focus : foci)
+            if (shouldAddTile(changedTile, focus, maxTiles))
+                return true;
+        return false;
+    }
+
     inline bool isEmpty(const RecastMesh& recastMesh)
     {
         return recastMesh.getMesh().getIndices().empty() && recastMesh.getWater().empty()

@@ -27,8 +27,10 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <span>
 #include <thread>
 #include <tuple>
+#include <vector>
 
 class dtNavMesh;
 
@@ -76,9 +78,9 @@ namespace DetourNavigator
 
         void push(JobIt job);
 
-        std::optional<JobIt> pop(TilePosition playerTile);
+        std::optional<JobIt> pop(std::span<const TilePosition> foci);
 
-        void update(TilePosition playerTile, int maxTiles, std::vector<JobIt>& removing);
+        void update(std::span<const TilePosition> foci, int maxTiles, std::vector<JobIt>& removing);
 
     private:
         using IndexPoint = boost::geometry::model::point<int, 2, boost::geometry::cs::cartesian>;
@@ -108,10 +110,10 @@ namespace DetourNavigator
 
         void push(JobIt job, std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
 
-        std::optional<JobIt> pop(
-            TilePosition playerTile, std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
+        std::optional<JobIt> pop(std::span<const TilePosition> foci,
+            std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
 
-        void update(TilePosition playerTile, int maxTiles,
+        void update(std::span<const TilePosition> foci, int maxTiles,
             std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
 
     private:
@@ -136,7 +138,7 @@ namespace DetourNavigator
 
         std::optional<JobIt> pop();
 
-        void update(TilePosition playerTile);
+        void update(std::vector<TilePosition> foci);
 
         void stop();
 
@@ -147,7 +149,7 @@ namespace DetourNavigator
         std::condition_variable mHasJob;
         SpatialJobQueue mReading;
         std::deque<JobIt> mWriting;
-        TilePosition mPlayerTile;
+        std::vector<TilePosition> mFoci;
         bool mShouldStop = false;
     };
 
@@ -165,7 +167,7 @@ namespace DetourNavigator
 
         void enqueueJob(JobIt job);
 
-        void update(TilePosition playerTile) { mQueue.update(playerTile); }
+        void update(std::vector<TilePosition> foci) { mQueue.update(std::move(foci)); }
 
         void stop();
 
@@ -199,7 +201,7 @@ namespace DetourNavigator
         ~AsyncNavMeshUpdater();
 
         void post(const AgentBounds& agentBounds, const SharedNavMeshCacheItem& navMeshCacheItem,
-            const TilePosition& playerTile, ESM::RefId worldspace,
+            std::span<const TilePosition> foci, ESM::RefId worldspace,
             const std::map<TilePosition, ChangeType>& changedTiles);
 
         void wait(WaitConditionType waitConditionType, Loading::Listener* listener);
@@ -224,7 +226,7 @@ namespace DetourNavigator
         std::list<Job> mJobs;
         JobQueue mWaiting;
         std::set<std::tuple<AgentBounds, TilePosition>> mPushed;
-        Misc::ScopeGuarded<TilePosition> mPlayerTile;
+        Misc::ScopeGuarded<std::vector<TilePosition>> mFoci;
         NavMeshTilesCache mNavMeshTilesCache;
         Misc::ScopeGuarded<std::set<std::tuple<AgentBounds, TilePosition>>> mProcessingTiles;
         std::map<std::tuple<AgentBounds, TilePosition>, std::chrono::steady_clock::time_point> mLastUpdates;

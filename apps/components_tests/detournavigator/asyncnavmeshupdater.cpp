@@ -54,7 +54,7 @@ namespace
         TileCachedRecastMeshManager mRecastMeshManager{ mSettings.mRecast };
         OffMeshConnectionsManager mOffMeshConnectionsManager{ mSettings.mRecast };
         const AgentBounds mAgentBounds{ CollisionShapeType::Aabb, { 29, 29, 66 } };
-        const TilePosition mPlayerTile{ 0, 0 };
+        const std::vector<TilePosition> mPlayerTile{ TilePosition(0, 0) };
         const ESM::RefId mWorldspace = ESM::RefId::stringRefId("sys::default");
         const btBoxShape mBox{ btVector3(100, 100, 20) };
         Loading::Listener mListener;
@@ -246,7 +246,7 @@ namespace
         updater.wait(WaitConditionType::allJobsDone, &mListener);
         ASSERT_NE(navMeshCacheItem->lockConst()->getImpl().getTileRefAt(0, 0, 0), 0u);
         const std::map<TilePosition, ChangeType> changedTilesRemove{ { TilePosition{ 0, 0 }, ChangeType::remove } };
-        const TilePosition playerTile(100, 100);
+        const std::vector<TilePosition> playerTile{ TilePosition(100, 100) };
         updater.post(mAgentBounds, navMeshCacheItem, playerTile, mWorldspace, changedTilesRemove);
         updater.wait(WaitConditionType::allJobsDone, &mListener);
         EXPECT_EQ(navMeshCacheItem->lockConst()->getImpl().getTileRefAt(0, 0, 0), 0u);
@@ -483,7 +483,7 @@ namespace
         const ESM::RefId mWorldspace = ESM::RefId::stringRefId("worldspace");
         const TilePosition mChangedTile{ 0, 0 };
         const std::chrono::steady_clock::time_point mProcessTime{};
-        const TilePosition mPlayerTile{ 0, 0 };
+        const std::vector<TilePosition> mPlayerTile{ TilePosition(0, 0) };
         const int mMaxTiles = 9;
     };
 
@@ -502,11 +502,12 @@ namespace
 
         ASSERT_EQ(queue.size(), 2);
 
-        const auto job1 = queue.pop(mChangedTile);
+        const std::vector<TilePosition> foci{ mChangedTile };
+        const auto job1 = queue.pop(foci);
         ASSERT_TRUE(job1.has_value());
         EXPECT_EQ((*job1)->mWorldspace, worldspace1);
 
-        const auto job2 = queue.pop(mChangedTile);
+        const auto job2 = queue.pop(foci);
         ASSERT_TRUE(job2.has_value());
         EXPECT_EQ((*job2)->mWorldspace, worldspace2);
 
@@ -577,7 +578,8 @@ namespace
             ChangeType::update, mProcessTime));
 
         ASSERT_TRUE(queue.hasJob());
-        const auto job = queue.pop(TilePosition(1, 0));
+        const std::vector<TilePosition> foci{ TilePosition(1, 0) };
+        const auto job = queue.pop(foci);
         ASSERT_TRUE(job.has_value());
         EXPECT_EQ((*job)->mChangedTile, TilePosition(1, 0));
     }
@@ -650,7 +652,7 @@ namespace
 
         ASSERT_EQ(queue.getStats().mDelayed, 1);
 
-        queue.update(TilePosition(10, 10), mMaxTiles, processTime);
+        queue.update(std::vector<TilePosition>{ TilePosition(10, 10) }, mMaxTiles, processTime);
 
         EXPECT_EQ(queue.getStats().mDelayed, 0);
         EXPECT_EQ(queue.getStats().mRemoving, 1);
@@ -669,7 +671,7 @@ namespace
 
         ASSERT_EQ(queue.getStats().mUpdating, 2);
 
-        queue.update(TilePosition(10, 10), mMaxTiles);
+        queue.update(std::vector<TilePosition>{ TilePosition(10, 10) }, mMaxTiles);
 
         EXPECT_EQ(queue.getStats().mUpdating, 1);
         EXPECT_EQ(queue.getStats().mRemoving, 1);

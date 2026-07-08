@@ -34,14 +34,20 @@ namespace DetourNavigator
             return std::abs(lhs.x() - rhs.x()) + std::abs(lhs.y() - rhs.y());
         }
 
-        bool isAbsentTileTooClose(const TilePosition& position, int distance,
+        bool isAbsentTileTooClose(std::span<const TilePosition> foci, int distance,
             const std::set<std::tuple<AgentBounds, TilePosition>>& pushedTiles,
             const std::set<std::tuple<AgentBounds, TilePosition>>& presentTiles,
             const Misc::ScopeGuarded<std::set<std::tuple<AgentBounds, TilePosition>>>& processingTiles)
         {
+            // A required tile near ANY focus blocks: every player's surroundings must be present
+            // before the wait completes, not just the first one's.
             const auto isAbsentAndCloserThan = [&](const std::tuple<AgentBounds, TilePosition>& v) {
-                return presentTiles.find(v) == presentTiles.end()
-                    && getManhattanDistance(position, std::get<1>(v)) < distance;
+                if (presentTiles.find(v) != presentTiles.end())
+                    return false;
+                for (const TilePosition& focus : foci)
+                    if (getManhattanDistance(focus, std::get<1>(v)) < distance)
+                        return true;
+                return false;
             };
             if (std::any_of(pushedTiles.begin(), pushedTiles.end(), isAbsentAndCloserThan))
                 return true;
@@ -155,15 +161,34 @@ namespace DetourNavigator
         ++mSize;
     }
 
-    std::optional<JobIt> SpatialJobQueue::pop(TilePosition playerTile)
+    std::optional<JobIt> SpatialJobQueue::pop(std::span<const TilePosition> foci)
     {
-        const IndexPoint point(playerTile.x(), playerTile.y());
-        const auto it = mIndex.qbegin(boost::geometry::index::nearest(point, 1));
+        // Take the job globally nearest to ANY focus: query the nearest candidate per focus and
+        // keep the closest, so tiles build fairly around every player instead of only the first.
+        std::optional<UpdatingMap::iterator> best;
+        double bestDistance = 0;
+        for (const TilePosition& focus : foci)
+        {
+            const IndexPoint point(focus.x(), focus.y());
+            const auto it = mIndex.qbegin(boost::geometry::index::nearest(point, 1));
+            if (it == mIndex.qend())
+                continue;
+            const double distance = boost::geometry::comparable_distance(point, it->first);
+            if (!best.has_value() || distance < bestDistance)
+            {
+                best = it->second;
+                bestDistance = distance;
+            }
+        }
 
-        if (it == mIndex.qend())
+        // No foci (nothing posted yet): drain in storage order so pushed jobs never starve.
+        if (!best.has_value() && !mValues.empty())
+            best = mValues.begin();
+
+        if (!best.has_value())
             return std::nullopt;
 
-        const UpdatingMap::iterator mapIt = it->second;
+        const UpdatingMap::iterator mapIt = *best;
         std::deque<JobIt>& tileJobs = mapIt->second;
         JobIt result = tileJobs.front();
         tileJobs.pop_front();
@@ -172,18 +197,18 @@ namespace DetourNavigator
 
         if (tileJobs.empty())
         {
+            mIndex.remove(IndexValue(IndexPoint(mapIt->first.x(), mapIt->first.y()), mapIt));
             mValues.erase(mapIt);
-            mIndex.remove(*it);
         }
 
         return result;
     }
 
-    void SpatialJobQueue::update(TilePosition playerTile, int maxTiles, std::vector<JobIt>& removing)
+    void SpatialJobQueue::update(std::span<const TilePosition> foci, int maxTiles, std::vector<JobIt>& removing)
     {
         for (auto it = mValues.begin(); it != mValues.end();)
         {
-            if (shouldAddTile(it->first, playerTile, maxTiles))
+            if (shouldAddTile(it->first, foci, maxTiles))
             {
                 ++it;
                 continue;
@@ -231,7 +256,7 @@ namespace DetourNavigator
         mUpdating.push(job);
     }
 
-    std::optional<JobIt> JobQueue::pop(TilePosition playerTile, std::chrono::steady_clock::time_point now)
+    std::optional<JobIt> JobQueue::pop(std::span<const TilePosition> foci, std::chrono::steady_clock::time_point now)
     {
         if (!mRemoving.empty())
         {
@@ -240,7 +265,7 @@ namespace DetourNavigator
             return result;
         }
 
-        if (const std::optional<JobIt> result = mUpdating.pop(playerTile))
+        if (const std::optional<JobIt> result = mUpdating.pop(foci))
             return result;
 
         if (mDelayed.empty() || mDelayed.front()->mProcessTime > now)
@@ -251,16 +276,16 @@ namespace DetourNavigator
         return result;
     }
 
-    void JobQueue::update(TilePosition playerTile, int maxTiles, std::chrono::steady_clock::time_point now)
+    void JobQueue::update(std::span<const TilePosition> foci, int maxTiles, std::chrono::steady_clock::time_point now)
     {
-        mUpdating.update(playerTile, maxTiles, mRemoving);
+        mUpdating.update(foci, maxTiles, mRemoving);
 
         while (!mDelayed.empty() && mDelayed.front()->mProcessTime <= now)
         {
             const JobIt job = mDelayed.front();
             mDelayed.pop_front();
 
-            if (shouldAddTile(job->mChangedTile, playerTile, maxTiles))
+            if (shouldAddTile(job->mChangedTile, foci, maxTiles))
             {
                 mUpdating.push(job);
             }
@@ -291,24 +316,25 @@ namespace DetourNavigator
     }
 
     void AsyncNavMeshUpdater::post(const AgentBounds& agentBounds, const SharedNavMeshCacheItem& navMeshCacheItem,
-        const TilePosition& playerTile, ESM::RefId worldspace, const std::map<TilePosition, ChangeType>& changedTiles)
+        std::span<const TilePosition> foci, ESM::RefId worldspace, const std::map<TilePosition, ChangeType>& changedTiles)
     {
-        bool playerTileChanged = false;
+        bool fociChanged = false;
         {
-            auto locked = mPlayerTile.lock();
-            playerTileChanged = *locked != playerTile;
-            *locked = playerTile;
+            auto locked = mFoci.lock();
+            fociChanged = !std::equal(locked->begin(), locked->end(), foci.begin(), foci.end());
+            if (fociChanged)
+                locked->assign(foci.begin(), foci.end());
         }
 
-        if (!playerTileChanged && changedTiles.empty())
+        if (!fociChanged && changedTiles.empty())
             return;
 
         std::unique_lock lock(mMutex);
 
-        if (playerTileChanged)
+        if (fociChanged)
         {
-            Log(Debug::Debug) << "Player tile has been changed to " << playerTile;
-            mWaiting.update(playerTile, mSettings.get().mMaxTilesNumber);
+            Log(Debug::Debug) << "Update foci changed (" << foci.size() << " foci)";
+            mWaiting.update(foci, mSettings.get().mMaxTilesNumber);
         }
 
         for (const auto& [changedTile, changeType] : changedTiles)
@@ -343,8 +369,8 @@ namespace DetourNavigator
 
         lock.unlock();
 
-        if (playerTileChanged && mDbWorker != nullptr)
-            mDbWorker->update(playerTile);
+        if (fociChanged && mDbWorker != nullptr)
+            mDbWorker->update(std::vector<TilePosition>(foci.begin(), foci.end()));
     }
 
     void AsyncNavMeshUpdater::wait(WaitConditionType waitConditionType, Loading::Listener* listener)
@@ -384,15 +410,15 @@ namespace DetourNavigator
         std::size_t prevJobsLeft = initialJobsLeft;
         std::size_t jobsDone = 0;
         std::size_t jobsLeft = 0;
-        const TilePosition playerPosition = *mPlayerTile.lockConst();
+        const std::vector<TilePosition> foci = *mFoci.lockConst();
         const auto isDone = [&] {
             jobsLeft = mJobs.size();
             if (jobsLeft == 0)
                 return true;
-            return !isAbsentTileTooClose(playerPosition, maxDistanceToPlayer, mPushed, mPresentTiles, mProcessingTiles);
+            return !isAbsentTileTooClose(foci, maxDistanceToPlayer, mPushed, mPresentTiles, mProcessingTiles);
         };
         std::unique_lock<std::mutex> lock(mMutex);
-        if (!isAbsentTileTooClose(playerPosition, maxDistanceToPlayer, mPushed, mPresentTiles, mProcessingTiles)
+        if (!isAbsentTileTooClose(foci, maxDistanceToPlayer, mPushed, mPresentTiles, mProcessingTiles)
             || mJobs.empty())
             return;
         const Loading::ScopedLoad load(listener);
@@ -512,11 +538,11 @@ namespace DetourNavigator
         if (!navMeshCacheItem)
             return JobStatus::Done;
 
-        const auto playerTile = *mPlayerTile.lockConst();
+        const std::vector<TilePosition> foci = *mFoci.lockConst();
 
-        if (!shouldAddTile(job.mChangedTile, playerTile, mSettings.get().mMaxTilesNumber))
+        if (!shouldAddTile(job.mChangedTile, foci, mSettings.get().mMaxTilesNumber))
         {
-            Log(Debug::Debug) << "Ignore add tile by job " << job.mId << ": too far from player";
+            Log(Debug::Debug) << "Ignore add tile by job " << job.mId << ": too far from every player";
             job.mChangeType = ChangeType::remove;
             navMeshCacheItem->lock()->removeTile(job.mChangedTile);
             return JobStatus::Done;
@@ -715,11 +741,11 @@ namespace DetourNavigator
         if (shouldStop)
             return mJobs.end();
 
-        const TilePosition playerTile = *mPlayerTile.lockConst();
+        const std::vector<TilePosition> foci = *mFoci.lockConst();
 
         JobIt job = mJobs.end();
 
-        if (const std::optional<JobIt> nextJob = mWaiting.pop(playerTile))
+        if (const std::optional<JobIt> nextJob = mWaiting.pop(foci))
             job = *nextJob;
 
         if (job == mJobs.end())
@@ -821,7 +847,7 @@ namespace DetourNavigator
         if (mShouldStop)
             return std::nullopt;
 
-        if (const std::optional<JobIt> job = mReading.pop(mPlayerTile))
+        if (const std::optional<JobIt> job = mReading.pop(mFoci))
             return job;
 
         if (mWriting.empty())
@@ -833,10 +859,10 @@ namespace DetourNavigator
         return job;
     }
 
-    void DbJobQueue::update(TilePosition playerTile)
+    void DbJobQueue::update(std::vector<TilePosition> foci)
     {
         const std::lock_guard lock(mMutex);
-        mPlayerTile = playerTile;
+        mFoci = std::move(foci);
     }
 
     void DbJobQueue::stop()

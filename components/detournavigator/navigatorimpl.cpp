@@ -147,22 +147,18 @@ namespace DetourNavigator
 
     void NavigatorImpl::update(std::span<const PlayerPosition> playerPositions, const UpdateGuard* guard)
     {
-        // This navigator owns a single worldspace; pick the first focus point that belongs to it.
-        // When mWorldspace is unset (updateBounds never called, e.g. in unit tests) fall back to the
-        // first position so behavior matches the legacy single-position API.
-        const PlayerPosition* focus = nullptr;
+        // This navigator owns a single worldspace; collect every focus point that belongs to it —
+        // each player in the worldspace keeps tiles maintained around itself (the manager splits
+        // the tile budget across foci). When mWorldspace is unset (updateBounds never called, e.g.
+        // in unit tests) accept every position so behavior matches the legacy single-position API.
+        std::vector<osg::Vec3f> foci;
         for (const PlayerPosition& position : playerPositions)
-        {
             if (mWorldspace.empty() || position.mWorldspace == mWorldspace)
-            {
-                focus = &position;
-                break;
-            }
-        }
-        if (focus == nullptr)
+                foci.push_back(position.mPosition);
+        if (foci.empty())
             return;
         removeUnusedNavMeshes();
-        mNavMeshManager.update(focus->mPosition, guard);
+        mNavMeshManager.update(foci, guard);
     }
 
     void NavigatorImpl::wait(WaitConditionType waitConditionType, Loading::Listener* listener)
