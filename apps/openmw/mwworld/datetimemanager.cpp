@@ -1,5 +1,7 @@
 #include "datetimemanager.hpp"
 
+#include <algorithm>
+
 #include <components/l10n/manager.hpp>
 
 #include "../mwbase/environment.hpp"
@@ -7,6 +9,8 @@
 #include "../mwbase/statemanager.hpp"
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
+
+#include "../mwnet/replicator.hpp"
 
 #include "duration.hpp"
 #include "globals.hpp"
@@ -261,16 +265,24 @@ namespace MWWorld
         // itself: explicit pause tags (set by scripts, and by client menus via the 'ui' tag) and
         // the no-game state. Client-presentation sources are local to a viewing client: the
         // console, the post-processor HUD and modal message boxes.
-        const bool worldPaused
-            = !mPausedTags.empty() || stateManager->getState() == MWBase::StateManager::State_NoGame;
-        const bool uiPaused
-            = wm->isConsoleMode() || wm->isPostProcessorHudVisible() || wm->isInteractiveMessageBoxActive();
-
+        //
         // Singleplayer is one local client driving the shared world, so a UI pause pauses the
-        // world too. On a headless dedicated server NullWindowManager reports no UI pause, so the
-        // world is governed by the run-state sources alone (it is never paused by a menu) — which
-        // is the behaviour a shared server needs. Networked clients (M13) will stop letting their
-        // local UI pause the shared world; the split above is where that diverges.
+        // world too. In a NETWORKED session the shared world stops for no one's menus: the 'ui'
+        // tag and the client-presentation sources are ignored, so inventory/dialogue/main menu
+        // (and the console) leave the simulation running — on the host because the other players
+        // keep playing, on a client because the host keeps simulating regardless and freezing
+        // locally would only desync the presentation. Explicit script pause tags still apply
+        // (deliberate, and global-script state is synced across the session). A headless
+        // dedicated server behaves the same either way: NullWindowManager reports no UI pause.
+        const MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+        const bool networked = replicator != nullptr && replicator->isNetworked();
+
+        const auto pausesWorld = [&](const std::string& tag) { return !networked || tag != "ui"; };
+        const bool worldPaused = stateManager->getState() == MWBase::StateManager::State_NoGame
+            || std::any_of(mPausedTags.begin(), mPausedTags.end(), pausesWorld);
+        const bool uiPaused = !networked
+            && (wm->isConsoleMode() || wm->isPostProcessorHudVisible() || wm->isInteractiveMessageBoxActive());
+
         mPaused = worldPaused || uiPaused;
     }
 }
