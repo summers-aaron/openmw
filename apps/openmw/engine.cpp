@@ -349,6 +349,28 @@ void OMW::Engine::enterSelectLobby()
     }
 }
 
+namespace
+{
+    // A random Morrowind-flavored name for a debug drop-in. The server keys stored characters by
+    // name, so a fixed name would collide as soon as one tester drops in twice (or two test
+    // clients drop in at once) — each throwaway character needs its own.
+    std::string makeDebugCharacterName()
+    {
+        static constexpr std::string_view heads[] = { "Ald", "Bal", "Dre", "Fal", "Gal", "Hla", "Ind", "Kar", "Mal",
+            "Nel", "Rav", "Sar", "Tel", "Ur", "Vel", "Zan" };
+        static constexpr std::string_view tails[]
+            = { "anu", "aryon", "edas", "eno", "ilu", "ithi", "oran", "othan", "ura", "yne" };
+        const auto pick = [](const auto& parts) { return parts[Misc::Rng::rollDice(std::size(parts))]; };
+        std::string name;
+        name += pick(heads);
+        name += pick(tails);
+        name += ' ';
+        name += pick(heads);
+        name += pick(tails);
+        return name;
+    }
+}
+
 // TEMPORARY testing shortcut, reached from the lobby's "Debug character" button. The bypass new
 // game (no chargen intro) has just run, leaving the default "player" record: make it an Imperial,
 // give it a class, max out attributes and skills, and drop it at Seyda Neen — a ready-to-play
@@ -413,7 +435,15 @@ void OMW::Engine::setupDebugCharacter()
         world.changeToCell(cell, pos, true);
         world.adjustPosition(world.getPlayerPtr(), false);
     }
-    Log(Debug::Info) << "Debug character ready (Imperial, maxed stats)";
+
+    // A random name, not the login identity: debug drop-ins are throwaway, and every one must be
+    // distinct in the server's name-keyed roster. Marking the name applied keeps the deferred
+    // login-identity naming (pumpNetwork) from renaming this character later. After race/class,
+    // which rebuild the player record.
+    const std::string name = makeDebugCharacterName();
+    mechanics.setPlayerName(name);
+    mPlayerNameApplied = true;
+    Log(Debug::Info) << "Debug character ready (Imperial, maxed stats): '" << name << "'";
 }
 
 void OMW::Engine::handleControlMessage(MWNet::PeerId from, const MWNet::ControlMessage& message)
@@ -701,7 +731,8 @@ void OMW::Engine::pumpTransport()
         mReplicator->updateClientStart();
 
         // A NEW character is named after the login identity the moment it is finalized (chargen skips
-        // or overrides its own name dialog). A resumed character keeps its stored name.
+        // or overrides its own name dialog). A resumed character keeps its stored name, and the debug
+        // drop-in already named itself randomly (it set mPlayerNameApplied in setupDebugCharacter).
         if (!mPlayerNameApplied && mCreatingNewCharacter && !mPlayerName.empty()
             && mReplicator->isLocalPlayerReady())
         {
