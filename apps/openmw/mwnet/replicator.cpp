@@ -11,6 +11,7 @@
 #include <components/debug/debuglog.hpp>
 #include <components/esm/generatedrefid.hpp>
 #include <components/esm/refid.hpp>
+#include <components/esm/util.hpp>
 #include <components/esm3/esmreader.hpp>
 #include <components/esm3/esmwriter.hpp>
 #include <components/esm3/journalentry.hpp>
@@ -1503,6 +1504,24 @@ namespace MWNet
         return applied;
     }
 
+    namespace
+    {
+        // The exterior sub-cell that actually contains pos, in cell's worldspace (interiors pass
+        // through). A replicated cell/position pair can arrive out of sync — e.g. a relayed
+        // puppet's dead-reckoned position drifts across a border between its owner's cell
+        // updates — and filing a ref under a cell that doesn't contain its position strands it:
+        // cell-keyed cleanup (dropActors) misses it when its real cell unloads, leaving a live
+        // mechanics entry with a destroyed node. For exteriors, the position is the truth.
+        MWWorld::CellStore* containingExteriorCell(
+            MWWorld::WorldModel& worldModel, MWWorld::CellStore* cell, const osg::Vec3f& pos)
+        {
+            if (cell == nullptr || !cell->isExterior())
+                return cell;
+            return &worldModel.getExterior(
+                ESM::positionToExteriorCellLocation(pos.x(), pos.y(), cell->getCell()->getWorldSpace()));
+        }
+    }
+
     bool Replicator::applyAvatarEntity(const EntityState& entity)
     {
         MWBase::World& world = *MWBase::Environment::get().getWorld();
@@ -1524,6 +1543,8 @@ namespace MWNet
         MWWorld::CellStore* targetCell = nullptr;
         if (entity.mCellId)
             targetCell = worldModel.findCell(ESM::RefId::deserializeText(*entity.mCellId));
+        if (entity.mTransform)
+            targetCell = containingExteriorCell(worldModel, targetCell, entity.mTransform->mPosition);
 
         auto found = mAvatars.find(entity.mId);
         if (found == mAvatars.end())
@@ -1605,14 +1626,19 @@ namespace MWNet
         // moveObject is correct (and carries it across cells when its owner does).
         if (mIsAuthority)
         {
-            MWWorld::CellStore* dest = targetCell != nullptr ? targetCell : avatar.getCell();
+            // The fallback current cell goes through containingExteriorCell too (targetCell
+            // already did, above): the avatar's own bookkeeping may lag its replicated position.
+            MWWorld::CellStore* dest = containingExteriorCell(
+                worldModel, targetCell != nullptr ? targetCell : avatar.getCell(), entity.mTransform->mPosition);
             if (dest != nullptr)
                 avatar = world.placeNetworkPlayer(avatar, *dest, entity.mTransform->mPosition);
         }
         else if (targetCell != nullptr && avatar.getCell() != targetCell)
             avatar = world.moveObject(avatar, targetCell, entity.mTransform->mPosition, true, true);
         else
-            world.moveObject(avatar, entity.mTransform->mPosition);
+            // Keep the returned Ptr: moveObject re-files the avatar when the position crosses an
+            // exterior sub-cell border, and mAvatars must track the cell it is actually filed in.
+            avatar = world.moveObject(avatar, entity.mTransform->mPosition);
         world.rotateObject(avatar, entity.mTransform->mRotation, MWBase::RotationFlag_none);
         if (entity.mStats)
         {

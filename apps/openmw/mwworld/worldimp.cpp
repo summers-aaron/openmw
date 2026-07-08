@@ -1184,6 +1184,19 @@ namespace MWWorld
             MWBase::Environment::get().getWindowManager()->updateConsoleObjectPtr(ptr, newPtr);
             MWBase::Environment::get().getScriptManager()->getGlobalScripts().updatePtrs(ptr, newPtr);
         }
+        else if (newCell->isExterior())
+        {
+            // No cell change means the position is written without re-filing the ref, so it must
+            // lie inside this cell. A caller passing a mismatched pair (e.g. replicated state
+            // sampled out of sync) strands the ref: cell-keyed cleanup misses it when its real
+            // cell unloads. Position-derived callers can never trigger this.
+            const ESM::ExteriorCellLocation actual = ESM::positionToExteriorCellLocation(
+                position.x(), position.y(), newCell->getCell()->getWorldSpace());
+            if (newCell->getCell()->getGridX() != actual.mX || newCell->getCell()->getGridY() != actual.mY)
+                Log(Debug::Warning) << "moveObject: " << ptr.getCellRef().getRefId() << " filed in cell "
+                                    << newCell->getCell()->getDescription() << " but positioned in (" << actual.mX
+                                    << ", " << actual.mY << ")";
+        }
         if (haveToMove && newPtr.getRefData().getBaseNode())
         {
             mRendering->moveObject(newPtr, position);

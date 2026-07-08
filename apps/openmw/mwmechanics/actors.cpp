@@ -1383,10 +1383,18 @@ namespace MWMechanics
 
     void Actors::dropActors(const MWWorld::CellStore* cellStore, const MWWorld::Ptr& ignore)
     {
+        const MWBase::World& world = *MWBase::Environment::get().getWorld();
         for (Actor& actor : mActors)
         {
-            if (!actor.isInvalid() && actor.getPtr().isInCell() && actor.getPtr().getCell() == cellStore
-                && actor.getPtr() != ignore)
+            if (actor.isInvalid() || actor.getPtr() == ignore)
+                continue;
+            // Besides this cell's actors, sweep any entry whose scene node is already gone: a
+            // replicated actor can be filed under a cell that doesn't contain its position, so the
+            // unload that just stripped its node (and is about to destroy its animation) doesn't
+            // match it by cell. Left alive, such an entry crashes the next mechanics update.
+            const bool orphaned
+                = !world.isPlayer(actor.getPtr()) && actor.getPtr().getRefData().getBaseNode() == nullptr;
+            if (orphaned || (actor.getPtr().isInCell() && actor.getPtr().getCell() == cellStore))
             {
                 removeTemporaryEffects(actor.getPtr());
                 mIndex.erase(actor.getPtr().mRef);
@@ -1789,6 +1797,16 @@ namespace MWMechanics
                     distSqr = std::min(distSqr, (playerPositions[i] - animActorPos).length2());
                 const float dist = std::sqrt(distSqr);
                 const bool isPlayer = actor.getPtr() == player;
+                // A live entry whose scene node is gone: its cell was torn down under it (stale
+                // replicated cell bookkeeping can file a ref outside the cell that contains its
+                // position, so the unload's cell-keyed drop misses it). Don't drive it — the
+                // controller's animation died with the cell, so even ctrl.setActive would
+                // dereference freed memory. dropActors sweeps such entries on the next unload.
+                if (!isPlayer && actor.getPtr().getRefData().getBaseNode() == nullptr)
+                {
+                    world->setActorActive(actor.getPtr(), false);
+                    continue;
+                }
                 CreatureStats& stats = actor.getPtr().getClass().getCreatureStats(actor.getPtr());
                 // Actors with active AI should be able to move.
                 bool alwaysActive = false;
