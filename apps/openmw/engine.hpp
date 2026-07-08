@@ -176,6 +176,8 @@ namespace OMW
         bool mCharacterUploaded = false; // client: has the full character sheet been sent to the server
         unsigned mPumpTick = 0; // pumpTransport call counter (drives low-frequency periodic work)
         int mAutoCharacter = -1; // client: roster id to auto-select, skipping the UI (--character)
+        // --character sentinel: auto-create the pre-kitted debug drop-in (no chargen, no input).
+        static constexpr int sAutoDebugCharacter = -2;
         std::map<std::string, ESM::RefNum> mLoginNetIds; // host: username -> stable network id
         std::uint32_t mNextLoginId = 1; // host: next network id to hand out (0 is the host)
         std::map<MWNet::PeerId, ESM::RefNum> mPeerNetIds; // host: connected peer -> its login net id

@@ -111,7 +111,8 @@ namespace OpenMW
 
         addOption("character", bpo::value<int>()->default_value(-1),
             "Auto-select this roster character id when connecting (skips the character-select "
-            "dialog). Use the id shown by the server's 'players' console command.");
+            "dialog). Use the id shown by the server's 'players' console command. Pass -2 to "
+            "auto-create the pre-kitted debug character (no chargen; for scripted test runs).");
 
         addOption("export-fonts", bpo::value<bool>()->implicit_value(true)->default_value(false),
             "Export Morrowind .fnt fonts to PNG image and XML file in current directory");

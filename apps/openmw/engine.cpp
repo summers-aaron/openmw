@@ -336,7 +336,17 @@ void OMW::Engine::enterSelectLobby()
     camera->setPitch(0.296f);
 
     // Open the select UI over the backdrop, or auto-claim the slot for scripted/headless runs.
-    if (mAutoCharacter >= 0)
+    if (mAutoCharacter == sAutoDebugCharacter)
+    {
+        // Scripted debug drop-in (--character -2): exactly as if the lobby's "Debug character"
+        // button was pressed — bypass the chargen intro and spawn the pre-kitted character with
+        // no input required. Used by automated repro/test runs.
+        mCreatingNewCharacter = true;
+        mDebugCharacter = true;
+        sendControl(MWNet::sLocalPeer, MWNet::CreateNew{});
+        Log(Debug::Info) << "Auto-creating a debug character (--character -2)";
+    }
+    else if (mAutoCharacter >= 0)
     {
         sendControl(MWNet::sLocalPeer, MWNet::SelectCharacter{ static_cast<std::uint32_t>(mAutoCharacter) });
         Log(Debug::Info) << "Auto-selecting character slot " << mAutoCharacter;
