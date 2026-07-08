@@ -3,6 +3,8 @@
 
 #include <BulletCollision/CollisionDispatch/btCollisionWorld.h>
 
+#include "worldspacetag.hpp"
+
 class btCollisionObject;
 
 namespace MWPhysics
@@ -18,7 +20,15 @@ namespace MWPhysics
             , mCaster(caster)
             , mMe(me)
             , mProjectile(projectile)
+            , mWorldspaceTag(worldspaceTag(me))
         {
+        }
+
+        bool needsCollision(btBroadphaseProxy* proxy0) const override
+        {
+            if (!sameWorldspace(mWorldspaceTag, *proxy0))
+                return false;
+            return btCollisionWorld::ClosestConvexResultCallback::needsCollision(proxy0);
         }
 
         btScalar addSingleResult(btCollisionWorld::LocalConvexResult& result, bool normalInWorldSpace) override;
@@ -27,6 +37,7 @@ namespace MWPhysics
         const btCollisionObject* mCaster;
         const btCollisionObject* mMe;
         Projectile& mProjectile;
+        const int mWorldspaceTag;
     };
 }
 

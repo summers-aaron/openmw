@@ -7,6 +7,8 @@
 
 #include <algorithm>
 
+#include "worldspacetag.hpp"
+
 namespace MWPhysics
 {
     // https://developer.mozilla.org/en-US/docs/Games/Techniques/3D_collision_detection
@@ -22,12 +24,13 @@ namespace MWPhysics
     {
     public:
         explicit HasSphereCollisionCallback(const btVector3& position, const btScalar radius, const int mask,
-            const int group, const btCollisionObject* ignore)
+            const int group, const btCollisionObject* ignore, int worldspaceTag)
             : mPosition(position)
             , mRadius(radius)
             , mIgnore(ignore)
             , mCollisionFilterMask(mask)
             , mCollisionFilterGroup(group)
+            , mWorldspaceTag(worldspaceTag)
         {
         }
 
@@ -36,7 +39,7 @@ namespace MWPhysics
             if (mResult)
                 return false;
             const auto collisionObject = static_cast<btCollisionObject*>(proxy->m_clientObject);
-            if (mIgnore == collisionObject || !needsCollision(*proxy)
+            if (mIgnore == collisionObject || !needsCollision(*proxy) || !sameWorldspace(mWorldspaceTag, *proxy)
                 || !testAabbAgainstSphere(proxy->m_aabbMin, proxy->m_aabbMax, mPosition, mRadius))
                 return true;
             mResult = true;
@@ -51,6 +54,7 @@ namespace MWPhysics
         const btCollisionObject* mIgnore;
         int mCollisionFilterMask;
         int mCollisionFilterGroup;
+        int mWorldspaceTag;
         bool mResult = false;
 
         bool needsCollision(const btBroadphaseProxy& proxy) const

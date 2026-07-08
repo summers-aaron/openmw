@@ -398,7 +398,7 @@ namespace MWWorld
         if (cell->getCell()->isExterior())
         {
             mNavigator.removeHeightfield(osg::Vec2i(cellX, cellY), navigatorUpdateGuard);
-            mPhysics->removeHeightField(cellX, cellY);
+            mPhysics->removeHeightField(cell->getCell()->getWorldSpace(), cellX, cellY);
         }
 
         if (cell->getCell()->hasWater())
@@ -452,16 +452,16 @@ namespace MWWorld
 
             if (data)
             {
-                mPhysics->addHeightField(data->getHeights().data(), cellX, cellY, worldsize, verts,
+                mPhysics->addHeightField(data->getHeights().data(), worldspace, cellX, cellY, worldsize, verts,
                     data->getMinHeight(), data->getMaxHeight(), land.get());
             }
             else if (!ESM::isEsm4Ext(worldspace))
             {
                 static const std::vector<float> defaultHeight(verts * verts, ESM::Land::DEFAULT_HEIGHT);
-                mPhysics->addHeightField(defaultHeight.data(), cellX, cellY, worldsize, verts,
+                mPhysics->addHeightField(defaultHeight.data(), worldspace, cellX, cellY, worldsize, verts,
                     ESM::Land::DEFAULT_HEIGHT, ESM::Land::DEFAULT_HEIGHT, land.get());
             }
-            if (mPhysics->getHeightField(cellX, cellY))
+            if (mPhysics->getHeightField(worldspace, cellX, cellY))
             {
                 const osg::Vec2i cellPosition(cellX, cellY);
                 const HeightfieldShape shape = [&]() -> HeightfieldShape {
@@ -514,7 +514,7 @@ namespace MWWorld
 
             if (cellVariant.isExterior())
             {
-                if (mPhysics->getHeightField(cellX, cellY))
+                if (mPhysics->getHeightField(worldspace, cellX, cellY))
                     mNavigator.addWater(
                         osg::Vec2i(cellX, cellY), ESM::Land::REAL_SIZE, waterLevel, navigatorUpdateGuard);
             }
@@ -957,6 +957,11 @@ namespace MWWorld
 
         MWWorld::Ptr player = mWorld.getPlayerPtr();
         mRendering.updatePlayerPtr(player);
+        // Re-point (and re-tag) the player's physics body BEFORE the ground snaps below: a cell
+        // change can cross worldspaces, and adjustPosition's trace-down only hits geometry of the
+        // body's tagged worldspace — with the stale tag it finds no floor in the new cell and
+        // leaves the player hovering at the door marker's z + 20 (or inside the ceiling).
+        mPhysics->updatePtr(old, player);
 
         // The player is loaded before the scene and by default it is grounded, with the scene fully loaded,
         // we validate and correct this. Only run once, during initial cell load.
@@ -973,8 +978,6 @@ namespace MWWorld
 
         MWBase::Environment::get().getMechanicsManager()->updateCell(old, player);
         MWBase::Environment::get().getWindowManager()->watchActor(player);
-
-        mPhysics->updatePtr(old, player);
 
         mWorld.adjustSky();
 

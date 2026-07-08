@@ -12,6 +12,7 @@
 #include "../mwworld/esmstore.hpp"
 
 #include "actor.hpp"
+#include "closestnotmerayresultcallback.hpp"
 #include "collisiontype.hpp"
 #include "constants.hpp"
 #include "contacttestwrapper.h"
@@ -21,6 +22,7 @@
 #include "projectileconvexcallback.hpp"
 #include "stepper.hpp"
 #include "trace.h"
+#include "worldspacetag.hpp"
 
 #include <cmath>
 
@@ -39,9 +41,17 @@ namespace MWPhysics
         public:
             explicit ContactCollectionCallback(const btCollisionObject& me, const osg::Vec3f& velocity)
                 : mVelocity(Misc::Convert::toBullet(velocity))
+                , mWorldspaceTag(me.getUserIndex())
             {
                 m_collisionFilterGroup = me.getBroadphaseHandle()->m_collisionFilterGroup;
                 m_collisionFilterMask = me.getBroadphaseHandle()->m_collisionFilterMask & ~CollisionType_Projectile;
+            }
+
+            bool needsCollision(btBroadphaseProxy* proxy0) const override
+            {
+                if (!sameWorldspace(mWorldspaceTag, *proxy0))
+                    return false;
+                return btCollisionWorld::ContactResultCallback::needsCollision(proxy0);
             }
 
             btScalar addSingleResult(btManifoldPoint& contact, const btCollisionObjectWrapper* colObj0Wrap,
@@ -82,6 +92,7 @@ namespace MWPhysics
 
         protected:
             btVector3 mVelocity;
+            int mWorldspaceTag;
         };
     }
 
@@ -106,7 +117,7 @@ namespace MWPhysics
         btVector3 from = Misc::Convert::toBullet(position);
         btVector3 to = from - btVector3(0, 0, maxHeight);
 
-        btCollisionWorld::ClosestRayResultCallback resultCallback1(from, to);
+        ClosestNotMeRayResultCallback resultCallback1({}, {}, from, to, worldspaceTag(actor->getCollisionObject()));
         resultCallback1.m_collisionFilterGroup = CollisionType_AnyPhysical;
         resultCallback1.m_collisionFilterMask = CollisionType_World | CollisionType_HeightMap;
 

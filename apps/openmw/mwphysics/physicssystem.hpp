@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <tuple>
 #include <unordered_map>
 #include <variant>
 
@@ -16,6 +17,7 @@
 #include <osg/Timer>
 #include <osg/ref_ptr>
 
+#include <components/esm/refid.hpp>
 #include <components/vfs/pathutil.hpp>
 
 #include "../mwworld/ptr.hpp"
@@ -186,12 +188,12 @@ namespace MWPhysics
         void updateRotation(const MWWorld::Ptr& ptr, osg::Quat rotate);
         void updatePosition(const MWWorld::Ptr& ptr);
 
-        void addHeightField(const float* heights, int x, int y, int size, int verts, float minH, float maxH,
-            const osg::Object* holdObject);
+        void addHeightField(const float* heights, ESM::RefId worldspace, int x, int y, int size, int verts, float minH,
+            float maxH, const osg::Object* holdObject);
 
-        void removeHeightField(int x, int y);
+        void removeHeightField(ESM::RefId worldspace, int x, int y);
 
-        const HeightField* getHeightField(int x, int y) const;
+        const HeightField* getHeightField(ESM::RefId worldspace, int x, int y) const;
 
         bool toggleCollisionMode();
 
@@ -294,6 +296,13 @@ namespace MWPhysics
 
         void prepareSimulation(bool willSimulate, std::vector<Simulation>& simulations);
 
+        /// The interned collision tag for a worldspace (see worldspacetag.hpp). Stable for the
+        /// lifetime of the physics system; assigns the next free tag on first use.
+        int getWorldspaceTag(ESM::RefId worldspace);
+        /// The collision tag for the worldspace of the cell \a ptr is in; 0 (no worldspace) if it
+        /// is not in a cell.
+        int getWorldspaceTag(const MWWorld::ConstPtr& ptr);
+
         std::unique_ptr<btBroadphaseInterface> mBroadphase;
         std::unique_ptr<btDefaultCollisionConfiguration> mCollisionConfiguration;
         std::unique_ptr<btCollisionDispatcher> mDispatcher;
@@ -313,8 +322,11 @@ namespace MWPhysics
         using ProjectileMap = std::map<int, std::shared_ptr<Projectile>>;
         ProjectileMap mProjectiles;
 
-        using HeightFieldMap = std::map<std::pair<int, int>, std::unique_ptr<HeightField>>;
+        // Keyed by (worldspace tag, x, y): two exterior worldspaces may both have a cell (x, y).
+        using HeightFieldMap = std::map<std::tuple<int, int, int>, std::unique_ptr<HeightField>>;
         HeightFieldMap mHeightFields;
+
+        std::unordered_map<ESM::RefId, int> mWorldspaceTags;
 
         bool mDebugDrawEnabled;
 

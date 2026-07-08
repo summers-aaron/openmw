@@ -5,6 +5,8 @@
 
 #include <BulletCollision/CollisionDispatch/btCollisionWorld.h>
 
+#include "worldspacetag.hpp"
+
 class btCollisionObject;
 
 namespace MWPhysics
@@ -15,11 +17,20 @@ namespace MWPhysics
     {
     public:
         explicit ClosestNotMeRayResultCallback(std::span<const btCollisionObject*> ignore,
-            std::span<const btCollisionObject*> targets, const btVector3& from, const btVector3& to)
+            std::span<const btCollisionObject*> targets, const btVector3& from, const btVector3& to,
+            int worldspaceTag)
             : btCollisionWorld::ClosestRayResultCallback(from, to)
             , mIgnoreList(ignore)
             , mTargets(targets)
+            , mWorldspaceTag(worldspaceTag)
         {
+        }
+
+        bool needsCollision(btBroadphaseProxy* proxy0) const override
+        {
+            if (!sameWorldspace(mWorldspaceTag, *proxy0))
+                return false;
+            return btCollisionWorld::ClosestRayResultCallback::needsCollision(proxy0);
         }
 
         btScalar addSingleResult(btCollisionWorld::LocalRayResult& rayResult, bool normalInWorldSpace) override;
@@ -27,6 +38,7 @@ namespace MWPhysics
     private:
         const std::span<const btCollisionObject*> mIgnoreList;
         const std::span<const btCollisionObject*> mTargets;
+        const int mWorldspaceTag;
     };
 }
 

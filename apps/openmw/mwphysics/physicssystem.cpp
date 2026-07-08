@@ -55,6 +55,7 @@
 #include "mtphysics.hpp"
 #include "object.hpp"
 #include "projectile.hpp"
+#include "worldspacetag.hpp"
 
 namespace
 {
@@ -233,7 +234,26 @@ namespace MWPhysics
             }
         }
 
-        ClosestNotMeRayResultCallback resultCallback(ignoreList, targetCollisionObjects, btFrom, btTo);
+        // The ray itself has no worldspace; borrow the tag of the first tagged subject (the
+        // ignored caster / the targets), so a ray cast on behalf of an actor stays inside that
+        // actor's worldspace. With no tagged subject (camera/UI picks) it hits everything, as
+        // before.
+        int rayWorldspaceTag = 0;
+        for (const btCollisionObject* object : ignoreList)
+            if (object->getUserIndex() > 0)
+            {
+                rayWorldspaceTag = object->getUserIndex();
+                break;
+            }
+        if (rayWorldspaceTag == 0)
+            for (const btCollisionObject* object : targetCollisionObjects)
+                if (object->getUserIndex() > 0)
+                {
+                    rayWorldspaceTag = object->getUserIndex();
+                    break;
+                }
+
+        ClosestNotMeRayResultCallback resultCallback(ignoreList, targetCollisionObjects, btFrom, btTo, rayWorldspaceTag);
         resultCallback.m_collisionFilterGroup = group;
         resultCallback.m_collisionFilterMask = mask;
 
@@ -382,26 +402,46 @@ namespace MWPhysics
         return MovementSolver::traceDown(ptr, position, found->second.get(), mCollisionWorld.get(), maxHeight);
     }
 
-    void PhysicsSystem::addHeightField(
-        const float* heights, int x, int y, int size, int verts, float minH, float maxH, const osg::Object* holdObject)
+    void PhysicsSystem::addHeightField(const float* heights, ESM::RefId worldspace, int x, int y, int size, int verts,
+        float minH, float maxH, const osg::Object* holdObject)
     {
-        mHeightFields[std::make_pair(x, y)]
-            = std::make_unique<HeightField>(heights, x, y, size, verts, minH, maxH, holdObject, mTaskScheduler.get());
+        const int tag = getWorldspaceTag(worldspace);
+        mHeightFields[std::make_tuple(tag, x, y)] = std::make_unique<HeightField>(
+            heights, x, y, size, verts, minH, maxH, holdObject, mTaskScheduler.get(), tag);
     }
 
-    void PhysicsSystem::removeHeightField(int x, int y)
+    void PhysicsSystem::removeHeightField(ESM::RefId worldspace, int x, int y)
     {
-        HeightFieldMap::iterator heightfield = mHeightFields.find(std::make_pair(x, y));
+        const auto tag = mWorldspaceTags.find(worldspace);
+        if (tag == mWorldspaceTags.end())
+            return;
+        HeightFieldMap::iterator heightfield = mHeightFields.find(std::make_tuple(tag->second, x, y));
         if (heightfield != mHeightFields.end())
             mHeightFields.erase(heightfield);
     }
 
-    const HeightField* PhysicsSystem::getHeightField(int x, int y) const
+    const HeightField* PhysicsSystem::getHeightField(ESM::RefId worldspace, int x, int y) const
     {
-        const auto heightField = mHeightFields.find(std::make_pair(x, y));
+        const auto tag = mWorldspaceTags.find(worldspace);
+        if (tag == mWorldspaceTags.end())
+            return nullptr;
+        const auto heightField = mHeightFields.find(std::make_tuple(tag->second, x, y));
         if (heightField == mHeightFields.end())
             return nullptr;
         return heightField->second.get();
+    }
+
+    int PhysicsSystem::getWorldspaceTag(ESM::RefId worldspace)
+    {
+        const auto [it, inserted] = mWorldspaceTags.emplace(worldspace, static_cast<int>(mWorldspaceTags.size()) + 1);
+        return it->second;
+    }
+
+    int PhysicsSystem::getWorldspaceTag(const MWWorld::ConstPtr& ptr)
+    {
+        if (ptr.isEmpty() || !ptr.isInCell())
+            return 0;
+        return getWorldspaceTag(ptr.getCell()->getCell()->getWorldSpace());
     }
 
     void PhysicsSystem::addObject(
@@ -432,7 +472,8 @@ namespace MWPhysics
                 break;
         }
 
-        auto obj = std::make_shared<Object>(ptr, shapeInstance, rotation, collisionType, mTaskScheduler.get());
+        auto obj = std::make_shared<Object>(
+            ptr, shapeInstance, rotation, collisionType, mTaskScheduler.get(), getWorldspaceTag(ptr));
         mObjects.emplace(ptr.mRef, obj);
 
         if (obj->isAnimated())
@@ -462,10 +503,18 @@ namespace MWPhysics
 
     void PhysicsSystem::updatePtr(const MWWorld::Ptr& old, const MWWorld::Ptr& updated)
     {
+        // A cross-cell move can also cross worldspaces (interior <-> exterior, or between two
+        // interiors) while the same physics body persists — keep its worldspace tag current.
         if (auto foundObject = mObjects.find(old.mRef); foundObject != mObjects.end())
+        {
             foundObject->second->updatePtr(updated);
+            mTaskScheduler->setUserIndex(foundObject->second->getCollisionObject(), getWorldspaceTag(updated));
+        }
         else if (auto foundActor = mActors.find(old.mRef); foundActor != mActors.end())
+        {
             foundActor->second->updatePtr(updated);
+            mTaskScheduler->setUserIndex(foundActor->second->getCollisionObject(), getWorldspaceTag(updated));
+        }
 
         for (auto& [_, actor] : mActors)
         {
@@ -580,8 +629,8 @@ namespace MWPhysics
         const MWMechanics::MagicEffects& effects = ptr.getClass().getCreatureStats(ptr).getMagicEffects();
         const bool canWaterWalk = effects.getOrDefault(ESM::MagicEffect::WaterWalking).getMagnitude() > 0;
 
-        auto actor = std::make_shared<Actor>(
-            ptr, shape, mTaskScheduler.get(), canWaterWalk, Settings::game().mActorCollisionShapeType);
+        auto actor = std::make_shared<Actor>(ptr, shape, mTaskScheduler.get(), canWaterWalk,
+            Settings::game().mActorCollisionShapeType, getWorldspaceTag(ptr));
 
         mActors.emplace(ptr.mRef, std::move(actor));
     }
@@ -595,7 +644,8 @@ namespace MWPhysics
 
         mProjectileId++;
 
-        auto projectile = std::make_shared<Projectile>(caster, position, radius, mTaskScheduler.get(), this);
+        auto projectile = std::make_shared<Projectile>(
+            caster, position, radius, mTaskScheduler.get(), this, getWorldspaceTag(caster));
         mProjectiles.emplace(mProjectileId, std::move(projectile));
 
         return mProjectileId;
@@ -858,7 +908,8 @@ namespace MWPhysics
         const btVector3 aabbMax = bulletPosition + btVector3(radius, radius, radius);
         const int mask = MWPhysics::CollisionType_Actor;
         const int group = MWPhysics::CollisionType_AnyPhysical;
-        HasSphereCollisionCallback callback(bulletPosition, radius, mask, group, ignoredObject);
+        HasSphereCollisionCallback callback(bulletPosition, radius, mask, group, ignoredObject,
+            worldspaceTag(ignoredObject));
         mTaskScheduler->aabbTest(aabbMin, aabbMax, callback);
         return callback.getResult();
     }

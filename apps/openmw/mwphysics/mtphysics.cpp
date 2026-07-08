@@ -30,11 +30,13 @@
 #include "../mwbase/world.hpp"
 
 #include "actor.hpp"
+#include "closestnotmerayresultcallback.hpp"
 #include "contacttestwrapper.h"
 #include "movementsolver.hpp"
 #include "object.hpp"
 #include "physicssystem.hpp"
 #include "projectile.hpp"
+#include "worldspacetag.hpp"
 
 namespace MWPhysics
 {
@@ -650,6 +652,12 @@ namespace MWPhysics
         collisionObject->getBroadphaseHandle()->m_collisionFilterMask = collisionFilterMask;
     }
 
+    void PhysicsTaskScheduler::setUserIndex(btCollisionObject* collisionObject, int index)
+    {
+        MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
+        collisionObject->setUserIndex(index);
+    }
+
     void PhysicsTaskScheduler::addCollisionObject(
         btCollisionObject* collisionObject, int collisionFilterGroup, int collisionFilterMask)
     {
@@ -763,12 +771,19 @@ namespace MWPhysics
 
     bool PhysicsTaskScheduler::hasLineOfSight(const Actor* actor1, const Actor* actor2)
     {
+        // Actors in different worldspaces share coordinates but no space — never a sightline.
+        // (Without this, the ray would also cross the OTHER worldspaces' geometry unfiltered.)
+        const int tag1 = worldspaceTag(actor1->getCollisionObject());
+        const int tag2 = worldspaceTag(actor2->getCollisionObject());
+        if (!sameWorldspace(tag1, tag2))
+            return false;
+
         btVector3 pos1 = Misc::Convert::toBullet(
             actor1->getCollisionObjectPosition() + osg::Vec3f(0, 0, actor1->getHalfExtents().z() * 0.9f)); // eye level
         btVector3 pos2 = Misc::Convert::toBullet(
             actor2->getCollisionObjectPosition() + osg::Vec3f(0, 0, actor2->getHalfExtents().z() * 0.9f));
 
-        btCollisionWorld::ClosestRayResultCallback resultCallback(pos1, pos2);
+        ClosestNotMeRayResultCallback resultCallback({}, {}, pos1, pos2, tag1 > 0 ? tag1 : tag2);
         resultCallback.m_collisionFilterGroup = CollisionType_AnyPhysical;
         resultCallback.m_collisionFilterMask = CollisionType_World | CollisionType_HeightMap | CollisionType_Door;
 

@@ -27,7 +27,7 @@ namespace MWPhysics
     {
     public:
         Projectile(const MWWorld::Ptr& caster, const osg::Vec3f& position, float radius,
-            PhysicsTaskScheduler* scheduler, PhysicsSystem* physicssystem);
+            PhysicsTaskScheduler* scheduler, PhysicsSystem* physicssystem, int worldspaceTag);
         ~Projectile() override;
 
         btConvexShape* getConvexShape() const { return mConvexShape; }

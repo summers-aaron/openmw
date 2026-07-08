@@ -53,7 +53,7 @@ namespace
 namespace MWPhysics
 {
     HeightField::HeightField(const float* heights, int x, int y, int size, int verts, float minH, float maxH,
-        const osg::Object* holdObject, PhysicsTaskScheduler* scheduler)
+        const osg::Object* holdObject, PhysicsTaskScheduler* scheduler, int worldspaceTag)
         : mHoldObject(holdObject)
 #if BT_BULLET_VERSION < 310
         , mHeights(makeHeights(heights, verts))
@@ -86,6 +86,7 @@ namespace MWPhysics
         mCollisionObject = std::make_unique<btCollisionObject>();
         mCollisionObject->setCollisionShape(mShape.get());
         mCollisionObject->setWorldTransform(transform);
+        mCollisionObject->setUserIndex(worldspaceTag);
         mTaskScheduler->addCollisionObject(
             mCollisionObject.get(), CollisionType_HeightMap, CollisionType_Actor | CollisionType_Projectile);
     }

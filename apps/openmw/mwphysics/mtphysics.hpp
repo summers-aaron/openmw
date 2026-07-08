@@ -63,6 +63,7 @@ namespace MWPhysics
         void aabbTest(const btVector3& aabbMin, const btVector3& aabbMax, btBroadphaseAabbCallback& callback);
         void getAabb(const btCollisionObject* obj, btVector3& min, btVector3& max);
         void setCollisionFilterMask(btCollisionObject* collisionObject, int collisionFilterMask);
+        void setUserIndex(btCollisionObject* collisionObject, int index);
         void addCollisionObject(btCollisionObject* collisionObject, int collisionFilterGroup, int collisionFilterMask);
         void removeCollisionObject(btCollisionObject* collisionObject);
         void updateSingleAabb(const std::shared_ptr<PtrHolder>& ptr, bool immediate = false);

@@ -13,7 +13,7 @@
 namespace MWPhysics
 {
     Projectile::Projectile(const MWWorld::Ptr& caster, const osg::Vec3f& position, float radius,
-        PhysicsTaskScheduler* scheduler, PhysicsSystem* physicssystem)
+        PhysicsTaskScheduler* scheduler, PhysicsSystem* physicssystem, int worldspaceTag)
         : PtrHolder(MWWorld::Ptr(), position)
         , mHitWater(false)
         , mActive(true)
@@ -29,6 +29,7 @@ namespace MWPhysics
         mCollisionObject->setActivationState(DISABLE_DEACTIVATION);
         mCollisionObject->setCollisionShape(mShape.get());
         mCollisionObject->setUserPointer(this);
+        mCollisionObject->setUserIndex(worldspaceTag);
 
         mPosition = position;
         mPreviousPosition = position;

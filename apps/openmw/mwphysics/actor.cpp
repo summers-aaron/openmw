@@ -20,7 +20,7 @@ namespace MWPhysics
 {
 
     Actor::Actor(const MWWorld::Ptr& ptr, const Resource::BulletShape* shape, PhysicsTaskScheduler* scheduler,
-        bool canWaterWalk, DetourNavigator::CollisionShapeType collisionShapeType)
+        bool canWaterWalk, DetourNavigator::CollisionShapeType collisionShapeType, int worldspaceTag)
         : PtrHolder(ptr, ptr.getRefData().getPosition().asVec3())
         , mStandingOnPtr(nullptr)
         , mCanWaterWalk(canWaterWalk)
@@ -101,6 +101,7 @@ namespace MWPhysics
         mCollisionObject->setActivationState(DISABLE_DEACTIVATION);
         mCollisionObject->setCollisionShape(mShape.get());
         mCollisionObject->setUserPointer(this);
+        mCollisionObject->setUserIndex(worldspaceTag);
 
         updateScaleUnsafe();
 
