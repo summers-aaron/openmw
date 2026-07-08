@@ -46,12 +46,24 @@ docker/run-client.sh <IP>                                                # clien
 The save is mounted read-only. Clients never load a save themselves; the server serves each client
 its character over the wire. (`OPENMW_SAVE=<path>` is the env equivalent of `--save`.)
 
+Prefer to play *and* host in one process? Run a **listen host** instead of the dedicated server —
+a normal rendering client whose player is the authority. Useful for debugging too: you can inspect
+authority-side state (e.g. the F10 navmesh view) in a real window. Note a listen host runs with a
+real primary player rather than the dedicated server's headless placeholder, so for faithful
+dedicated-server repros still use `run-server.sh`.
+
+```sh
+docker/run-host.sh                   # a window opens; hosts on :25565 (--listen/--save as run-server.sh)
+docker/run-client.sh <IP>            # others join your game
+```
+
 ## Scripts
 
 | Script | What it does |
 |---|---|
 | `build-host.sh` | Build the image (once) and compile openmw incrementally. Also `all`, `clean`, specific targets, `--configure`, `--shell`. |
 | `run-server.sh` | Headless dedicated server (software GL, no window). `--listen PORT`, plus any openmw args. |
+| `run-host.sh` | Listen host: rendering client that also hosts the session (playable authority). `--listen PORT`, `--save`, plus any openmw args. |
 | `run-client.sh` | Rendering client (`<SERVER_IP[:PORT]>`). Auto-detects GPU; character select / creation happens in-game on connect. |
 | `_mp-common.sh` | Shared helpers sourced by the run scripts (not run directly). |
 | `Dockerfile.server` | The Ubuntu-based build/run image (OpenSceneGraph, Bullet, MyGUI 3.4.3 from source, Recast, …). |
@@ -64,7 +76,7 @@ All host-specific paths default to this machine but can be overridden:
 |---|---|---|
 | `OPENMW_DATA` | _(read from openmw.cfg)_ | force a specific Morrowind `Data Files` path |
 | `OPENMW_CONFIG` | `~/.config/openmw` | openmw config dir (copied per instance) |
-| `OPENMW_USERDATA` | client: throwaway temp dir; server: `~/openmw-mp-server-data` | dir mounted at `/userdata` for saves. Clients get a wiped copy each run; the **server's is persistent** (bind-mounted read-write) so `SIGUSR1` saves survive restarts |
+| `OPENMW_USERDATA` | client: throwaway temp dir; server/host: `~/openmw-mp-server-data` | dir mounted at `/userdata` for saves. Clients get a wiped copy each run; the **server's and host's is persistent** (bind-mounted read-write, shared default dir) so saves survive restarts and carry between the two |
 | `OPENMW_SAVE` | _(none)_ | server only: a host `.omwsave` to host (same as `--save`) |
 | `IMAGE` | `openmw.server:latest` | build/run image tag |
 | `CONTAINER_RUNTIME` | auto | `podman` or `docker` |
@@ -75,6 +87,8 @@ All host-specific paths default to this machine but can be overridden:
 
 ## Notes
 
+- Instant debug spawn: `docker/run-host.sh --start "Seyda Neen"` (also works with `run-server.sh`)
+  skips character generation and drops the default debug player straight into that cell.
 - The client renders a real window via your X11/XWayland display. On NVIDIA the host's NVIDIA GL/GLX
   userspace is staged into the (Mesa-only) image automatically; on Intel/AMD it uses `/dev/dri`.
   If no window appears, run `xhost +local:` and retry.

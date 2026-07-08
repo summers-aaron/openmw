@@ -52,15 +52,22 @@ echo "Server user-data (saves persist here): $MP_USERDATA"
 mp_common_save "$SAVE_HOST"     # -> MP_SAVE_MOUNT, MP_SAVE_LOAD (a host .omwsave to host)
 
 # Choose the game: an explicit --save loads that save; otherwise default to a new game unless the
-# pass-through already carries its own game/save selector.
+# pass-through already carries its own game/save selector. --start counts as one: combined with the
+# hardcoded --skip-menu (and no --new-game) it bypasses chargen and drops the placeholder player
+# straight into that cell, e.g.:  docker/run-server.sh --start "Seyda Neen"
 if [ ${#MP_SAVE_LOAD[@]} -gt 0 ]; then
     game=("${MP_SAVE_LOAD[@]}")
 else
     game=(--new-game)
     for a in ${passthrough[@]+"${passthrough[@]}"}; do
-        case "$a" in --new-game|--load-savegame|--skip-menu) game=() ;; esac
+        case "$a" in --new-game|--load-savegame|--skip-menu|--start) game=() ;; esac
     done
 fi
+
+# Pre-quote the pass-through: it is spliced into a bash -lc string, so args with spaces
+# (--start "Seyda Neen") would otherwise be word-split inside the container.
+pt=""
+[ ${#passthrough[@]} -gt 0 ] && pt="$(printf '%q ' "${passthrough[@]}")"
 
 echo "Starting dedicated server '$NAME' on port $LISTEN (Ctrl+C to stop)..."
 echo "Interactive console: type 'help' for commands (save / players / stop / script commands)."
@@ -72,4 +79,4 @@ exec "$MP_RUNTIME" run --rm -i --name "$NAME" --network host --security-opt labe
     ${MP_SAVE_MOUNT[@]+"${MP_SAVE_MOUNT[@]}"} \
     -w /openmw/build "$IMAGE" \
     bash -lc "./openmw --resources resources --skip-menu --no-grab --dedicated --listen $LISTEN \
-        --user-data /userdata ${game[*]:-} ${passthrough[*]:-}"
+        --user-data /userdata ${game[*]:-} $pt"

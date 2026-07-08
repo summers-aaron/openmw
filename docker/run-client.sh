@@ -31,9 +31,14 @@ source "$REPO/docker/_mp-common.sh"
 
 DEFAULT_PORT="${PORT:-25565}"
 
-[ $# -eq 1 ] || { echo "usage: $(basename "$0") <SERVER_IP[:PORT]>" >&2; exit 1; }
-SERVER="$1"
+[ $# -ge 1 ] || { echo "usage: $(basename "$0") <SERVER_IP[:PORT]> [extra openmw args...]" >&2; exit 1; }
+SERVER="$1"; shift
 case "$SERVER" in *:*) ;; *) SERVER="$SERVER:$DEFAULT_PORT" ;; esac
+
+# Pre-quote any extra pass-through args (e.g. --character -2 --script-run file): they are spliced
+# into a bash -lc string, so args with spaces would otherwise be word-split inside the container.
+pt=""
+[ $# -gt 0 ] && pt="$(printf '%q ' "$@")"
 
 mp_common_preflight
 mp_common_pick_name openmw-client   # -> NAME (auto-numbered so two clients coexist)
@@ -48,4 +53,4 @@ exec "$MP_RUNTIME" run --rm --name "$NAME" --network host --security-opt label=d
     -v "$REPO:/openmw:Z" "${MP_DATA_MOUNTS[@]}" -v "$MP_CFG:/root/.config/openmw" -v "$MP_USERDATA:/userdata" \
     -w /openmw/build "$IMAGE" \
     bash -lc "./openmw --resources resources --skip-menu --no-grab --user-data /userdata \
-        --connect $SERVER"
+        --connect $SERVER $pt"
