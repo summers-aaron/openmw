@@ -407,35 +407,32 @@ bool MWMechanics::AiPackage::doesPathNeedRecalc(const osg::Vec3f& newDest, const
 
 bool MWMechanics::AiPackage::isNearInactiveCell(const MWWorld::ConstPtr& actor, osg::Vec3f position)
 {
-    // Anchor the loaded-cell-grid check on the nearest player that shares THIS actor's worldspace, not
-    // always the primary player. On a dedicated multiplayer server the primary player is a stationary
-    // placeholder that is often in a different worldspace than the actor (it stays in the exterior
-    // while this actor is in an interior pursuing an avatar). Using its exterior cell to interpret an
-    // interior position put every interior actor "off the 3x3 grid", which zeroed its movement and
-    // stopped it pursuing. With a single player (single-player) this resolves to the primary, so
-    // behavior is unchanged there.
-    MWBase::World* world = MWBase::Environment::get().getWorld();
+    // Anchor the loaded-cell-grid check on the nearest simulation anchor that shares THIS actor's
+    // worldspace, not always the primary player. On a dedicated multiplayer server the primary
+    // player is a stationary placeholder that is often in a different worldspace than the actor
+    // (it stays in the exterior while this actor is in an interior pursuing an avatar). Using its
+    // exterior cell to interpret an interior position put every interior actor "off the 3x3
+    // grid", which zeroed its movement and stopped it pursuing. With a single player
+    // (single-player) this resolves to the primary, so behavior is unchanged there. The anchor
+    // set already excludes parked slots (which no longer keep cells alive, so they cannot anchor
+    // the loaded-grid check either) and the dedicated placeholder.
+    const MWBase::World* world = MWBase::Environment::get().getWorld();
     const ESM::RefId worldspace = actor.getCell()->getCell()->getWorldSpace();
     MWWorld::Ptr reference;
     float nearestSqr = std::numeric_limits<float>::max();
-    for (std::size_t i = 0; i < world->getPlayerCount(); ++i)
+    for (const MWWorld::SimulationAnchor& anchor : world->getSimulationAnchors())
     {
-        // A parked player (its client disconnected) no longer keeps cells alive, so it
-        // cannot anchor the loaded-grid check either.
-        if (!world->isPlayerActive(i))
+        if (anchor.mWorldspace != worldspace)
             continue;
-        const MWWorld::Ptr player = world->getPlayerPtr(i);
-        if (!player.isInCell() || player.getCell()->getCell()->getWorldSpace() != worldspace)
-            continue;
-        const float distSqr = (player.getRefData().getPosition().asVec3() - position).length2();
+        const float distSqr = (anchor.mPosition - position).length2();
         if (distSqr < nearestSqr)
         {
             nearestSqr = distSqr;
-            reference = player;
+            reference = anchor.mPtr;
         }
     }
     if (reference.isEmpty())
-        return false; // no player shares this actor's worldspace: no nearby loaded-grid edge to guard
+        return false; // no anchor shares this actor's worldspace: no nearby loaded-grid edge to guard
 
     const MWWorld::Cell* playerCell = reference.getCell()->getCell();
     if (playerCell->isExterior())

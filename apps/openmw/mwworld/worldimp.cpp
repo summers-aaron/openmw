@@ -1508,23 +1508,17 @@ namespace MWWorld
             if (const auto object = mPhysics->getObject(door.first))
                 updateNavigatorObject(*object, navigatorUpdateGuard.get());
 
-        // Feed every player's focus point, tagged with its worldspace. The multi-worldspace navigator
-        // facade routes each to the sub-navigator for that worldspace, so avatars in different cells
-        // (interiors + exterior) each get navmesh built around them. Index 0 is the primary player, so
-        // single-player collapses to one focus point in one worldspace — identical to the old behavior.
-        //
-        // On a dedicated server the primary player is a stationary placeholder with no human behind it.
-        // Skip it: a single worldspace currently builds navmesh around its FIRST focus only, so a primary
-        // placeholder sharing the exterior with an avatar would steal the focus and starve the avatar's
-        // NPCs of navmesh. (Once a worldspace supports multiple foci this skip can go.)
+        // Feed every simulation anchor as a navmesh focus, tagged with its worldspace. The
+        // multi-worldspace navigator facade routes each to the sub-navigator for that worldspace,
+        // so players in different cells (interiors + exterior) each get navmesh built around them.
+        // Single-player collapses to one focus point in one worldspace — identical to the old
+        // behavior. The anchor set already excludes parked slots (which would otherwise pin stale
+        // foci) and a dedicated server's placeholder primary.
         std::vector<DetourNavigator::PlayerPosition> playerPositions;
-        for (std::size_t i = mDedicatedServer ? 1 : 0; i < mPlayers.size(); ++i)
-        {
-            const MWWorld::Ptr player = mPlayers.get(i).getPlayer();
-            if (player.isInCell())
-                playerPositions.push_back(DetourNavigator::PlayerPosition{
-                    player.getCell()->getCell()->getWorldSpace(), player.getRefData().getPosition().asVec3() });
-        }
+        const std::vector<MWWorld::SimulationAnchor> anchors = mPlayers.getSimulationAnchors();
+        playerPositions.reserve(anchors.size());
+        for (const MWWorld::SimulationAnchor& anchor : anchors)
+            playerPositions.push_back(DetourNavigator::PlayerPosition{ anchor.mWorldspace, anchor.mPosition });
         mNavigator->update(playerPositions, navigatorUpdateGuard.get());
     }
 
@@ -2393,7 +2387,12 @@ namespace MWWorld
     {
         const ESM::NPC* player = mStore.get<ESM::NPC>().find(ESM::RefId::stringRefId("Player"));
         if (mPlayers.empty())
+        {
             mPlayers.setupPrimary(player);
+            // A dedicated server's placeholder primary must never anchor simulation. Re-applied
+            // here because setDedicatedServer may run before or after the primary exists.
+            mPlayers.primary().setSimulationAnchor(!mDedicatedServer);
+        }
         else
         {
             // Remove the old CharacterController
@@ -3794,6 +3793,20 @@ namespace MWWorld
     bool World::isPlayerActive(std::size_t index) const
     {
         return mPlayers.get(index).isActive();
+    }
+
+    void World::setDedicatedServer(bool value)
+    {
+        mDedicatedServer = value;
+        // The dedicated placeholder primary is an engine-required object, not a person: nothing
+        // may be simulated around it. (setupPlayer re-applies this if the primary is built later.)
+        if (!mPlayers.empty())
+            mPlayers.primary().setSimulationAnchor(!value);
+    }
+
+    std::vector<MWWorld::SimulationAnchor> World::getSimulationAnchors() const
+    {
+        return mPlayers.getSimulationAnchors();
     }
 
     bool World::applyNetworkCharacter(std::size_t index, const std::string& recordBlob)

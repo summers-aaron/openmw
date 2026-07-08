@@ -6,6 +6,8 @@
 #include <unordered_set>
 #include <vector>
 
+#include "simulationanchor.hpp"
+
 namespace ESM
 {
     class NPC;
@@ -58,6 +60,12 @@ namespace MWWorld
         /// Is the given object one of the players? Identity test that does not rely on the
         /// hardcoded "player" RefId, so it remains correct once multiple players exist.
         bool isPlayer(const ConstPtr& ptr) const;
+
+        /// Every simulation anchor: an active, anchoring player standing in a cell. THE canonical
+        /// "where must the world be simulated" filter — consumers (cell keep-alive, actor
+        /// processing range, navmesh foci, nearest-player reactions) iterate this instead of
+        /// re-deriving it from player indices. (See SimulationAnchor.)
+        std::vector<SimulationAnchor> getSimulationAnchors() const;
 
         /// The Player wrapper for the given object, or nullptr if it is not one of the players.
         Player* findPlayer(const ConstPtr& ptr);

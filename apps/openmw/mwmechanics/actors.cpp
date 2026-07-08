@@ -266,30 +266,27 @@ namespace MWMechanics
             return (distanceToNextPathPoint - package.getNextPathPointTolerance(speed, duration, halfExtents)) / speed;
         }
 
-        // Nearest player to the given actor — the primary player or any network player.
-        // Only players in the actor's worldspace count: distances across worldspaces are
-        // meaningless. Parked slots (disconnected peers) keep a cell/position but have no
-        // presence in the scene, so they must not draw reactions — skip them. May return
-        // an empty Ptr (no active player shares the actor's worldspace).
+        // Nearest simulation anchor to the given actor — the primary player or any network
+        // player. Only anchors in the actor's worldspace count: distances across worldspaces are
+        // meaningless. The anchor set already excludes parked slots (no presence in the scene) and
+        // a dedicated server's placeholder primary (must not draw reactions). May return an empty
+        // Ptr (no anchor shares the actor's worldspace).
         MWWorld::Ptr getNearestPlayer(const MWWorld::Ptr& actor)
         {
-            MWBase::World* const world = MWBase::Environment::get().getWorld();
+            const MWBase::World* const world = MWBase::Environment::get().getWorld();
             const osg::Vec3f actorPos = actor.getRefData().getPosition().asVec3();
             const ESM::RefId worldspace = actor.getCell()->getCell()->getWorldSpace();
             MWWorld::Ptr nearest;
             float nearestDistSqr = std::numeric_limits<float>::max();
-            for (std::size_t i = 0; i < world->getPlayerCount(); ++i)
+            for (const MWWorld::SimulationAnchor& anchor : world->getSimulationAnchors())
             {
-                if (!world->isPlayerActive(i))
+                if (anchor.mWorldspace != worldspace)
                     continue;
-                const MWWorld::Ptr player = world->getPlayerPtr(i);
-                if (!player.isInCell() || player.getCell()->getCell()->getWorldSpace() != worldspace)
-                    continue;
-                const float distSqr = (player.getRefData().getPosition().asVec3() - actorPos).length2();
+                const float distSqr = (anchor.mPosition - actorPos).length2();
                 if (distSqr < nearestDistSqr)
                 {
                     nearestDistSqr = distSqr;
-                    nearest = player;
+                    nearest = anchor.mPtr;
                 }
             }
             return nearest;
@@ -1602,17 +1599,18 @@ namespace MWMechanics
             const bool showTorches = world->useTorches();
 
             const MWWorld::Ptr player = getPlayer();
-            const osg::Vec3f playerPos = player.getRefData().getPosition().asVec3();
 
-            // Actors are processed within range of any player, not just the primary one.
-            // Parked slots (disconnected peers) keep their last position but are not in the
-            // scene, so they must not keep actors around it simulated.
+            // Actors are processed within range of any simulation anchor — the local player or a
+            // network avatar. The anchor set already excludes parked slots (not in the scene, so
+            // they must not keep actors simulated) and a dedicated server's placeholder primary
+            // (so an empty server idles its actors). May be empty; then no actor is in range.
             std::vector<osg::Vec3f> playerPositions;
-            playerPositions.reserve(world->getPlayerCount());
-            playerPositions.push_back(playerPos);
-            for (std::size_t i = 1; i < world->getPlayerCount(); ++i)
-                if (world->isPlayerActive(i))
-                    playerPositions.push_back(world->getPlayerPtr(i).getRefData().getPosition().asVec3());
+            {
+                const std::vector<MWWorld::SimulationAnchor> anchors = world->getSimulationAnchors();
+                playerPositions.reserve(anchors.size());
+                for (const MWWorld::SimulationAnchor& anchor : anchors)
+                    playerPositions.push_back(anchor.mPosition);
+            }
 
             /// \todo move update logic to Actor class where appropriate
 
@@ -1650,9 +1648,9 @@ namespace MWMechanics
                         && !actor.getPtr().getClass().getCreatureStats(actor.getPtr()).isDead())
                     {
                         const osg::Vec3f actorPos = actor.getPtr().getRefData().getPosition().asVec3();
-                        float distSqr = (playerPositions[0] - actorPos).length2();
-                        for (std::size_t i = 1; i < playerPositions.size(); ++i)
-                            distSqr = std::min(distSqr, (playerPositions[i] - actorPos).length2());
+                        float distSqr = std::numeric_limits<float>::max();
+                        for (const osg::Vec3f& position : playerPositions)
+                            distSqr = std::min(distSqr, (position - actorPos).length2());
                         if (distSqr <= actorsProcessingRange * actorsProcessingRange)
                             updateHeadTracking(actor.getPtr(), mActors, false, actor.getCharacterController());
                     }
@@ -1664,9 +1662,9 @@ namespace MWMechanics
                     = MWBase::Environment::get().getLuaManager()->getActorControls(actor.getPtr());
 
                 const osg::Vec3f actorPos = actor.getPtr().getRefData().getPosition().asVec3();
-                float distSqr = (playerPositions[0] - actorPos).length2();
-                for (std::size_t i = 1; i < playerPositions.size(); ++i)
-                    distSqr = std::min(distSqr, (playerPositions[i] - actorPos).length2());
+                float distSqr = std::numeric_limits<float>::max();
+                for (const osg::Vec3f& position : playerPositions)
+                    distSqr = std::min(distSqr, (position - actorPos).length2());
                 // AI processing is only done within given distance to the nearest player.
                 const bool inProcessingRange = distSqr <= actorsProcessingRange * actorsProcessingRange;
 
@@ -1787,14 +1785,15 @@ namespace MWMechanics
             {
                 if (actor.isInvalid())
                     continue;
-                // Distance to the NEAREST player, not just the primary one: an actor around any
-                // player (e.g. a network peer far from the dedicated server's own player) must still
-                // get its character/animation/movement update, or it freezes mid-pose while its AI
-                // keeps deciding to move — matching the multi-player range test in the AI loop above.
+                // Distance to the NEAREST simulation anchor, not just the primary player: an actor
+                // around any anchor (e.g. a network peer far from the dedicated server's own
+                // player) must still get its character/animation/movement update, or it freezes
+                // mid-pose while its AI keeps deciding to move — matching the multi-player range
+                // test in the AI loop above.
                 const osg::Vec3f animActorPos = actor.getPtr().getRefData().getPosition().asVec3();
-                float distSqr = (playerPositions[0] - animActorPos).length2();
-                for (std::size_t i = 1; i < playerPositions.size(); ++i)
-                    distSqr = std::min(distSqr, (playerPositions[i] - animActorPos).length2());
+                float distSqr = std::numeric_limits<float>::max();
+                for (const osg::Vec3f& position : playerPositions)
+                    distSqr = std::min(distSqr, (position - animActorPos).length2());
                 const float dist = std::sqrt(distSqr);
                 const bool isPlayer = actor.getPtr() == player;
                 // A live entry whose scene node is gone: its cell was torn down under it (stale

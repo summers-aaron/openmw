@@ -15,6 +15,7 @@
 #include "../mwworld/doorstate.hpp"
 #include "../mwworld/globalvariablename.hpp"
 #include "../mwworld/ptr.hpp"
+#include "../mwworld/simulationanchor.hpp"
 #include "../mwworld/spellcaststate.hpp"
 
 namespace osg
@@ -192,6 +193,12 @@ namespace MWBase
 
         /// False while a non-primary player is parked (its client is disconnected).
         virtual bool isPlayerActive(std::size_t index) const = 0;
+
+        /// Every simulation anchor: an active, present player (the local one or a network peer's
+        /// avatar) the world must stay fully simulated around. Excludes parked slots and a
+        /// dedicated server's placeholder primary. Consumers that need "where are the players" for
+        /// simulation relevance — not identity — iterate this instead of the player indices.
+        virtual std::vector<MWWorld::SimulationAnchor> getSimulationAnchors() const = 0;
 
         /// Overwrite a non-primary player slot with an uploaded character sheet (a REC_PLAY blob), so
         /// the server's stored/served copy carries the client's real stats/skills/inventory instead of

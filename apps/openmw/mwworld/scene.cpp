@@ -546,18 +546,21 @@ namespace MWWorld
 
     bool Scene::isCellOccupiedByNonPrimaryPlayer(const CellStore* cell) const
     {
-        for (std::size_t i = 1; i < mWorld.getPlayerCount(); ++i)
+        // Any OTHER simulation anchor occupying a cell keeps it alive; the primary player is
+        // excluded because its grid is the one the caller (changeCellGrid) is managing. Parked
+        // slots and a dedicated server's placeholder are already excluded from the anchor set.
+        const MWWorld::ConstPtr primary = mWorld.getPlayerConstPtr();
+        for (const MWWorld::SimulationAnchor& anchor : mWorld.getSimulationAnchors())
         {
-            // A parked player (its client disconnected) must not keep cells alive.
-            if (!mWorld.isPlayerActive(i))
+            if (anchor.mPtr == primary)
                 continue;
-            const CellStore* playerCell = mWorld.getPlayerPtr(i).getCell();
+            const CellStore* playerCell = anchor.mPtr.getCell();
             if (playerCell == cell)
                 return true;
             // Keep the whole exterior grid around an extra player loaded (matching the grid the
             // primary player keeps and what addExtraPlayer loads), so neighbouring cells the peer
             // interacts with are not unloaded out from under it.
-            if (playerCell != nullptr && playerCell->getCell()->isExterior() && cell->getCell()->isExterior()
+            if (playerCell->getCell()->isExterior() && cell->getCell()->isExterior()
                 && playerCell->getCell()->getWorldSpace() == cell->getCell()->getWorldSpace())
             {
                 const int halfGridSize = isEsm4Ext(playerCell->getCell()->getWorldSpace())

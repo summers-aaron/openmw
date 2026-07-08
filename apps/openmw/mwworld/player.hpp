@@ -66,6 +66,11 @@ namespace MWWorld
         // cells alive — until the player reconnects (World::parkPlayer / unparkPlayer).
         bool mActive = true;
 
+        // False for a player that exists but must never anchor simulation: the dedicated server's
+        // placeholder primary, an engine-required object with no human behind it. Parked slots are
+        // excluded from anchoring via mActive instead. (See MWWorld::SimulationAnchor.)
+        bool mSimulationAnchor = true;
+
         // A network character's serialized journal, carried opaquely with the character sheet
         // (ESM::Player::mNetJournal): the host stores it here when a client's upload is applied and
         // serves it back on reconnect; a client finds the served copy here after an adopt. Never
@@ -78,6 +83,11 @@ namespace MWWorld
 
         bool isActive() const { return mActive; }
         void setActive(bool value) { mActive = value; }
+
+        /// Should the world stay simulated around this player? False for parked slots and the
+        /// dedicated server's placeholder primary. (See MWWorld::SimulationAnchor.)
+        bool isSimulationAnchor() const { return mActive && mSimulationAnchor; }
+        void setSimulationAnchor(bool value) { mSimulationAnchor = value; }
 
         const std::string& getNetJournal() const { return mNetJournal; }
 

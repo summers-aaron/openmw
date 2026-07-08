@@ -5,6 +5,7 @@
 
 #include <components/esm/refid.hpp>
 
+#include "cellstore.hpp"
 #include "player.hpp"
 #include "ptr.hpp"
 
@@ -34,6 +35,23 @@ namespace MWWorld
     bool Players::isPlayer(const ConstPtr& ptr) const
     {
         return ptr.mRef != nullptr && mPlayerRefs.find(ptr.mRef) != mPlayerRefs.end();
+    }
+
+    std::vector<SimulationAnchor> Players::getSimulationAnchors() const
+    {
+        std::vector<SimulationAnchor> anchors;
+        anchors.reserve(mPlayers.size());
+        for (const auto& player : mPlayers)
+        {
+            if (!player->isSimulationAnchor())
+                continue;
+            const Ptr ptr = player->getPlayer();
+            if (!ptr.isInCell())
+                continue;
+            anchors.push_back(SimulationAnchor{
+                ptr, ptr.getCell()->getCell()->getWorldSpace(), ptr.getRefData().getPosition().asVec3() });
+        }
+        return anchors;
     }
 
     Player* Players::findPlayer(const ConstPtr& ptr)

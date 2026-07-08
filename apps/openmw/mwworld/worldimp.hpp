@@ -265,11 +265,13 @@ namespace MWWorld
         void parkPlayer(std::size_t index) override;
         void unparkPlayer(std::size_t index) override;
         bool isPlayerActive(std::size_t index) const override;
+        std::vector<MWWorld::SimulationAnchor> getSimulationAnchors() const override;
         bool applyNetworkCharacter(std::size_t index, const std::string& recordBlob) override;
         ESM::RefNum reserveNetworkSummonRefNum() override;
-        // Mark this World as belonging to a dedicated server (no local human player), so the navmesh
-        // follows the network avatars rather than the stationary primary placeholder.
-        void setDedicatedServer(bool value) { mDedicatedServer = value; }
+        // Mark this World as belonging to a dedicated server (no local human player). The primary
+        // placeholder is flagged as a non-anchor, so simulation (navmesh, actor AI, cell
+        // keep-alive) follows the network avatars rather than the stationary placeholder.
+        void setDedicatedServer(bool value);
         bool isDedicatedServer() const override { return mDedicatedServer; }
         bool adoptNetworkCharacter(const std::string& recordBlob) override;
 
