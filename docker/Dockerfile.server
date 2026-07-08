@@ -46,5 +46,11 @@ RUN apt-get update \
         python3 git-lfs \
     && rm -rf /var/lib/apt/lists/*
 
+# gdb so the in-game crash handler can write a real backtrace to /tmp/openmw-crash.log
+# (without it a segfault leaves only "gdb: not found"). Trailing layer to preserve cache.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gdb \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN mkdir /openmw
 WORKDIR /openmw
