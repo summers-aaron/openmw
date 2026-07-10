@@ -420,7 +420,7 @@ namespace MWClass
             inventory.setPtr(ptr);
             const ESM::RefNum refNum = ptr.getCellRef().getRefNum();
             const MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
-            if (replicator != nullptr && replicator->isNetworked() && refNum.isSet())
+            if (replicator != nullptr && replicator->isNetworkedSession() && refNum.isSet())
             {
                 // Multiplayer: roll the NPC's leveled-list items from a RefNum-derived seed so the
                 // host and every client resolve the SAME equipment (autoEquip on identical contents

@@ -45,7 +45,7 @@ namespace MWClass
     {
         unsigned int seed;
         const MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
-        if (replicator != nullptr && replicator->isNetworked() && refNum.isSet())
+        if (replicator != nullptr && replicator->isNetworkedSession() && refNum.isSet())
             // Multiplayer: seed the leveled-list roll deterministically from the container's RefNum,
             // so the host and every client resolve the SAME loot for this container without having to
             // replicate its contents. (Single-player keeps the historical random roll.)

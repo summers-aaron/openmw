@@ -172,7 +172,7 @@ namespace MWClass
 
             const ESM::RefNum refNum = ptr.getCellRef().getRefNum();
             const MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
-            if (replicator != nullptr && replicator->isNetworked() && refNum.isSet())
+            if (replicator != nullptr && replicator->isNetworkedSession() && refNum.isSet())
             {
                 // Multiplayer: roll the creature's leveled-list items from a RefNum-derived seed so
                 // every peer resolves the same contents — see ContainerCustomData.
