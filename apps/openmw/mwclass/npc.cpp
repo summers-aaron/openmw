@@ -416,10 +416,23 @@ namespace MWClass
 
             // inventory
             // setting ownership is used to make the NPC auto-equip his initial equipment only, and not bartered items
-            auto& prng = MWBase::Environment::get().getWorld()->getPrng();
             MWWorld::InventoryStore& inventory = getInventoryStore(ptr);
             inventory.setPtr(ptr);
-            inventory.fill(ref->mBase->mInventory, ptr.getCellRef().getRefId(), prng);
+            const ESM::RefNum refNum = ptr.getCellRef().getRefNum();
+            const MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+            if (replicator != nullptr && replicator->isNetworked() && refNum.isSet())
+            {
+                // Multiplayer: roll the NPC's leveled-list items from a RefNum-derived seed so the
+                // host and every client resolve the SAME equipment (autoEquip on identical contents
+                // then dresses it identically) — see ContainerCustomData for the container analogue.
+                Misc::Rng::Generator prng{ MWNet::levelledListSeed(refNum) };
+                inventory.fill(ref->mBase->mInventory, ptr.getCellRef().getRefId(), prng);
+            }
+            else
+            {
+                auto& prng = MWBase::Environment::get().getWorld()->getPrng();
+                inventory.fill(ref->mBase->mInventory, ptr.getCellRef().getRefId(), prng);
+            }
             inventory.autoEquip();
         }
     }

@@ -34,6 +34,15 @@ namespace MWRender
 
 namespace MWNet
 {
+    /// Deterministic per-ref seed for leveled-list resolution in multiplayer: every peer
+    /// derives the same seed from the ref's shared RefNum, so containers, NPCs and
+    /// creatures roll identical random contents/equipment without replicating them.
+    inline unsigned int levelledListSeed(ESM::RefNum refNum)
+    {
+        return static_cast<unsigned int>(refNum.mIndex) * 2654435761u
+            + static_cast<unsigned int>(refNum.mContentFile);
+    }
+
     /// Bridges the running simulation to the snapshot/delta channel. Each tick it
     /// samples the authoritative transforms of active actors (plus this peer's own
     /// player under a network id) and emits only what changed since the last send;

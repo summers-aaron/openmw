@@ -49,8 +49,7 @@ namespace MWClass
             // Multiplayer: seed the leveled-list roll deterministically from the container's RefNum,
             // so the host and every client resolve the SAME loot for this container without having to
             // replicate its contents. (Single-player keeps the historical random roll.)
-            seed = static_cast<unsigned int>(refNum.mIndex) * 2654435761u
-                + static_cast<unsigned int>(refNum.mContentFile);
+            seed = MWNet::levelledListSeed(refNum);
         else
         {
             auto& prng = MWBase::Environment::get().getWorld()->getPrng();
