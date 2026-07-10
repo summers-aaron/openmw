@@ -599,6 +599,7 @@ namespace MWNet
         mOutgoingTimeRequests.clear();
         mTimeSyncPending = false;
         mOutgoingRefEnables.clear();
+        mOutgoingDoorMoves.clear();
         // The script overrides derive from GlobalScripts (persisted in the save as REC_GSCR).
         mOutgoingScriptRuns.clear();
         mScriptOverrides.clear();
@@ -608,12 +609,16 @@ namespace MWNet
         mWeatherAuthority.clear();
         mOutgoingWeather.clear();
         mLastWeatherGameHours = -1.f;
-        // On the authority the ref-state record belongs to the world being torn down — the next
-        // world seeds it from its own save's REC_NETWORK_STATE (or starts clean). On a client it
-        // is the cache of received states and SURVIVES, so a rejoining world (new character flow)
-        // re-applies them as cells load instead of waiting a full re-assert interval.
+        // On the authority the ref-state and door records belong to the world being torn down —
+        // the next world seeds them from its own save's REC_NETWORK_STATE (or starts clean). On a
+        // client they are the cache of received states and SURVIVE, so a rejoining world (new
+        // character flow) re-applies them as cells load instead of waiting a full re-assert
+        // interval.
         if (mIsAuthority)
+        {
             mRefStates.clear();
+            mDoorStates.clear();
+        }
     // Deliberately kept: mAppearances (peers' body identities, so their avatars rebuild
         // immediately), mLocalPlayerNetId / mLocalPlayerReady (the login identity outlives the
         // world), and the item/container/summon session records (mRemovedWorldItems,
@@ -2168,6 +2173,7 @@ namespace MWNet
         batch.mRefEnables = std::move(mOutgoingRefEnables); // both ways: scripted enable/disable
         batch.mScriptRuns = std::move(mOutgoingScriptRuns); // both ways: StartScript/StopScript
         batch.mWeatherSyncs = std::move(mOutgoingWeather); // host -> clients: per-region weather
+        batch.mDoorMoves = std::move(mOutgoingDoorMoves); // both ways: interactable door swings
         mOutgoingHits.clear();
         mOutgoingPlayerDamages.clear();
         mOutgoingBounties.clear();
@@ -2186,6 +2192,7 @@ namespace MWNet
         mOutgoingRefEnables.clear();
         mOutgoingScriptRuns.clear();
         mOutgoingWeather.clear();
+        mOutgoingDoorMoves.clear();
 
         // Host: periodically re-assert the global script overrides (receivers skip-if-equal),
         // seeded by diffing the live running set against the content defaults — exactly the set
@@ -2240,6 +2247,12 @@ namespace MWNet
         if (mIsAuthority && (mTick % sReplicationRefreshInterval) == 0)
             for (const auto& [region, auth] : mWeatherAuthority)
                 batch.mWeatherSyncs.push_back({ region.serializeText(), auth.mWeatherId, mLocalPlayerNetId });
+
+        // Host: likewise re-assert every commanded door state, so late joiners find doors
+        // standing the way the world left them. Receivers apply change-guarded.
+        if (mIsAuthority && (mTick % sReplicationRefreshInterval) == 0)
+            for (const auto& [ref, state] : mDoorStates)
+                batch.mDoorMoves.push_back({ ref, state, mLocalPlayerNetId });
 
         // Host: broadcast the authoritative game clock — at the periodic cadence to correct the
         // slow drift of everyone's locally advancing clocks, and immediately after a discontinuous
@@ -3041,6 +3054,83 @@ namespace MWNet
             applyRefState(ref, enabled);
     }
 
+    void Replicator::reportDoorMove(const ESM::RefNum& ref, MWWorld::DoorState state)
+    {
+        if (!isNetworked() || isApplyingRemote() || !ref.hasContentFile())
+            return;
+        const std::uint8_t wire = static_cast<std::uint8_t>(state);
+        if (mIsAuthority)
+            mDoorStates[ref] = wire;
+        mOutgoingDoorMoves.push_back({ ref, wire, mLocalPlayerNetId });
+    }
+
+    void Replicator::applyDoorState(const ESM::RefNum& ref, std::uint8_t state)
+    {
+        const MWWorld::Ptr ptr = MWBase::Environment::get().getWorldModel()->getPtr(ref);
+        // Not materialized here (its cell isn't loaded): the recorded command re-applies when the
+        // cell loads (applyDoorStates). Refuse hostile data naming a non-door or a teleport
+        // ("load") door rather than letting setDoorState throw.
+        if (ptr.isEmpty() || !ptr.isInCell() || !ptr.getClass().isDoor() || ptr.getCellRef().getTeleport())
+            return;
+        const auto desired = static_cast<MWWorld::DoorState>(state);
+        const MWWorld::DoorState current = ptr.getClass().getDoorState(ptr);
+        // Doors settle at exactly the closed pose (Lock's snap and a finished swing both clamp to
+        // it), so this equality is the settled open/closed test — the same one activateDoor's
+        // toggle uses.
+        const bool open = ptr.getRefData().getPosition().rot[2] != ptr.getCellRef().getPosition().rot[2];
+        // Change-guarded: a door already swinging the commanded way — or resting at the commanded
+        // pose — is left alone, so periodic re-asserts and echoes don't churn settled doors.
+        if (desired == current && (desired != MWWorld::DoorState::Idle || !open))
+            return;
+        if (current == MWWorld::DoorState::Idle && desired != MWWorld::DoorState::Idle
+            && open == (desired == MWWorld::DoorState::Opening))
+            return;
+        RemoteApplyScope scope(this);
+        MWBase::Environment::get().getWorld()->activateDoor(ptr, desired);
+    }
+
+    void Replicator::applyDoorMoveReports(const ActionBatch& batch)
+    {
+        for (const DoorMove& move : batch.mDoorMoves)
+        {
+            if (!move.mRef.hasContentFile())
+                continue; // only content refs are shared this way
+            if (move.mState > static_cast<std::uint8_t>(MWWorld::DoorState::Closing))
+                continue; // hostile data: not a DoorState
+            mDoorStates[move.mRef] = move.mState;
+            applyDoorState(move.mRef, move.mState);
+            // Relay onward verbatim (origin preserved): the reporting peer skips its echo, every
+            // other peer applies. Even if the host couldn't resolve the door yet, the record
+            // above re-asserts it once its cell loads.
+            mOutgoingDoorMoves.push_back(move);
+        }
+    }
+
+    void Replicator::applyDoorMoves(const ActionBatch& batch)
+    {
+        for (const DoorMove& move : batch.mDoorMoves)
+        {
+            if (move.mOrigin.isSet() && move.mOrigin == mLocalPlayerNetId)
+                continue; // our own report echoed back — already applied locally
+            if (!move.mRef.hasContentFile())
+                continue;
+            if (move.mState > static_cast<std::uint8_t>(MWWorld::DoorState::Closing))
+                continue;
+            mDoorStates[move.mRef] = move.mState;
+            applyDoorState(move.mRef, move.mState);
+        }
+    }
+
+    void Replicator::applyDoorStates()
+    {
+        // Same chargen-bubble hold as applyRefStates: a mid-chargen client's intro cells aren't
+        // the shared world yet.
+        if (isNetworkClient() && !mLocalPlayerReady)
+            return;
+        for (const auto& [ref, state] : mDoorStates)
+            applyDoorState(ref, state);
+    }
+
     void Replicator::reportScriptRun(const ESM::RefId& name, bool running, const MWWorld::Ptr& target)
     {
         if (!isNetworked() || isApplyingRemote())
@@ -3226,7 +3316,7 @@ namespace MWNet
 
     std::size_t Replicator::countSavedGameRecords() const
     {
-        return (mIsAuthority && !mRefStates.empty()) ? 1 : 0;
+        return (mIsAuthority && (!mRefStates.empty() || !mDoorStates.empty())) ? 1 : 0;
     }
 
     void Replicator::write(ESM::ESMWriter& writer) const
@@ -3239,12 +3329,19 @@ namespace MWNet
             writer.writeFormId(ref, /*wide=*/true, "REFN");
             writer.writeHNT("ENAB", static_cast<std::uint8_t>(enabled ? 1 : 0));
         }
+        // Door commands after every ref state: the reader splits the sections by subrecord name.
+        for (const auto& [ref, state] : mDoorStates)
+        {
+            writer.writeFormId(ref, /*wide=*/true, "DREF");
+            writer.writeHNT("DSTA", state);
+        }
         writer.endRecord(ESM::REC_NETWORK_STATE);
     }
 
     void Replicator::readRecord(ESM::ESMReader& reader)
     {
         mRefStates.clear();
+        mDoorStates.clear();
         // peekNextSub, not isNextSub: getFormId re-reads the "REFN" name (getHNT -> getSubNameIs), so
         // the name must stay cached for it to consume. isNextSub consumes the name on a match, which
         // would make getFormId read the following size bytes as a name and fail ("Expected REFN").
@@ -3254,6 +3351,15 @@ namespace MWNet
             std::uint8_t enabled = 1;
             reader.getHNT(enabled, "ENAB");
             mRefStates[ref] = enabled != 0;
+        }
+        // Door section (absent in older saves).
+        while (reader.peekNextSub("DREF"))
+        {
+            const ESM::RefNum ref = reader.getFormId(/*wide=*/true, "DREF");
+            std::uint8_t state = 0;
+            reader.getHNT(state, "DSTA");
+            if (state <= static_cast<std::uint8_t>(MWWorld::DoorState::Closing))
+                mDoorStates[ref] = state;
         }
     }
 

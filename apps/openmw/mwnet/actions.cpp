@@ -60,6 +60,8 @@ namespace MWNet
         constexpr std::uint32_t sMinScriptRunBytes = 25;
         // Smallest encoded WeatherSync: zero-length region (4) + weatherId (4) + origin RefNum (4 + 4).
         constexpr std::uint32_t sMinWeatherSyncBytes = 16;
+        // Encoded DoorMove: ref RefNum (4 + 4) + state (1) + origin RefNum (4 + 4).
+        constexpr std::uint32_t sMinDoorMoveBytes = 17;
 
         void writeContainerItem(ByteWriter& writer, const ContainerItem& item)
         {
@@ -282,6 +284,15 @@ namespace MWNet
             writer.write(weather.mWeatherId);
             writer.write(weather.mOrigin.mIndex);
             writer.write(weather.mOrigin.mContentFile);
+        }
+        writer.write(static_cast<std::uint32_t>(batch.mDoorMoves.size()));
+        for (const DoorMove& move : batch.mDoorMoves)
+        {
+            writer.write(move.mRef.mIndex);
+            writer.write(move.mRef.mContentFile);
+            writer.write(move.mState);
+            writer.write(move.mOrigin.mIndex);
+            writer.write(move.mOrigin.mContentFile);
         }
         return out;
     }
@@ -631,6 +642,21 @@ namespace MWNet
                 || !reader.read(weather.mOrigin.mIndex) || !reader.read(weather.mOrigin.mContentFile))
                 return std::nullopt;
             batch.mWeatherSyncs.push_back(std::move(weather));
+        }
+
+        std::uint32_t doorMoveCount = 0;
+        if (!reader.read(doorMoveCount))
+            return std::nullopt;
+        if (doorMoveCount > reader.remaining() / sMinDoorMoveBytes)
+            return std::nullopt;
+        batch.mDoorMoves.reserve(doorMoveCount);
+        for (std::uint32_t i = 0; i < doorMoveCount; ++i)
+        {
+            DoorMove move;
+            if (!reader.read(move.mRef.mIndex) || !reader.read(move.mRef.mContentFile) || !reader.read(move.mState)
+                || !reader.read(move.mOrigin.mIndex) || !reader.read(move.mOrigin.mContentFile))
+                return std::nullopt;
+            batch.mDoorMoves.push_back(move);
         }
         return batch;
     }

@@ -534,13 +534,14 @@ namespace MWWorld
 
         // Multiplayer: the cell is fully loaded, including any save items that were already picked up on
         // another peer while it was unloaded here. Delete those now so they don't reappear on the shelf,
-        // and re-assert any scripted enable/disable states the shared world accumulated while this cell
-        // was unloaded (the Dreamer that appeared behind our back). No-op on a peer that has seen no
-        // removals/changes, and in single-player.
+        // and re-assert any scripted enable/disable states and door commands the shared world accumulated
+        // while this cell was unloaded (the Dreamer that appeared behind our back, the door another
+        // player left open). No-op on a peer that has seen no removals/changes, and in single-player.
         if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
         {
             replicator->purgeRemovedItems();
             replicator->applyRefStates();
+            replicator->applyDoorStates();
         }
     }
 

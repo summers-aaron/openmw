@@ -2512,10 +2512,21 @@ namespace MWWorld
         }
         door.getClass().setDoorState(door, state);
         mDoorStates[door] = state;
+
+        // Multiplayer: a door swinging open or closed is shared world state — report the new
+        // command so every peer's copy of the door swings too (each plays the animation locally).
+        if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+            replicator->reportDoorMove(door.getCellRef().getRefNum(), state);
     }
 
     void World::activateDoor(const Ptr& door, MWWorld::DoorState state)
     {
+        // Multiplayer: only a state EDGE is shared — Door::insertObject re-calls this with the
+        // door's unchanged state to resume its swing on cell load, which must not re-report. A
+        // forced Idle always crosses: it is the script Lock's snap-shut, and can change the pose
+        // (open -> closed) without changing the state (Idle -> Idle).
+        const MWWorld::DoorState oldState = door.getClass().getDoorState(door);
+
         door.getClass().setDoorState(door, state);
         mDoorStates[door] = state;
         if (state == MWWorld::DoorState::Idle)
@@ -2523,6 +2534,10 @@ namespace MWWorld
             mDoorStates.erase(door);
             rotateDoor(door, state, 1);
         }
+
+        if (state != oldState || state == MWWorld::DoorState::Idle)
+            if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+                replicator->reportDoorMove(door.getCellRef().getRefNum(), state);
     }
 
     bool World::getPlayerStandingOn(const MWWorld::ConstPtr& object)

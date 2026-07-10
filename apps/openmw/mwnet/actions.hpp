@@ -274,6 +274,23 @@ namespace MWNet
         friend bool operator==(const RefEnable&, const RefEnable&) = default;
     };
 
+    /// An interactable door's commanded state change: a player/NPC/script swinging it open or
+    /// closed (World::activateDoor), or a script's Lock snapping it shut. Only the command
+    /// crosses, not the angle — every peer plays the fixed 90°/s swing locally, so the terminal
+    /// pose converges. Flows client -> host (my player pushed a door) and host -> clients
+    /// (authoritative apply + relay, origin preserved; the host's record is re-asserted
+    /// periodically and at cell load, change-guarded on the receiver, so late joiners find doors
+    /// standing the way the world left them). Only content refs cross; teleport ("load") doors
+    /// never swing. mState carries MWWorld::DoorState.
+    struct DoorMove
+    {
+        ESM::RefNum mRef;
+        std::uint8_t mState = 0; // MWWorld::DoorState: 0 idle (snapped shut), 1 opening, 2 closing
+        ESM::RefNum mOrigin; // reporting peer's wire id, for echo suppression
+
+        friend bool operator==(const DoorMove&, const DoorMove&) = default;
+    };
+
     /// A global script started or stopped outside the content defaults (StartScript/StopScript —
     /// quest machinery like escort timers and staged events). Only entries differing from the
     /// default running set ("main" + the ESM::StartScript store, which addStartup starts on every
@@ -381,6 +398,8 @@ namespace MWNet
         std::vector<ScriptRun> mScriptRuns;
         // host -> clients: authoritative per-region weather (rolled on the host from region chances).
         std::vector<WeatherSync> mWeatherSyncs;
+        // both ways: interactable door swings (same flow as ref enables).
+        std::vector<DoorMove> mDoorMoves;
 
         bool empty() const
         {
@@ -388,7 +407,8 @@ namespace MWNet
                 && mContainers.empty() && mContainerChanges.empty() && mContainerRevokes.empty()
                 && mSummons.empty() && mBounties.empty() && mSpeech.empty() && mSounds.empty() && mArrests.empty()
                 && mCombatRequests.empty() && mJournalDeltas.empty() && mGlobalDeltas.empty() && mTimeSyncs.empty()
-                && mTimeRequests.empty() && mRefEnables.empty() && mScriptRuns.empty() && mWeatherSyncs.empty();
+                && mTimeRequests.empty() && mRefEnables.empty() && mScriptRuns.empty() && mWeatherSyncs.empty()
+                && mDoorMoves.empty();
         }
 
         friend bool operator==(const ActionBatch&, const ActionBatch&) = default;

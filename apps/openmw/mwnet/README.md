@@ -119,6 +119,12 @@ second move).
   wait-for-echo. Items already in the save aren't re-replicated (they load identically),
   and single-player is unaffected. *Not yet covered:* NPC death drops (only player drops
   are tracked), and the two-clients-grab-the-same-item race can duplicate.
+- **Interactable doors** — a door any player/NPC/script swings open or shut (or a script
+  `Lock` snaps shut) moves on every peer. Only the commanded edge crosses (`DoorMove`);
+  each peer plays the fixed 90°/s swing locally, so the terminal pose converges. The
+  host's per-door record is re-asserted periodically and at cell load (change-guarded on
+  receivers) so late joiners find doors standing the way the world left them, and it
+  persists in the server save. Teleport ("load") doors don't swing and never cross.
 - A test harness (`mp-server.sh`, see below) spins up the server + two pre-kitted clients.
 
 ## What's broken / known limitations
@@ -184,10 +190,11 @@ cast, block, hit/knockdown/knockout/death, idle fidgets). Deliberately left out:
 2. Multi-anchor cell ref-counting → fix exterior accumulation (limitation #2).
 3. Disconnect handling: `removePlayer` + release kept-alive cells + drop the avatar.
 4. Host-side combat validation (limitation #4).
-5. Broaden replicated world state: **container contents** (resolve leveled lists on the
-   host and replicate the serialized store; route take/put through the host), then doors
-   and world script state. Loose floor items already cross the wire; extend item coverage
-   to NPC death drops and other host-side runtime drops.
+5. Broaden replicated world state and world script state. Container contents, loose floor
+   items and interactable door swings already cross the wire (doors as `DoorMove`: the
+   commanded open/close/snap-shut edge, animated locally on each peer, re-asserted for
+   late joiners and persisted in the server save); extend item coverage to NPC death
+   drops and other host-side runtime drops.
 6. Networked navmesh strategy for headless servers, or document the host-renders
    requirement (limitation #1).
 

@@ -14,6 +14,7 @@
 #include <components/esm3/refnum.hpp>
 
 #include "../mwmechanics/upperbodystate.hpp"
+#include "../mwworld/doorstate.hpp"
 #include "../mwworld/ptr.hpp"
 
 #include "actions.hpp"
@@ -216,6 +217,14 @@ namespace MWNet
         // Host: a discontinuous advanceTime just ran — broadcast a TimeSync this tick, not at the
         // next periodic refresh, so every peer's sun jumps together.
         bool mTimeSyncPending = false;
+        // Both ways: interactable door swings awaiting send.
+        std::vector<DoorMove> mOutgoingDoorMoves;
+        // Every interactable door commanded open/shut this session, dual-role like mRefStates: on
+        // the host the authoritative last command per door (periodically re-asserted, persisted in
+        // the server save's REC_NETWORK_STATE); on a client the received commands, kept even for
+        // unloaded cells and re-applied as each cell loads (applyDoorStates). Values are wire
+        // MWWorld::DoorState bytes.
+        std::map<ESM::RefNum, std::uint8_t> mDoorStates;
         // Both ways: scripted ref enable/disable changes awaiting send.
         std::vector<RefEnable> mOutgoingRefEnables;
         // Every content ref whose enabled state a script changed this session, dual-role like
@@ -256,6 +265,12 @@ namespace MWNet
 
         /// Roll a weather index for a region from its static probabilities (mirrors RegionWeather).
         int rollRegionWeather(const ESM::RefId& region) const;
+
+        /// Apply one recorded door command where the door is materialized, under a
+        /// RemoteApplyScope so the activateDoor hook doesn't re-report it. Change-guarded: a door
+        /// already swinging the commanded way, or resting at the commanded pose, is left alone
+        /// (periodic re-asserts and echoes must not churn settled doors).
+        void applyDoorState(const ESM::RefNum& ref, std::uint8_t state);
 
         /// Apply one received script transition (skip-if-equal), under a RemoteApplyScope.
         void applyOneScriptRun(const ScriptRun& run);
@@ -626,6 +641,24 @@ namespace MWNet
         /// while my cell was unloaded" window on clients and host alike. Idempotent and cheap
         /// when converged.
         void applyRefStates();
+
+        /// Report an interactable door's commanded state change (a player/NPC/script swinging it,
+        /// or a script's Lock snapping it shut) so every peer's copy of the door moves too. A
+        /// no-op off the network and while applying received state; only content refs cross.
+        void reportDoorMove(const ESM::RefNum& ref, MWWorld::DoorState state);
+
+        /// Apply door commands reported by clients (host only): record, apply where the door is
+        /// materialized, and relay onward (origin preserved).
+        void applyDoorMoveReports(const ActionBatch& batch);
+
+        /// Apply broadcast door commands (client only): skip our own echoes, record (kept even
+        /// for unloaded cells), then apply change-guarded where materialized.
+        void applyDoorMoves(const ActionBatch& batch);
+
+        /// Re-assert every recorded door command that resolves right now. Called after each cell
+        /// finishes loading (next to applyRefStates), so a door opened while this cell was
+        /// unloaded here stands open once it loads. Idempotent and cheap when converged.
+        void applyDoorStates();
 
         /// Report a global script starting (running=true, with its target if any) or stopping —
         /// quest machinery like StartScript/StopScript. A no-op off the network and while
