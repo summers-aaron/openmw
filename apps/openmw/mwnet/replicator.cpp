@@ -3023,7 +3023,10 @@ namespace MWNet
     void Replicator::readRecord(ESM::ESMReader& reader)
     {
         mRefStates.clear();
-        while (reader.isNextSub("REFN"))
+        // peekNextSub, not isNextSub: getFormId re-reads the "REFN" name (getHNT -> getSubNameIs), so
+        // the name must stay cached for it to consume. isNextSub consumes the name on a match, which
+        // would make getFormId read the following size bytes as a name and fail ("Expected REFN").
+        while (reader.peekNextSub("REFN"))
         {
             const ESM::RefNum ref = reader.getFormId(/*wide=*/true, "REFN");
             std::uint8_t enabled = 1;
