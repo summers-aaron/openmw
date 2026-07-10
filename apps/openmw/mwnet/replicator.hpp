@@ -421,6 +421,14 @@ namespace MWNet
         /// its RefNum so every peer rolls identical loot without replicating the contents).
         bool isNetworked() const { return mLocalPlayerNetId.isSet(); }
 
+        /// Like isNetworked(), but true from PROCESS START on a connecting client, not only once
+        /// the login handshake has delivered its network id. Deterministic shared-world choices
+        /// (leveled-list seeds) must gate on this: a client loads the shared save (or the lobby
+        /// backdrop world) while the handshake is still in flight, and anything its cells resolve
+        /// before LoginAccept would otherwise take the random single-player path and diverge from
+        /// the host. The host sets its id before any game state loads, so isNetworked() covers it.
+        bool isNetworkedSession() const { return isNetworked() || mIsClientSession; }
+
         /// Guard a deletion the world is doing to hand a just-dropped item to the host, so that
         /// deletion is NOT mistaken for a pickup and reported back (the drop is already reported,
         /// and the local ref's RefNum is meaningless — or worse, colliding — on the host).
