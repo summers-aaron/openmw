@@ -969,6 +969,11 @@ void OMW::Engine::pumpTransport()
         // TEMPORARY: the debug drop-in bypasses the chargen intro (a bypass start marks chargen
         // done, so the replication gate reopens on the next pump) and pre-kits the character.
         mStateManager->newGame(/*bypass=*/mDebugCharacter);
+        // Arm the replication gate for THIS chargen (set after newGame so its teardown, which resets
+        // the flag, doesn't clear it): updateClientStart opens the gate when this character's chargen
+        // completes. Deliberately not armed for the select-lobby backdrop, whose bypass world also
+        // sits at chargenstate == -1 but must stay a purely local, unreplicated view.
+        mReplicator->setChargenInProgress(true);
         if (mDebugCharacter && mStateManager->getState() == MWBase::StateManager::State_Running)
             setupDebugCharacter();
         if (!mStartupScript.empty() && mStateManager->getState() == MWBase::StateManager::State_Running)

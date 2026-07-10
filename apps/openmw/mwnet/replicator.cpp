@@ -470,9 +470,20 @@ namespace MWNet
         if (mIsAuthority)
             return;
 
+        // Only a REAL new-character chargen opens the gate. The select-lobby backdrop is a bypass
+        // world that ALSO sits at chargenstate == -1 (World::startNewGame) but is not a character
+        // being made; without this guard it re-opens the gate every backdrop tick — defeating
+        // enterSelectLobby's setLocalPlayerReady(false) — and pulls the client into the shared
+        // stream before it has a character. That is exactly how another player's census-officer
+        // disable of the prison-ship guards (cached in mRefStates, re-applied on cell load) leaks
+        // into this client's own private chargen boat and stops its intro guard.
+        if (!mChargenInProgress)
+            return;
+
         if (MWBase::Environment::get().getWorld()->getGlobalFloat(MWWorld::Globals::sCharGenState) == -1)
         {
             mLocalPlayerReady = true;
+            mChargenInProgress = false;
             Log(Debug::Verbose) << "Chargen complete; replicating local player " << mLocalPlayerNetId;
         }
     }
@@ -505,6 +516,9 @@ namespace MWNet
         mLastHitReactionTick.clear();
         mPendingAggro.clear();
         mLastLocalBounty.reset();
+        // Scoped to the world being torn down: the mPendingNewGame start path re-sets it for the next
+        // real chargen, and the backdrop must leave it false (see updateClientStart).
+        mChargenInProgress = false;
         // Actions reported from the old world must not leak into the new one.
         mOutgoingHits.clear();
         mOutgoingPlayerDamages.clear();
@@ -2934,6 +2948,13 @@ namespace MWNet
 
     void Replicator::applyRefStates()
     {
+        // A client still in its private new-character chargen (id assigned but not yet ready) must not
+        // have the shared world's accumulated enable/disable states applied to its intro cells: e.g.
+        // the census officer's scripted disable of the prison-ship guards, replicated from another
+        // player's chargen, would disable this client's OWN intro guards. Those cells aren't the
+        // shared world yet. The host (authority) and a ready client still apply normally.
+        if (isNetworkClient() && !mLocalPlayerReady)
+            return;
         for (const auto& [ref, enabled] : mRefStates)
             applyRefState(ref, enabled);
     }

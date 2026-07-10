@@ -148,6 +148,15 @@ namespace MWNet
         // chargen (the multiplayer start path) so its half-built avatar isn't broadcast, and restores
         // it once the character is finalized. Always true on the host and in single-player.
         bool mLocalPlayerReady = true;
+        // True only while a connecting client is running a REAL new-character chargen (set on the
+        // mPendingNewGame start path), so updateClientStart opens the replication gate when that
+        // chargen finalizes. It stays false for the select-lobby backdrop, which is a bypass world
+        // that ALSO sits at chargenstate == -1 (World::startNewGame) yet is not a character being
+        // made — without this the backdrop would re-open the gate every tick, defeating the "purely
+        // local backdrop" and pulling the joining client into the shared stream before it has a
+        // character (broadcasting its placeholder avatar, and caching the shared world's scripted
+        // enable/disable that then bleeds into its own private chargen intro cells).
+        bool mChargenInProgress = false;
         // Client only: this peer's player bounty last mirrored across the wire, so a client-side change
         // (paying a fine, going to jail — all of which clear the bounty on the local player) is reported
         // to the host to clear the avatar's bounty, while a host-driven change isn't echoed back. The
@@ -315,6 +324,11 @@ namespace MWNet
         /// which never run client chargen — are unaffected.
         void setLocalPlayerReady(bool value) { mLocalPlayerReady = value; }
         bool isLocalPlayerReady() const { return mLocalPlayerReady; }
+
+        /// Mark that this client is beginning a real new-character chargen, so updateClientStart will
+        /// open the replication gate once that chargen finalizes (chargenstate hits -1). The
+        /// select-lobby backdrop, which also sits at chargenstate == -1, must NOT set this.
+        void setChargenInProgress(bool value) { mChargenInProgress = value; }
 
         /// Drop every reference into — and all per-actor state about — the CURRENT world. Must be
         /// called whenever the local game is torn down (newGame / loadGame): all of its cells and
