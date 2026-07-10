@@ -923,6 +923,8 @@ void OMW::Engine::pumpTransport()
                         mReplicator->applyRefEnableReports(*actions);
                         // A client's StartScript/StopScript transitions.
                         mReplicator->applyScriptRunReports(*actions);
+                        // A door a client's player pushed open or shut.
+                        mReplicator->applyDoorMoveReports(*actions);
                     }
                     else if (!chargenBubble) // the bubble also keeps host actions out of the intro cells
                     {
@@ -936,6 +938,7 @@ void OMW::Engine::pumpTransport()
                         mReplicator->applyTimeSyncs(*actions); // the authoritative game clock
                         mReplicator->applyRefEnables(*actions); // scripted refs appeared/vanished
                         mReplicator->applyScriptRuns(*actions); // quest scripts started/stopped
+                        mReplicator->applyDoorMoves(*actions); // doors swung open/shut elsewhere
                         mReplicator->applyArrests(*actions); // open arrest dialogue a guard triggered
                     }
                     // Authoritative lootable contents flow host -> clients; the host relays them onward.

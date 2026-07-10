@@ -285,6 +285,22 @@ namespace MWNet
             EXPECT_EQ(parsed->mScriptRuns[1].mTargetId, "fargoth");
         }
 
+        TEST(MWNetActionsTest, doorMovesRoundTrip)
+        {
+            ActionBatch batch;
+            // A swing open, a swing shut, and a script Lock's snap-shut (state 0).
+            batch.mDoorMoves.push_back({ ESM::RefNum{ 111, 0 }, 1, ESM::RefNum{ 2, -1000 } });
+            batch.mDoorMoves.push_back({ ESM::RefNum{ 222, 3 }, 2, ESM::RefNum{ 0, -1000 } });
+            batch.mDoorMoves.push_back({ ESM::RefNum{ 333, 0 }, 0, ESM::RefNum{ 0, -1000 } });
+            const std::optional<ActionBatch> parsed = deserializeActions(serializeActions(batch));
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(*parsed, batch);
+            ASSERT_EQ(parsed->mDoorMoves.size(), 3u);
+            EXPECT_EQ(parsed->mDoorMoves[0].mState, 1);
+            EXPECT_EQ(parsed->mDoorMoves[1].mRef.mContentFile, 3);
+            EXPECT_EQ(parsed->mDoorMoves[2].mState, 0);
+        }
+
         TEST(MWNetActionsTest, rejectsEmptyBuffer)
         {
             EXPECT_FALSE(deserializeActions(std::span<const std::byte>{}).has_value());
@@ -300,10 +316,10 @@ namespace MWNet
         TEST(MWNetActionsTest, rejectsImplausibleCount)
         {
             std::vector<std::byte> bytes = serializeActions(ActionBatch{});
-            // version + 19 4-byte 0 counts (hits, playerDamages, drops, taken, containers, changes,
+            // version + 20 4-byte 0 counts (hits, playerDamages, drops, taken, containers, changes,
             // revokes, summons, bounties, speech, sounds, arrests, combatRequests, journalDeltas,
-            // globalDeltas, timeSyncs, timeRequests, refEnables, scriptRuns)
-            ASSERT_EQ(bytes.size(), 77u);
+            // globalDeltas, timeSyncs, timeRequests, refEnables, scriptRuns, doorMoves)
+            ASSERT_EQ(bytes.size(), 81u);
             for (std::size_t i = 0; i < 4; ++i)
                 bytes[1 + i] = std::byte{ 0xff }; // implausible hit count
             EXPECT_FALSE(deserializeActions(bytes).has_value());

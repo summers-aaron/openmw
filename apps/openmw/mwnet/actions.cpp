@@ -8,7 +8,7 @@ namespace MWNet
 {
     namespace
     {
-        constexpr std::uint8_t sVersion = 14;
+        constexpr std::uint8_t sVersion = 15;
         // Smallest encoded CombatHit: attacker RefNum (4+4) + victim RefNum (4+4) + damage
         // (float, 4) + health-damage flag (1).
         constexpr std::uint32_t sMinHitBytes = 21;
@@ -58,6 +58,8 @@ namespace MWNet
         // Smallest encoded ScriptRun: zero-length script (4) + flag (1) + target RefNum (4 + 4) +
         // zero-length target id (4) + origin RefNum (4 + 4).
         constexpr std::uint32_t sMinScriptRunBytes = 25;
+        // Encoded DoorMove: ref RefNum (4 + 4) + state (1) + origin RefNum (4 + 4).
+        constexpr std::uint32_t sMinDoorMoveBytes = 17;
 
         void writeContainerItem(ByteWriter& writer, const ContainerItem& item)
         {
@@ -272,6 +274,15 @@ namespace MWNet
             writer.writeString(run.mTargetId);
             writer.write(run.mOrigin.mIndex);
             writer.write(run.mOrigin.mContentFile);
+        }
+        writer.write(static_cast<std::uint32_t>(batch.mDoorMoves.size()));
+        for (const DoorMove& move : batch.mDoorMoves)
+        {
+            writer.write(move.mRef.mIndex);
+            writer.write(move.mRef.mContentFile);
+            writer.write(move.mState);
+            writer.write(move.mOrigin.mIndex);
+            writer.write(move.mOrigin.mContentFile);
         }
         return out;
     }
@@ -606,6 +617,21 @@ namespace MWNet
                 return std::nullopt;
             run.mRunning = running != 0;
             batch.mScriptRuns.push_back(std::move(run));
+        }
+
+        std::uint32_t doorMoveCount = 0;
+        if (!reader.read(doorMoveCount))
+            return std::nullopt;
+        if (doorMoveCount > reader.remaining() / sMinDoorMoveBytes)
+            return std::nullopt;
+        batch.mDoorMoves.reserve(doorMoveCount);
+        for (std::uint32_t i = 0; i < doorMoveCount; ++i)
+        {
+            DoorMove move;
+            if (!reader.read(move.mRef.mIndex) || !reader.read(move.mRef.mContentFile) || !reader.read(move.mState)
+                || !reader.read(move.mOrigin.mIndex) || !reader.read(move.mOrigin.mContentFile))
+                return std::nullopt;
+            batch.mDoorMoves.push_back(move);
         }
         return batch;
     }
