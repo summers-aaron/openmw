@@ -3819,6 +3819,10 @@ namespace MWWorld
             return false;
         MWWorld::Player& player = mPlayers.get(index);
         const MWWorld::Ptr before = player.getPlayer();
+        // The uploaded save's player ref carries the generic Morrowind "player" RefNum, which is identical
+        // for every client. Remember the stable, unique network-player RefNum this slot was minted with in
+        // addPlayer so we can restore it after readRecord rebuilds the ref from the save below.
+        const ESM::RefNum stableRefNum = before.getCellRef().getRefNum();
         const bool wasInScene = before.isInCell()
             && mWorldScene->getActiveCells().find(before.getCell()) != mWorldScene->getActiveCells().end();
         if (wasInScene)
@@ -3852,6 +3856,16 @@ namespace MWWorld
         }
 
         const MWWorld::Ptr after = player.getPlayer();
+        // Restore the stable network-player RefNum that readRecord just overwrote with the save's generic
+        // "player" ref, and re-key the world-model registry to it. Without this every uploaded avatar
+        // collapses onto one shared identity, so RefNum-keyed systems (AiCombat targeting, network hit and
+        // crime attribution) can no longer tell the peers apart — an NPC fighting one client silently
+        // retargets whichever avatar was registered last.
+        if (stableRefNum.isSet())
+        {
+            after.getCellRef().setRefNum(stableRefNum);
+            mWorldModel.registerPtr(after);
+        }
         after.getRefData().setRemoteOwned(true); // a client-driven puppet, not locally simulated
         if (after.isInCell())
         {
