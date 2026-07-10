@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "actor.hpp"
+#include "upperbodystate.hpp"
 
 namespace ESM
 {
@@ -169,6 +170,7 @@ namespace MWMechanics
         bool isAttackingOrSpell(const MWWorld::Ptr& ptr) const;
         std::string_view getActiveAttackType(const MWWorld::Ptr& ptr) const;
         float getAttackStrength(const MWWorld::Ptr& ptr) const;
+        UpperBodyState getUpperBodyState(const MWWorld::Ptr& ptr) const;
 
         int getGreetingTimer(const MWWorld::Ptr& ptr) const;
         float getAngleToPlayer(const MWWorld::Ptr& ptr) const;

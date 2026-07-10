@@ -1994,6 +1994,11 @@ namespace MWMechanics
         return mActors.getAttackStrength(ptr);
     }
 
+    MWMechanics::UpperBodyState MechanicsManager::getUpperBodyState(const MWWorld::Ptr& ptr) const
+    {
+        return mActors.getUpperBodyState(ptr);
+    }
+
     void MechanicsManager::setWerewolf(const MWWorld::Ptr& actor, bool werewolf)
     {
         MWMechanics::NpcStats& npcStats = actor.getClass().getNpcStats(actor);

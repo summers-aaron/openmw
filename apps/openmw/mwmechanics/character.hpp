@@ -9,6 +9,8 @@
 
 #include "../mwrender/animation.hpp"
 
+#include "upperbodystate.hpp"
+
 namespace MWWorld
 {
     class InventoryStore;
@@ -102,18 +104,6 @@ namespace MWMechanics
         CharState_SwimKnockDown,
         CharState_SwimKnockOut,
         CharState_Block
-    };
-
-    enum class UpperBodyState
-    {
-        None,
-        Equipping,
-        Unequipping,
-        WeaponEquipped,
-        AttackWindUp,
-        AttackRelease,
-        AttackEnd,
-        Casting
     };
 
     enum JumpingState
@@ -321,6 +311,10 @@ namespace MWMechanics
         // or shoot/self/touch/target for ranged/spells). Unlike CreatureStats::getAttackType this is
         // the resolved type even when the request was "Any" (the player's default melee attack).
         std::string_view getActiveAttackType() const { return mAttackType; }
+        // The rate-limited attack/cast state machine (see UpperBodyState). Read by the network
+        // replicator to emit exactly one discrete swing per committed attack, so spam-clicking the
+        // attack input can't manufacture extra swings on other machines.
+        UpperBodyState getUpperBodyState() const { return mUpperBodyState; }
 
         void setVisibility(float visibility) const;
         void castSpell(const ESM::RefId& spellId, bool scriptedSpell = false);

@@ -546,7 +546,7 @@ namespace MWNet
         // swing/cast/turn latches, hit-reaction baselines, relay caches. All rebuilt naturally
         // as the next world's snapshots flow.
         mLastSent.clear();
-        mWasAttacking.clear();
+        mLastUpperBodyState.clear();
         mPendingSwing.clear();
         mWindupPendingRelease.clear();
         mWasBlocking.clear();
@@ -1148,16 +1148,23 @@ namespace MWNet
     {
         if (!actor.getClass().isActor())
             return std::nullopt;
-        const MWMechanics::CreatureStats& stats = actor.getClass().getCreatureStats(actor);
-        const bool attacking = stats.getAttackingOrSpell();
-        bool& was = mWasAttacking[id];
+        // Drive melee swings off the controller's rate-limited attack state machine, NOT the raw
+        // attack-input flag (getAttackingOrSpell). The flag follows the button, which spam-clicking
+        // toggles far faster than the character can swing; the controller enters AttackWindUp exactly
+        // once per committed attack and cannot re-enter it until the swing runs through
+        // AttackRelease/AttackEnd, so this emits one swing per real attack no matter the click rate.
+        const MWMechanics::UpperBodyState upperState
+            = MWBase::Environment::get().getMechanicsManager()->getUpperBodyState(actor);
+        MWMechanics::UpperBodyState& lastUpper = mLastUpperBodyState[id];
         bool& pending = mPendingSwing[id];
-        const bool releaseEdge = was && !attacking; // button let go: a charged attack is loosed
-        if (attacking && !was)
-            pending = true; // rising edge: a new discrete swing/cast began — arm a capture for it
-        if (!attacking)
-            pending = false; // pulse ended — disarm the wind-up capture (the release is handled below)
-        was = attacking;
+        if (upperState == MWMechanics::UpperBodyState::AttackWindUp
+            && lastUpper != MWMechanics::UpperBodyState::AttackWindUp)
+            pending = true; // entered a new attack wind-up — arm a capture for it
+        else if (upperState != MWMechanics::UpperBodyState::AttackWindUp)
+            pending = false; // left the wind-up (captured, or it never armed) — disarm
+        const bool releaseEdge = upperState == MWMechanics::UpperBodyState::AttackRelease
+            && lastUpper != MWMechanics::UpperBodyState::AttackRelease; // a charged attack is loosed
+        lastUpper = upperState;
         const MWRender::Animation* anim = MWBase::Environment::get().getWorld()->getAnimation(actor);
         if (pending)
         {
@@ -1287,7 +1294,7 @@ namespace MWNet
     {
         mLastSent.erase(id);
         mAppearances.erase(id);
-        mWasAttacking.erase(id);
+        mLastUpperBodyState.erase(id);
         mPendingSwing.erase(id);
         mWindupPendingRelease.erase(id);
         mWasBlocking.erase(id);

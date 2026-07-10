@@ -13,6 +13,7 @@
 
 #include <components/esm3/refnum.hpp>
 
+#include "../mwmechanics/upperbodystate.hpp"
 #include "../mwworld/ptr.hpp"
 
 #include "actions.hpp"
@@ -65,13 +66,15 @@ namespace MWNet
         // Each peer's last-advertised body identity, so its avatar can be built to match
         // it (received occasionally; an avatar is only instantiated once it's known).
         std::map<ESM::RefNum, AppearanceState> mAppearances;
-        // Sampling side: each actor's attacking-or-spell state last tick, and whether a swing for
-        // the current attack pulse is still waiting to be captured. On the rising edge a capture is
-        // armed; the swing counter is bumped once at the first tick of that pulse where the weapon
-        // group is actually the active Torso group (so a same-tick weapon draw or hand-to-hand
-        // doesn't slip past an exact-edge check). We stream that counter rather than guessing swings
-        // from a free-running playhead. mSampledSwing holds the latest {group, type, seq} to emit.
-        std::map<ESM::RefNum, bool> mWasAttacking;
+        // Sampling side: each actor's upper-body (attack) state last tick, and whether a swing for
+        // the current attack is still waiting to be captured. A capture is armed when the controller
+        // ENTERS AttackWindUp — its rate-limited signal, so spam-clicking the attack input can't
+        // manufacture extra swings the way keying off the raw attack-input flag did. The swing counter
+        // is bumped once at the first tick of that attack where the weapon group is actually the active
+        // Torso group (so a same-tick weapon draw or hand-to-hand doesn't slip past an exact-edge
+        // check). We stream that counter rather than guessing swings from a free-running playhead.
+        // mSampledSwing holds the latest {group, type, seq} to emit.
+        std::map<ESM::RefNum, MWMechanics::UpperBodyState> mLastUpperBodyState;
         std::map<ESM::RefNum, bool> mPendingSwing;
         // Sampling side: a weapon wind-up has been emitted (phase 1) and is waiting for its owner to let
         // go, at which point a phase-2 release is emitted on the same channel.

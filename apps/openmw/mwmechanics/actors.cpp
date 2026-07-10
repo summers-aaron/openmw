@@ -2548,6 +2548,15 @@ namespace MWMechanics
         return it->second->getCharacterController().getAttackStrength();
     }
 
+    UpperBodyState Actors::getUpperBodyState(const MWWorld::Ptr& ptr) const
+    {
+        const auto it = mIndex.find(ptr.mRef);
+        if (it == mIndex.end())
+            return UpperBodyState::None;
+
+        return it->second->getCharacterController().getUpperBodyState();
+    }
+
     int Actors::getGreetingTimer(const MWWorld::Ptr& ptr) const
     {
         const auto it = mIndex.find(ptr.mRef);

@@ -27,6 +27,7 @@ namespace ESM
 namespace MWMechanics
 {
     enum class GreetingState;
+    enum class UpperBodyState;
 }
 
 namespace MWWorld
@@ -277,6 +278,11 @@ namespace MWBase
         /// How far the actor's controller charged its current swing, 0..1 (set at release). -1 if the
         /// actor has no controller. Used to replicate a power attack's strength to remote avatars.
         virtual float getAttackStrength(const MWWorld::Ptr& ptr) const = 0;
+
+        /// The actor's rate-limited attack/cast state machine (UpperBodyState::None if it has no
+        /// controller). The replicator samples its transitions so exactly one discrete swing is
+        /// emitted per committed attack, rather than one per attack-input toggle.
+        virtual MWMechanics::UpperBodyState getUpperBodyState(const MWWorld::Ptr& ptr) const = 0;
 
         virtual void castSpell(const MWWorld::Ptr& ptr, const ESM::RefId& spellId, bool scriptedSpell) = 0;
 
