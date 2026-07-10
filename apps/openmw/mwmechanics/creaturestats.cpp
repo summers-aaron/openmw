@@ -374,6 +374,27 @@ namespace MWMechanics
         return mHitAttemptActor;
     }
 
+    void CreatureStats::addCombatGrudge(ESM::RefNum actor)
+    {
+        if (actor.isSet())
+            mCombatGrudges.insert(actor);
+    }
+
+    void CreatureStats::removeCombatGrudge(ESM::RefNum actor)
+    {
+        mCombatGrudges.erase(actor);
+    }
+
+    bool CreatureStats::hasCombatGrudge(ESM::RefNum actor) const
+    {
+        return actor.isSet() && mCombatGrudges.find(actor) != mCombatGrudges.end();
+    }
+
+    void CreatureStats::clearCombatGrudges()
+    {
+        mCombatGrudges.clear();
+    }
+
     void CreatureStats::addToFallHeight(float height)
     {
         mFallHeight += height;

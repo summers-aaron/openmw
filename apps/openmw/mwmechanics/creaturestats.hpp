@@ -76,6 +76,11 @@ namespace MWMechanics
         // actor attacks. It is cleared when combat ends.
         ESM::RefNum mHitAttemptActor;
 
+        // Players (by RefNum) this actor holds a grudge against: it gave up chasing them when they left the cell or
+        // moved out of range, and will re-attack them on sight if they return, even if it is otherwise peaceful.
+        // Runtime-only, like mHitAttemptActor it is deliberately not serialized.
+        std::set<ESM::RefNum> mCombatGrudges;
+
         // The difference between view direction and lower body direction.
         float mSideMovementAngle = 0;
 
@@ -261,6 +266,12 @@ namespace MWMechanics
         const ESM::RefId& getLastHitAttemptObject() const;
         void setHitAttemptActor(ESM::RefNum actorId);
         ESM::RefNum getHitAttemptActor() const;
+
+        // Combat grudges: remember an aggressor we gave up chasing so we re-attack it on return.
+        void addCombatGrudge(ESM::RefNum actorId);
+        void removeCombatGrudge(ESM::RefNum actorId);
+        bool hasCombatGrudge(ESM::RefNum actorId) const;
+        void clearCombatGrudges();
 
         void writeState(ESM::CreatureStats& state) const;
 

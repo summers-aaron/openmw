@@ -1472,6 +1472,12 @@ namespace MWMechanics
                     // after a Calm spell wears off
                     observerStats.setAiSetting(AiSetting::Fight, observerFightRating + static_cast<int>(fightTerm));
 
+                    // Multiplayer: that raised Fight is a single per-NPC value, so on its own it would make the
+                    // actor hostile to EVERY player, not just this offender. Remember the offender so engageCombat
+                    // can scope the crime-acquired aggression to them (see the grudge gate in Actors::engageCombat).
+                    if (MWBase::Environment::get().getWorld()->isPlayer(player))
+                        observerStats.addCombatGrudge(player.getCellRef().getRefNum());
+
                     setCrimeId = true;
 
                     // Mark as Alarmed for dialogue
@@ -1923,6 +1929,12 @@ namespace MWMechanics
                         .getMagnitude()
                     > 0))
             return false;
+
+        // Remembered aggressor: this actor gave up chasing the target when it left the cell / went out of range, so
+        // re-attack it on sight even if the actor is otherwise peaceful. Placed after the calm check so a Calm effect
+        // still pacifies it. Only player RefNums are ever added, so this never matches an ordinary NPC.
+        if (ptr.getClass().getCreatureStats(ptr).hasCombatGrudge(target.getCellRef().getRefNum()))
+            return true;
 
         int disposition = 50;
         if (ptr.getClass().isNpc())

@@ -7,9 +7,11 @@
 #include <components/misc/pathgridutils.hpp>
 #include <components/misc/rng.hpp>
 #include <components/sceneutil/positionattitudetransform.hpp>
+#include <components/settings/values.hpp>
 
 #include "../mwphysics/raycasting.hpp"
 
+#include "../mwworld/cellstore.hpp"
 #include "../mwworld/class.hpp"
 #include "../mwworld/esmstore.hpp"
 
@@ -124,6 +126,29 @@ namespace MWMechanics
 
         if (actor == target) // This should never happen.
             return true;
+
+        // Leash: give up chasing a player who has left the actor's cell (e.g. exited an interior) or moved far away.
+        // canFight() stays true for a distant or out-of-LOS-but-reachable target, so without this the actor would path
+        // after a departed player forever. Dropping the combat package here lets the actor resume its previous AI
+        // (the return-travel package stack() inserts on engage, then wander/patrol). If the departing player was our
+        // aggressor, remember it so isAggressive() re-attacks it should it come back.
+        if (MWMechanics::isPlayer(target))
+        {
+            const MWWorld::CellStore* actorCell = actor.getCell();
+            const MWWorld::CellStore* targetCell = target.getCell();
+            const bool leftWorldspace
+                = actorCell != targetCell && (!actorCell->isExterior() || !targetCell->isExterior());
+            const float leash = static_cast<float>(Settings::game().mActorsProcessingRange);
+            const float distSq
+                = (actor.getRefData().getPosition().asVec3() - target.getRefData().getPosition().asVec3()).length2();
+            if (leftWorldspace || distSq > leash * leash)
+            {
+                CreatureStats& stats = actor.getClass().getCreatureStats(actor);
+                if (stats.getHitAttemptActor() == target.getCellRef().getRefNum())
+                    stats.addCombatGrudge(target.getCellRef().getRefNum());
+                return true;
+            }
+        }
 
         // No actions for totally static creatures
         if (!actor.getClass().isMobile(actor))

@@ -766,7 +766,23 @@ namespace MWMechanics
                 // Player followers and escorters with high fight should not initiate combat with the player or with
                 // other player followers or escorters
                 if (!isPlayerFollowerOrEscorter)
+                {
                     aggressive = mechanicsManager->isAggressive(actor1, actor2);
+
+                    // Multiplayer: hostility acquired from a crime (assault, theft, ...) raises an NPC's base Fight
+                    // toward 100 so it keeps fighting the offender even after a Calm effect. That single value would
+                    // otherwise make it attack EVERY player on sight — including peers who never wronged it. Scope
+                    // crime-acquired aggression to players it holds a grudge against (the offenders); NPCs whose
+                    // innate (record) Fight is already high still turn hostile to any player, as before.
+                    if (aggressive && againstPlayer)
+                    {
+                        const int innateFight = actor1.getClass().getBaseFightRating(actor1);
+                        const bool acquiredHostility
+                            = creatureStats1.getAiSetting(AiSetting::Fight).getBase() > innateFight;
+                        if (acquiredHostility && !creatureStats1.hasCombatGrudge(actor2.getCellRef().getRefNum()))
+                            aggressive = false;
+                    }
+                }
             }
         }
 
@@ -1228,6 +1244,7 @@ namespace MWMechanics
                 creatureStats.setAttacked(false);
                 creatureStats.setAlarmed(false);
                 creatureStats.setAiSetting(AiSetting::Fight, ptr.getClass().getBaseFightRating(ptr));
+                creatureStats.removeCombatGrudge(player.getCellRef().getRefNum());
 
                 // Restore original disposition
                 npcStats.setCrimeDispositionModifier(0);
@@ -1266,6 +1283,7 @@ namespace MWMechanics
             npcStats.setCrimeDispositionModifier(0);
             npcStats.setCrimeId(-1);
             creatureStats.setHitAttemptActor(ESM::RefNum());
+            creatureStats.removeCombatGrudge(playerRef);
         }
     }
 

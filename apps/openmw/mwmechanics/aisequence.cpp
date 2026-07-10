@@ -36,6 +36,7 @@ namespace MWMechanics
 
         mNumCombatPackages = sequence.mNumCombatPackages;
         mNumPursuitPackages = sequence.mNumPursuitPackages;
+        mCommittedCombatTarget = sequence.mCommittedCombatTarget;
     }
 
     AiSequence::AiSequence()
@@ -293,6 +294,15 @@ namespace MWMechanics
 
             float bestRating = 0.f;
 
+            // Multiplayer target persistence: an NPC commits to one player and keeps fighting it instead of flipping
+            // to whichever player is nearest. It only switches to a different player that has actually attacked it
+            // (the NPC's current hit-attempt actor). Both are found by RefNum alongside the vanilla rating/nearest
+            // pick below, and only override that pick when it is itself a player, so single-player and
+            // player-vs-creature target selection stay unchanged.
+            const ESM::RefNum hitAttemptActor = actor.getClass().getCreatureStats(actor).getHitAttemptActor();
+            auto itLastAttackerPlayer = mPackages.end();
+            auto itCommittedPlayer = mPackages.end();
+
             for (auto it = mPackages.begin(); it != mPackages.end();)
             {
                 if ((*it)->getTypeId() != AiPackageTypeId::Combat)
@@ -307,6 +317,15 @@ namespace MWMechanics
                 }
                 else
                 {
+                    if (MWMechanics::isPlayer(target))
+                    {
+                        const ESM::RefNum targetRef = target.getCellRef().getRefNum();
+                        if (hitAttemptActor.isSet() && targetRef == hitAttemptActor)
+                            itLastAttackerPlayer = it;
+                        if (targetRef == mCommittedCombatTarget)
+                            itCommittedPlayer = it;
+                    }
+
                     float rating = 0.f;
                     if (MWMechanics::canFight(actor, target))
                         rating = MWMechanics::getBestActionRating(actor, target);
@@ -332,6 +351,22 @@ namespace MWMechanics
 
             if (mPackages.empty())
                 return;
+
+            // When the vanilla pick is a player, keep the NPC on the player it is already fighting: prefer a player
+            // that attacked us, otherwise the committed player. Proximity alone never steals focus between players.
+            if (itActualCombat != mPackages.end() && MWMechanics::isPlayer((*itActualCombat)->getTarget()))
+            {
+                if (itLastAttackerPlayer != mPackages.end())
+                    itActualCombat = itLastAttackerPlayer;
+                else if (itCommittedPlayer != mPackages.end())
+                    itActualCombat = itCommittedPlayer;
+            }
+
+            // Remember whichever player we settled on so we stay on it next frame (cleared if it is not a player).
+            if (itActualCombat != mPackages.end() && MWMechanics::isPlayer((*itActualCombat)->getTarget()))
+                mCommittedCombatTarget = (*itActualCombat)->getTarget().getCellRef().getRefNum();
+            else
+                mCommittedCombatTarget = ESM::RefNum();
 
             if (nearestDist < std::numeric_limits<float>::max() && mPackages.begin() != itActualCombat)
             {
@@ -382,6 +417,7 @@ namespace MWMechanics
         mPackages.clear();
         mNumCombatPackages = 0;
         mNumPursuitPackages = 0;
+        mCommittedCombatTarget = ESM::RefNum();
     }
 
     void AiSequence::stack(const AiPackage& package, const MWWorld::Ptr& actor, bool cancelOther)

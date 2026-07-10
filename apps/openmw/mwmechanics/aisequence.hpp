@@ -9,6 +9,7 @@
 #include "aistate.hpp"
 
 #include <components/esm3/loadnpc.hpp>
+#include <components/esm3/refnum.hpp>
 
 namespace MWWorld
 {
@@ -43,6 +44,11 @@ namespace MWMechanics
 
         int mNumCombatPackages{};
         int mNumPursuitPackages{};
+
+        // The player (by RefNum) this actor is committed to fighting. Keeps an NPC chasing one player instead of
+        // flipping to whichever player is nearest; only another player who attacks it can steal focus. Runtime-only,
+        // re-derived by execute() each frame and not serialized.
+        ESM::RefNum mCommittedCombatTarget;
 
         /// Copy AiSequence
         void copy(const AiSequence& sequence);
