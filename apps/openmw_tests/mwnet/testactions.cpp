@@ -285,6 +285,20 @@ namespace MWNet
             EXPECT_EQ(parsed->mScriptRuns[1].mTargetId, "fargoth");
         }
 
+        TEST(MWNetActionsTest, weatherSyncsRoundTrip)
+        {
+            ActionBatch batch;
+            batch.mWeatherSyncs.push_back({ "Bitter Coast Region", 4, ESM::RefNum{ 0, -1000 } }); // rain
+            batch.mWeatherSyncs.push_back({ "Ascadian Isles Region", 0, ESM::RefNum{ 0, -1000 } }); // clear
+            const std::optional<ActionBatch> parsed = deserializeActions(serializeActions(batch));
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(*parsed, batch);
+            ASSERT_EQ(parsed->mWeatherSyncs.size(), 2u);
+            EXPECT_EQ(parsed->mWeatherSyncs[0].mRegion, "Bitter Coast Region");
+            EXPECT_EQ(parsed->mWeatherSyncs[0].mWeatherId, 4);
+            EXPECT_EQ(parsed->mWeatherSyncs[1].mWeatherId, 0);
+        }
+
         TEST(MWNetActionsTest, rejectsEmptyBuffer)
         {
             EXPECT_FALSE(deserializeActions(std::span<const std::byte>{}).has_value());
@@ -300,10 +314,10 @@ namespace MWNet
         TEST(MWNetActionsTest, rejectsImplausibleCount)
         {
             std::vector<std::byte> bytes = serializeActions(ActionBatch{});
-            // version + 19 4-byte 0 counts (hits, playerDamages, drops, taken, containers, changes,
+            // version + 20 4-byte 0 counts (hits, playerDamages, drops, taken, containers, changes,
             // revokes, summons, bounties, speech, sounds, arrests, combatRequests, journalDeltas,
-            // globalDeltas, timeSyncs, timeRequests, refEnables, scriptRuns)
-            ASSERT_EQ(bytes.size(), 77u);
+            // globalDeltas, timeSyncs, timeRequests, refEnables, scriptRuns, weatherSyncs)
+            ASSERT_EQ(bytes.size(), 81u);
             for (std::size_t i = 0; i < 4; ++i)
                 bytes[1 + i] = std::byte{ 0xff }; // implausible hit count
             EXPECT_FALSE(deserializeActions(bytes).has_value());

@@ -22,8 +22,10 @@
 #include <components/esm3/loadgmst.hpp>
 #include <components/esm3/loadmgef.hpp>
 #include <components/esm3/loadnpc.hpp>
+#include <components/esm3/loadregn.hpp>
 #include <components/esm3/loadspel.hpp>
 #include <components/esm3/loadstat.hpp>
+#include <components/fallback/fallback.hpp>
 #include <components/misc/resourcehelpers.hpp>
 #include <components/misc/rng.hpp>
 #include <components/settings/values.hpp>
@@ -67,6 +69,7 @@
 #include "../mwworld/refdata.hpp"
 #include "../mwworld/globals.hpp"
 #include "../mwworld/scene.hpp"
+#include "../mwworld/timestamp.hpp"
 #include "../mwworld/worldmodel.hpp"
 
 namespace MWNet
@@ -600,6 +603,11 @@ namespace MWNet
         mOutgoingScriptRuns.clear();
         mScriptOverrides.clear();
         mScriptsSeeded = false;
+        // Weather authority belongs to the world being torn down; the next world re-rolls per region
+        // as players occupy them. mLastWeatherGameHours resets so the first tick measures no delta.
+        mWeatherAuthority.clear();
+        mOutgoingWeather.clear();
+        mLastWeatherGameHours = -1.f;
         // On the authority the ref-state record belongs to the world being torn down — the next
         // world seeds it from its own save's REC_NETWORK_STATE (or starts clean). On a client it
         // is the cache of received states and SURVIVES, so a rejoining world (new character flow)
@@ -2140,6 +2148,7 @@ namespace MWNet
     ActionBatch Replicator::takeOutgoingActions()
     {
         sampleLocalBounty(); // client: report our player's bounty if it changed (e.g. an arrest resolved)
+        updateWeatherAuthority(); // host: roll each occupied region's weather on the shared clock
         ActionBatch batch;
         batch.mHits = std::move(mOutgoingHits);
         batch.mPlayerDamages = std::move(mOutgoingPlayerDamages);
@@ -2158,6 +2167,7 @@ namespace MWNet
         batch.mTimeRequests = std::move(mOutgoingTimeRequests); // client -> host rest/travel time
         batch.mRefEnables = std::move(mOutgoingRefEnables); // both ways: scripted enable/disable
         batch.mScriptRuns = std::move(mOutgoingScriptRuns); // both ways: StartScript/StopScript
+        batch.mWeatherSyncs = std::move(mOutgoingWeather); // host -> clients: per-region weather
         mOutgoingHits.clear();
         mOutgoingPlayerDamages.clear();
         mOutgoingBounties.clear();
@@ -2175,6 +2185,7 @@ namespace MWNet
         mOutgoingTimeRequests.clear();
         mOutgoingRefEnables.clear();
         mOutgoingScriptRuns.clear();
+        mOutgoingWeather.clear();
 
         // Host: periodically re-assert the global script overrides (receivers skip-if-equal),
         // seeded by diffing the live running set against the content defaults — exactly the set
@@ -2222,6 +2233,13 @@ namespace MWNet
         if (mIsAuthority && (mTick % sReplicationRefreshInterval) == 0)
             for (const auto& [ref, enabled] : mRefStates)
                 batch.mRefEnables.push_back({ ref, enabled, mLocalPlayerNetId });
+
+        // Host: periodically re-assert each region's authoritative weather, so a late joiner (or a
+        // client that missed a packet) converges. changeWeather is change-guarded on receipt, so a
+        // converged client re-applies the same weather harmlessly.
+        if (mIsAuthority && (mTick % sReplicationRefreshInterval) == 0)
+            for (const auto& [region, auth] : mWeatherAuthority)
+                batch.mWeatherSyncs.push_back({ region.serializeText(), auth.mWeatherId, mLocalPlayerNetId });
 
         // Host: broadcast the authoritative game clock — at the periodic cadence to correct the
         // slow drift of everyone's locally advancing clocks, and immediately after a discontinuous
@@ -3084,6 +3102,125 @@ namespace MWNet
             if (run.mOrigin.isSet() && run.mOrigin == mLocalPlayerNetId)
                 continue; // our own report echoed back — already applied locally
             applyOneScriptRun(run);
+        }
+    }
+
+    int Replicator::rollRegionWeather(const ESM::RefId& region) const
+    {
+        const MWWorld::ESMStore& store = *MWBase::Environment::get().getESMStore();
+        const ESM::Region* record = store.get<ESM::Region>().search(region);
+        if (record == nullptr)
+            return 0; // unknown region — default to Clear (index 0)
+        // Mirror RegionWeather::getWeather: roll 1..100 against the cumulative region probabilities.
+        auto& prng = MWBase::Environment::get().getWorld()->getPrng();
+        const unsigned int roll = static_cast<unsigned int>(Misc::Rng::rollDice(100, prng) + 1); // 1..100
+        unsigned int sum = 0;
+        for (std::size_t i = 0; i < record->mData.mProbabilities.size(); ++i)
+        {
+            sum += record->mData.mProbabilities[i];
+            if (roll <= sum)
+                return static_cast<int>(i);
+        }
+        return 0;
+    }
+
+    void Replicator::updateWeatherAuthority()
+    {
+        if (!mIsAuthority)
+            return;
+        MWBase::World& world = *MWBase::Environment::get().getWorld();
+
+        // Elapsed game hours since the last tick, off the shared clock (clients advance it too, so
+        // both ends measure the same passage). Non-negative and bounded against a first tick or a
+        // clock that jumped backward (a save load).
+        const MWWorld::TimeStamp stamp = world.getTimeStamp();
+        const float gameHours = stamp.getDay() * 24.f + stamp.getHour();
+        float deltaHours = 0.f;
+        if (mLastWeatherGameHours >= 0.f && gameHours >= mLastWeatherGameHours)
+            deltaHours = gameHours - mLastWeatherGameHours;
+        mLastWeatherGameHours = gameHours;
+
+        static const float hoursBetweenChanges
+            = std::max(1.f, Fallback::Map::getFloat("Weather_Hours_Between_Weather_Changes"));
+
+        // Every exterior region a player (the host's own player or any avatar) currently occupies.
+        std::set<ESM::RefId> occupied;
+        const auto addRegion = [&](const MWWorld::ConstPtr& ptr) {
+            if (ptr.isEmpty() || !ptr.isInCell())
+                return;
+            const MWWorld::CellStore* cell = ptr.getCell();
+            if (cell->getCell()->isExterior())
+                if (const ESM::RefId region = cell->getCell()->getRegion(); !region.empty())
+                    occupied.insert(region);
+        };
+        addRegion(world.getPlayerPtr());
+        for (const auto& [netId, avatar] : mAvatars)
+            addRegion(avatar);
+
+        for (const ESM::RefId& region : occupied)
+        {
+            const auto [it, inserted] = mWeatherAuthority.try_emplace(region);
+            bool changed = inserted;
+            if (inserted)
+            {
+                it->second.mWeatherId = rollRegionWeather(region);
+                it->second.mHoursUntilChange = hoursBetweenChanges;
+            }
+            else
+            {
+                it->second.mHoursUntilChange -= deltaHours;
+                if (it->second.mHoursUntilChange <= 0.f)
+                {
+                    it->second.mWeatherId = rollRegionWeather(region);
+                    it->second.mHoursUntilChange += hoursBetweenChanges;
+                    if (it->second.mHoursUntilChange <= 0.f) // a huge advance (rest/travel): don't spin
+                        it->second.mHoursUntilChange = hoursBetweenChanges;
+                    changed = true;
+                }
+            }
+            if (changed)
+            {
+                // Drive the host's own sky (its WeatherManager rolls nothing itself while networked),
+                // scoped so the changeWeather hook doesn't feed this back into the authority, then
+                // queue it for the clients.
+                {
+                    RemoteApplyScope scope(this);
+                    world.changeWeather(region, static_cast<unsigned int>(it->second.mWeatherId));
+                }
+                mOutgoingWeather.push_back({ region.serializeText(), it->second.mWeatherId, mLocalPlayerNetId });
+            }
+        }
+    }
+
+    void Replicator::reportWeatherChanged(const ESM::RefId& region, int weatherId)
+    {
+        if (!isNetworked() || isApplyingRemote())
+            return; // a roll/apply we made (scoped) — not a fresh scripted change
+        if (!mIsAuthority)
+            return; // clients don't own weather; a client-local scripted change heals on re-assert
+        static const float hoursBetweenChanges
+            = std::max(1.f, Fallback::Map::getFloat("Weather_Hours_Between_Weather_Changes"));
+        RegionWeatherAuthority& auth = mWeatherAuthority[region];
+        auth.mWeatherId = weatherId;
+        auth.mHoursUntilChange = hoursBetweenChanges; // a scripted set restarts the region's timer
+        mOutgoingWeather.push_back({ region.serializeText(), weatherId, mLocalPlayerNetId });
+    }
+
+    void Replicator::applyWeatherSyncs(const ActionBatch& batch)
+    {
+        if (batch.mWeatherSyncs.empty())
+            return;
+        MWBase::World& world = *MWBase::Environment::get().getWorld();
+        RemoteApplyScope scope(this); // changeWeather hook must not echo this back
+        for (const WeatherSync& weather : batch.mWeatherSyncs)
+        {
+            if (weather.mOrigin.isSet() && weather.mOrigin == mLocalPlayerNetId)
+                continue; // our own echo (only the host emits weather, so this is belt-and-braces)
+            const ESM::RefId region = ESM::RefId::deserializeText(weather.mRegion);
+            if (region.empty())
+                continue;
+            // changeWeather guards an out-of-range index itself, so a hostile value is a no-op.
+            world.changeWeather(region, static_cast<unsigned int>(weather.mWeatherId));
         }
     }
 

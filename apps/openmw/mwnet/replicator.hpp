@@ -222,10 +222,31 @@ namespace MWNet
         // stopped/started scripts reach late joiners. Derived — cleared and re-seeded on teardown.
         std::map<ESM::RefId, ScriptRun> mScriptOverrides;
         bool mScriptsSeeded = false;
+        // Host only: authoritative weather per region. Each region a player occupies gets a weather
+        // index and a change timer counted down on the shared clock; on expiry a new weather is
+        // rolled from the region's static probabilities. Clients never roll — they apply what the
+        // host sends. Scripted ChangeWeather overwrites the entry (via reportWeatherChanged).
+        struct RegionWeatherAuthority
+        {
+            std::int32_t mWeatherId = 0;
+            float mHoursUntilChange = 0.f;
+        };
+        std::map<ESM::RefId, RegionWeatherAuthority> mWeatherAuthority;
+        // Total game hours (day*24 + hour) at the last authority tick, to derive the elapsed delta.
+        float mLastWeatherGameHours = -1.f;
+        // Host -> clients: per-region weather awaiting send (from a roll or a scripted change).
+        std::vector<WeatherSync> mOutgoingWeather;
 
         /// Apply one recorded ref state where the ref is materialized (no-op otherwise, and for
         /// players), under a RemoteApplyScope so the enable/disable hook doesn't re-report it.
         void applyRefState(const ESM::RefNum& ref, bool enabled);
+
+        /// Host: for every exterior region a player occupies, advance its weather timer on the shared
+        /// clock, roll a new weather on expiry, drive the host's own sky, and queue the broadcast.
+        void updateWeatherAuthority();
+
+        /// Roll a weather index for a region from its static probabilities (mirrors RegionWeather).
+        int rollRegionWeather(const ESM::RefId& region) const;
 
         /// Apply one received script transition (skip-if-equal), under a RemoteApplyScope.
         void applyOneScriptRun(const ScriptRun& run);
@@ -607,6 +628,16 @@ namespace MWNet
 
         /// Apply broadcast script transitions (client only): skip our own echoes, skip-if-equal.
         void applyScriptRuns(const ActionBatch& batch);
+
+        /// The WeatherManager::changeWeather hook. On the host, a scripted ChangeWeather adopts that
+        /// weather as the region's authoritative value (resetting its timer) and queues a broadcast.
+        /// A no-op off the network, while applying received/rolled weather (RemoteApplyScope), and on
+        /// clients (the host owns weather; a client-local scripted change self-corrects on re-assert).
+        void reportWeatherChanged(const ESM::RefId& region, int weatherId);
+
+        /// Apply broadcast per-region weather (client only): changeWeather for each region, under a
+        /// RemoteApplyScope so the hook doesn't echo it back.
+        void applyWeatherSyncs(const ActionBatch& batch);
 
         /// Server-save persistence for the ref-state record (REC_NETWORK_STATE): without it, a
         /// host restart would strand clients on content defaults (they never load the save).

@@ -934,6 +934,7 @@ void OMW::Engine::pumpTransport()
                         mReplicator->applyJournalDeltas(*actions); // the shared world journal advanced
                         mReplicator->applyGlobalDeltas(*actions); // shared globals changed
                         mReplicator->applyTimeSyncs(*actions); // the authoritative game clock
+                        mReplicator->applyWeatherSyncs(*actions); // the authoritative per-region weather
                         mReplicator->applyRefEnables(*actions); // scripted refs appeared/vanished
                         mReplicator->applyScriptRuns(*actions); // quest scripts started/stopped
                         mReplicator->applyArrests(*actions); // open arrest dialogue a guard triggered

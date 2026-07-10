@@ -14,6 +14,8 @@
 #include "../mwbase/soundmanager.hpp"
 #include "../mwbase/world.hpp"
 
+#include "../mwnet/replicator.hpp"
+
 #include "../mwmechanics/actorutil.hpp"
 
 #include "../mwsound/sound.hpp"
@@ -716,6 +718,8 @@ namespace MWWorld
             {
                 rIt->second.setWeather(wIt->mScriptId);
                 regionalWeatherChanged(rIt->first, rIt->second);
+                if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+                    replicator->reportWeatherChanged(regionID, wIt->mScriptId);
             }
         }
     }
@@ -738,6 +742,8 @@ namespace MWWorld
             {
                 it->second.setWeather(weatherID);
                 regionalWeatherChanged(it->first, it->second);
+                if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+                    replicator->reportWeatherChanged(regionID, static_cast<int>(weatherID));
             }
         }
     }
@@ -804,8 +810,14 @@ namespace MWWorld
 
         if (!paused || mFastForward)
         {
+            // In a networked session weather is host-authoritative (rolled once on the host and
+            // broadcast), so a peer must not roll its own on the periodic timer — that is exactly the
+            // random divergence the sync exists to prevent. A region change still applies whatever
+            // weather the region currently holds (the host's, once it has sent it).
+            const MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+            const bool networked = replicator != nullptr && replicator->isNetworked();
             // Add new transitions when either the player's current external region changes.
-            if (updateWeatherTime() || updateWeatherRegion(player.getCell()->getCell()->getRegion()))
+            if ((!networked && updateWeatherTime()) || updateWeatherRegion(player.getCell()->getCell()->getRegion()))
             {
                 auto it = mRegions.find(mCurrentRegion);
                 if (it != mRegions.end())

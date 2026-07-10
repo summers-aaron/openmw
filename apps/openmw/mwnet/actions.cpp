@@ -8,7 +8,7 @@ namespace MWNet
 {
     namespace
     {
-        constexpr std::uint8_t sVersion = 14;
+        constexpr std::uint8_t sVersion = 15;
         // Smallest encoded CombatHit: attacker RefNum (4+4) + victim RefNum (4+4) + damage
         // (float, 4) + health-damage flag (1).
         constexpr std::uint32_t sMinHitBytes = 21;
@@ -58,6 +58,8 @@ namespace MWNet
         // Smallest encoded ScriptRun: zero-length script (4) + flag (1) + target RefNum (4 + 4) +
         // zero-length target id (4) + origin RefNum (4 + 4).
         constexpr std::uint32_t sMinScriptRunBytes = 25;
+        // Smallest encoded WeatherSync: zero-length region (4) + weatherId (4) + origin RefNum (4 + 4).
+        constexpr std::uint32_t sMinWeatherSyncBytes = 16;
 
         void writeContainerItem(ByteWriter& writer, const ContainerItem& item)
         {
@@ -272,6 +274,14 @@ namespace MWNet
             writer.writeString(run.mTargetId);
             writer.write(run.mOrigin.mIndex);
             writer.write(run.mOrigin.mContentFile);
+        }
+        writer.write(static_cast<std::uint32_t>(batch.mWeatherSyncs.size()));
+        for (const WeatherSync& weather : batch.mWeatherSyncs)
+        {
+            writer.writeString(weather.mRegion);
+            writer.write(weather.mWeatherId);
+            writer.write(weather.mOrigin.mIndex);
+            writer.write(weather.mOrigin.mContentFile);
         }
         return out;
     }
@@ -606,6 +616,21 @@ namespace MWNet
                 return std::nullopt;
             run.mRunning = running != 0;
             batch.mScriptRuns.push_back(std::move(run));
+        }
+
+        std::uint32_t weatherCount = 0;
+        if (!reader.read(weatherCount))
+            return std::nullopt;
+        if (weatherCount > reader.remaining() / sMinWeatherSyncBytes)
+            return std::nullopt;
+        batch.mWeatherSyncs.reserve(weatherCount);
+        for (std::uint32_t i = 0; i < weatherCount; ++i)
+        {
+            WeatherSync weather;
+            if (!reader.readString(weather.mRegion) || !reader.read(weather.mWeatherId)
+                || !reader.read(weather.mOrigin.mIndex) || !reader.read(weather.mOrigin.mContentFile))
+                return std::nullopt;
+            batch.mWeatherSyncs.push_back(std::move(weather));
         }
         return batch;
     }

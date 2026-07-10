@@ -293,6 +293,21 @@ namespace MWNet
         friend bool operator==(const ScriptRun&, const ScriptRun&) = default;
     };
 
+    /// Host -> clients: the authoritative weather for one region. Weather is per-region and normally
+    /// rolled locally (random, so every machine would pick differently even with a synced clock), so
+    /// the host owns it: it rolls each occupied region's weather from the region's static
+    /// probabilities on the shared clock and broadcasts the result; clients apply it and suppress
+    /// their own rolls. Scripted ChangeWeather on the host rides the same channel. mWeatherId is the
+    /// weather index (0..N-1 into the weather settings). Re-asserted periodically for late joiners.
+    struct WeatherSync
+    {
+        std::string mRegion; // region RefId, serialized
+        std::int32_t mWeatherId = 0;
+        ESM::RefNum mOrigin; // host's wire id, for echo suppression
+
+        friend bool operator==(const WeatherSync&, const WeatherSync&) = default;
+    };
+
     /// Host -> the owning client: a host guard pursuing that client's avatar for a crime has caught it,
     /// so the client should open the arrest dialogue. The host can't show the client's UI (and opening
     /// it on the host would pull the host's own player into the conversation), so it routes the arrest
@@ -364,6 +379,8 @@ namespace MWNet
         std::vector<RefEnable> mRefEnables;
         // both ways: global script start/stop transitions (same flow as journal/global deltas).
         std::vector<ScriptRun> mScriptRuns;
+        // host -> clients: authoritative per-region weather (rolled on the host from region chances).
+        std::vector<WeatherSync> mWeatherSyncs;
 
         bool empty() const
         {
@@ -371,7 +388,7 @@ namespace MWNet
                 && mContainers.empty() && mContainerChanges.empty() && mContainerRevokes.empty()
                 && mSummons.empty() && mBounties.empty() && mSpeech.empty() && mSounds.empty() && mArrests.empty()
                 && mCombatRequests.empty() && mJournalDeltas.empty() && mGlobalDeltas.empty() && mTimeSyncs.empty()
-                && mTimeRequests.empty() && mRefEnables.empty() && mScriptRuns.empty();
+                && mTimeRequests.empty() && mRefEnables.empty() && mScriptRuns.empty() && mWeatherSyncs.empty();
         }
 
         friend bool operator==(const ActionBatch&, const ActionBatch&) = default;
