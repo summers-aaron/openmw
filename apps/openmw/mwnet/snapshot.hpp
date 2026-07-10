@@ -38,16 +38,45 @@ namespace MWNet
         friend bool operator==(const TransformState&, const TransformState&) = default;
     };
 
-    /// Current values of an actor's three dynamic stats (health, magicka, fatigue). Lets
-    /// the world's combat state — damage and death (health <= 0) — replicate, not just
-    /// where actors are.
+    /// An actor's three dynamic stats (health, magicka, fatigue), each as its current value
+    /// AND its modified maximum. Lets the world's combat state — damage and death (health <= 0)
+    /// — replicate, not just where actors are; the max is what makes a peer avatar's health bar
+    /// (current / max ratio) correct, since a puppet's own synthesized record derives the wrong
+    /// maximum.
     struct DynamicStats
     {
         float mHealth;
+        float mHealthMax;
         float mMagicka;
+        float mMagickaMax;
         float mFatigue;
+        float mFatigueMax;
 
         friend bool operator==(const DynamicStats&, const DynamicStats&) = default;
+    };
+
+    /// One base attribute or skill value, keyed by its data-driven ESM::RefId (serialized text,
+    /// so it resolves to the same attribute/skill record on every peer). Base, not modified:
+    /// transient fortify/drain effects ride the dynamic stats and active-effect paths instead.
+    struct StatEntry
+    {
+        std::string mId;
+        float mBase;
+
+        friend bool operator==(const StatEntry&, const StatEntry&) = default;
+    };
+
+    /// The slowly-changing part of a peer avatar's character sheet: level, base attributes and
+    /// base skills. Re-advertised on the occasional full-refresh tick (like appearance/equipment),
+    /// only for a peer's own player entity, so every peer's copy of the avatar mirrors the owner's
+    /// real sheet rather than the defaults of the synthesized placeholder body.
+    struct CharacterSheet
+    {
+        std::int32_t mLevel = 0;
+        std::vector<StatEntry> mAttributes;
+        std::vector<StatEntry> mSkills;
+
+        friend bool operator==(const CharacterSheet&, const CharacterSheet&) = default;
     };
 
     /// A peer player's character appearance: the records that define how its
@@ -139,6 +168,10 @@ namespace MWNet
         ESM::RefNum mId;
         std::optional<TransformState> mTransform;
         std::optional<DynamicStats> mStats;
+        // The avatar's level/attributes/skills (see CharacterSheet). Present only on the occasional
+        // full-refresh tick and only for a peer's own player entity — a receiver applies it to the
+        // avatar puppet so its whole sheet, not just its position and health, tracks the owner.
+        std::optional<CharacterSheet> mSheet;
         // The actor's weapon/spell draw stance (MWMechanics::DrawState as a byte): 0 nothing,
         // 1 weapon, 2 spell. Replicated so a remote actor visibly draws its weapon and adopts a
         // combat stance — the first slice of animation-state replication.

@@ -7,7 +7,7 @@ namespace MWNet
     namespace
     {
         // Wire format version. Bumped if the layout below changes incompatibly.
-        constexpr std::uint8_t sVersion = 10;
+        constexpr std::uint8_t sVersion = 11;
 
         // EntityState field bits (mFieldMask, a uint16 to leave room for more states).
         constexpr std::uint16_t sFieldTransform = 1 << 0;
@@ -21,12 +21,16 @@ namespace MWNet
         constexpr std::uint16_t sFieldCell = 1 << 8;
         constexpr std::uint16_t sFieldItem = 1 << 9;
         constexpr std::uint16_t sFieldCreature = 1 << 10;
+        constexpr std::uint16_t sFieldSheet = 1 << 11;
         constexpr std::uint16_t sKnownFields = sFieldTransform | sFieldStats | sFieldDrawState | sFieldAppearance
             | sFieldEquipment | sFieldMoveFlags | sFieldSwing | sFieldSpeed | sFieldCell | sFieldItem
-            | sFieldCreature;
+            | sFieldCreature | sFieldSheet;
 
         // Smallest possible encoded equipment entry: slot (1) + a zero-length item string (4).
         constexpr std::uint32_t sMinEquipmentBytes = 5;
+
+        // Smallest possible encoded stat entry: a zero-length id string (4) + a base float (4).
+        constexpr std::uint32_t sMinStatEntryBytes = 8;
 
         // Smallest possible encoded entity: RefNum (4 + 4) + field mask (2).
         constexpr std::uint32_t sMinEntityBytes = 10;
@@ -69,6 +73,8 @@ namespace MWNet
                 fieldMask |= sFieldItem;
             if (entity.mCreature)
                 fieldMask |= sFieldCreature;
+            if (entity.mSheet)
+                fieldMask |= sFieldSheet;
             writer.write(fieldMask);
 
             if (entity.mTransform)
@@ -81,8 +87,11 @@ namespace MWNet
             if (entity.mStats)
             {
                 writer.write(entity.mStats->mHealth);
+                writer.write(entity.mStats->mHealthMax);
                 writer.write(entity.mStats->mMagicka);
+                writer.write(entity.mStats->mMagickaMax);
                 writer.write(entity.mStats->mFatigue);
+                writer.write(entity.mStats->mFatigueMax);
             }
             if (entity.mDrawState)
                 writer.write(*entity.mDrawState);
@@ -126,6 +135,20 @@ namespace MWNet
             }
             if (entity.mCreature)
                 writer.writeString(*entity.mCreature);
+            if (entity.mSheet)
+            {
+                writer.write(entity.mSheet->mLevel);
+                const auto writeEntries = [&](const std::vector<StatEntry>& entries) {
+                    writer.write(static_cast<std::uint32_t>(entries.size()));
+                    for (const StatEntry& entry : entries)
+                    {
+                        writer.writeString(entry.mId);
+                        writer.write(entry.mBase);
+                    }
+                };
+                writeEntries(entity.mSheet->mAttributes);
+                writeEntries(entity.mSheet->mSkills);
+            }
         }
 
         writer.write(static_cast<std::uint32_t>(delta.mRemovedItems.size()));
@@ -186,7 +209,9 @@ namespace MWNet
             if (fieldMask & sFieldStats)
             {
                 DynamicStats stats;
-                if (!reader.read(stats.mHealth) || !reader.read(stats.mMagicka) || !reader.read(stats.mFatigue))
+                if (!reader.read(stats.mHealth) || !reader.read(stats.mHealthMax) || !reader.read(stats.mMagicka)
+                    || !reader.read(stats.mMagickaMax) || !reader.read(stats.mFatigue)
+                    || !reader.read(stats.mFatigueMax))
                     return std::nullopt;
                 entity.mStats = stats;
             }
@@ -270,6 +295,32 @@ namespace MWNet
                 if (!reader.readString(creature))
                     return std::nullopt;
                 entity.mCreature = std::move(creature);
+            }
+            if (fieldMask & sFieldSheet)
+            {
+                CharacterSheet sheet;
+                if (!reader.read(sheet.mLevel))
+                    return std::nullopt;
+                const auto readEntries = [&](std::vector<StatEntry>& entries) {
+                    std::uint32_t entryCount = 0;
+                    if (!reader.read(entryCount))
+                        return false;
+                    // Bound the allocation/loop against the remaining buffer before reserving.
+                    if (entryCount > reader.remaining() / sMinStatEntryBytes)
+                        return false;
+                    entries.reserve(entryCount);
+                    for (std::uint32_t e = 0; e < entryCount; ++e)
+                    {
+                        StatEntry entry;
+                        if (!reader.readString(entry.mId) || !reader.read(entry.mBase))
+                            return false;
+                        entries.push_back(std::move(entry));
+                    }
+                    return true;
+                };
+                if (!readEntries(sheet.mAttributes) || !readEntries(sheet.mSkills))
+                    return std::nullopt;
+                entity.mSheet = std::move(sheet);
             }
 
             delta.mEntities.push_back(entity);

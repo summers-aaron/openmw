@@ -59,13 +59,14 @@ namespace MWNet
         {
             SnapshotDelta delta;
             EntityState withStats = makeEntity(5, 1, makeTransform(3.f));
-            withStats.mStats = DynamicStats{ 42.5f, 10.f, 0.f }; // health 42.5, magicka 10, fatigue 0
+            // health 42.5/150, magicka 10/80, fatigue 0/120 (current + modified max)
+            withStats.mStats = DynamicStats{ 42.5f, 150.f, 10.f, 80.f, 0.f, 120.f };
             delta.mEntities.push_back(withStats);
             withStats.mDrawState = std::uint8_t{ 1 }; // weapon drawn
             delta.mEntities.back() = withStats;
             EntityState statsOnly;
             statsOnly.mId = ESM::RefNum{ 9, 2 };
-            statsOnly.mStats = DynamicStats{ 0.f, 0.f, 0.f }; // dead, no transform
+            statsOnly.mStats = DynamicStats{ 0.f, 150.f, 0.f, 80.f, 0.f, 120.f }; // dead, no transform
             statsOnly.mDrawState = std::uint8_t{ 2 }; // spell stance, drawstate-only entity
             delta.mEntities.push_back(statsOnly);
 
@@ -75,9 +76,40 @@ namespace MWNet
             ASSERT_EQ(parsed->mEntities.size(), 2u);
             ASSERT_TRUE(parsed->mEntities[0].mStats.has_value());
             EXPECT_EQ(parsed->mEntities[0].mStats->mHealth, 42.5f);
+            EXPECT_EQ(parsed->mEntities[0].mStats->mHealthMax, 150.f); // the max the health bar reads
+            EXPECT_EQ(parsed->mEntities[0].mStats->mMagickaMax, 80.f);
+            EXPECT_EQ(parsed->mEntities[0].mStats->mFatigueMax, 120.f);
             EXPECT_EQ(parsed->mEntities[0].mDrawState, std::uint8_t{ 1 });
             EXPECT_FALSE(parsed->mEntities[1].mTransform.has_value());
             EXPECT_EQ(parsed->mEntities[1].mDrawState, std::uint8_t{ 2 });
+        }
+
+        TEST(MWNetSnapshotTest, characterSheetRoundTrips)
+        {
+            SnapshotDelta delta;
+            EntityState withSheet = makeEntity(30, -1000, makeTransform(1.f));
+            CharacterSheet sheet;
+            sheet.mLevel = 7;
+            sheet.mAttributes = { StatEntry{ "strength", 50.f }, StatEntry{ "intelligence", 42.5f } };
+            sheet.mSkills = { StatEntry{ "longblade", 35.f }, StatEntry{ "destruction", 15.f } };
+            withSheet.mSheet = sheet;
+            delta.mEntities.push_back(withSheet);
+            // A sheet with empty attribute/skill lists (e.g. a creature or a partial advertise) round-trips.
+            EntityState emptySheet = makeEntity(31, -1000, std::nullopt);
+            emptySheet.mSheet = CharacterSheet{};
+            delta.mEntities.push_back(emptySheet);
+
+            const std::optional<SnapshotDelta> parsed = deserializeSnapshot(serializeSnapshot(delta));
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(*parsed, delta);
+            ASSERT_EQ(parsed->mEntities.size(), 2u);
+            ASSERT_TRUE(parsed->mEntities[0].mSheet.has_value());
+            EXPECT_EQ(parsed->mEntities[0].mSheet->mLevel, 7);
+            ASSERT_EQ(parsed->mEntities[0].mSheet->mAttributes.size(), 2u);
+            EXPECT_EQ(parsed->mEntities[0].mSheet->mAttributes[1].mId, "intelligence");
+            EXPECT_EQ(parsed->mEntities[0].mSheet->mAttributes[1].mBase, 42.5f);
+            EXPECT_EQ(parsed->mEntities[0].mSheet->mSkills[0].mId, "longblade");
+            EXPECT_TRUE(parsed->mEntities[1].mSheet->mAttributes.empty());
         }
 
         TEST(MWNetSnapshotTest, appearanceRoundTrips)

@@ -386,8 +386,25 @@ namespace MWNet
             if (!actor.getClass().isActor())
                 return std::nullopt;
             const MWMechanics::CreatureStats& stats = actor.getClass().getCreatureStats(actor);
-            return DynamicStats{ stats.getHealth().getCurrent(), stats.getMagicka().getCurrent(),
-                stats.getFatigue().getCurrent() };
+            return DynamicStats{ stats.getHealth().getCurrent(), stats.getHealth().getModified(),
+                stats.getMagicka().getCurrent(), stats.getMagicka().getModified(), stats.getFatigue().getCurrent(),
+                stats.getFatigue().getModified() };
+        }
+
+        // The slowly-changing sheet (level, base attributes, base skills). NPC-only: skills exist only
+        // on NpcStats, and peer avatars are always NPCs. std::nullopt for creatures/non-actors.
+        std::optional<CharacterSheet> sampleCharacterSheet(const MWWorld::Ptr& actor)
+        {
+            if (!actor.getClass().isNpc())
+                return std::nullopt;
+            const MWMechanics::NpcStats& npcStats = actor.getClass().getNpcStats(actor);
+            CharacterSheet sheet;
+            sheet.mLevel = npcStats.getLevel();
+            for (const auto& [id, value] : npcStats.getAttributes())
+                sheet.mAttributes.push_back({ id.serializeText(), value.getBase() });
+            for (const auto& [id, value] : npcStats.getSkills())
+                sheet.mSkills.push_back({ id.serializeText(), value.getBase() });
+            return sheet;
         }
 
         std::optional<std::uint8_t> sampleDrawState(const MWWorld::Ptr& actor)
@@ -420,12 +437,44 @@ namespace MWNet
             if (stats.isDead() && values.mHealth >= 1.f)
                 MWBase::Environment::get().getMechanicsManager()->resurrect(actor);
             const float current[3] = { values.mHealth, values.mMagicka, values.mFatigue };
+            const float maximum[3] = { values.mHealthMax, values.mMagickaMax, values.mFatigueMax };
             for (int i = 0; i < 3; ++i)
             {
-                MWMechanics::DynamicStat<float> dynamic = stats.getDynamic(i);
-                // The host is authoritative: accept its value as-is, including <= 0 (death).
+                // A fresh stat (modifier 0) so getModified() == the owner's maximum exactly — the
+                // enemy health bar reads current/max, and a puppet's synthesized record would
+                // otherwise derive the wrong maximum. The owning peer is authoritative over the
+                // current value, including <= 0 (death), so allow it below zero / above the max.
+                MWMechanics::DynamicStat<float> dynamic;
+                dynamic.setBase(maximum[i]);
                 dynamic.setCurrent(current[i], true, true);
                 stats.setDynamic(i, dynamic);
+            }
+        }
+
+        void applyCharacterSheet(const MWWorld::Ptr& actor, const CharacterSheet& sheet)
+        {
+            if (!actor.getClass().isNpc())
+                return;
+            MWMechanics::NpcStats& npcStats = actor.getClass().getNpcStats(actor);
+            npcStats.setLevel(std::clamp<std::int32_t>(sheet.mLevel, 1, 10000)); // sane bound vs hostile data
+            // Only overwrite ids the actor already has, so a malformed/hostile entry cannot inject a
+            // junk attribute/skill record. Base values only; transient modifiers aren't part of the sheet.
+            for (const StatEntry& entry : sheet.mAttributes)
+            {
+                const ESM::RefId id = ESM::RefId::deserializeText(entry.mId);
+                if (npcStats.getAttributes().contains(id))
+                    npcStats.setAttribute(id, entry.mBase);
+            }
+            for (const StatEntry& entry : sheet.mSkills)
+            {
+                const ESM::RefId id = ESM::RefId::deserializeText(entry.mId);
+                const auto it = npcStats.getSkills().find(id);
+                if (it != npcStats.getSkills().end())
+                {
+                    MWMechanics::SkillValue value = it->second;
+                    value.setBase(entry.mBase);
+                    npcStats.setSkill(id, value);
+                }
             }
         }
 
@@ -609,6 +658,7 @@ namespace MWNet
         {
             self.mAppearance = sampleAppearance(player);
             self.mEquipment = sampleEquipment(player);
+            self.mSheet = sampleCharacterSheet(player);
         }
         delta.mEntities.push_back(self);
     }
@@ -633,7 +683,8 @@ namespace MWNet
                                  std::optional<std::vector<EquipmentSlot>> equipment = std::nullopt,
                                  std::optional<std::string> cellId = std::nullopt,
                                  std::optional<ItemState> item = std::nullopt,
-                                 std::optional<std::string> creature = std::nullopt) {
+                                 std::optional<std::string> creature = std::nullopt,
+                                 std::optional<CharacterSheet> sheet = std::nullopt) {
             // Appearance and equipment are deliberately outside the dedup key: they are only
             // ever passed on full-refresh ticks (which always resend anyway), so they never
             // perturb the change detection that decides whether to emit transform/stats at all.
@@ -660,6 +711,7 @@ namespace MWNet
             entity.mCellId = std::move(cellId);
             entity.mItem = std::move(item);
             entity.mCreature = std::move(creature);
+            entity.mSheet = std::move(sheet);
             delta.mEntities.push_back(entity);
         };
 
@@ -749,7 +801,10 @@ namespace MWNet
                     fullSnapshot ? sampleEquipment(avatar) : std::nullopt,
                     // Relay the cell we placed the avatar in (kept correct on receipt below), so a
                     // downstream client puts its copy in the same cell rather than the host's.
-                    sampleCellId(avatar));
+                    sampleCellId(avatar), std::nullopt /*item*/, std::nullopt /*creature*/,
+                    // Re-sample the sheet the incoming snapshot applied to this puppet, so a downstream
+                    // client's avatar mirrors the owner's whole sheet, not just its position and health.
+                    fullSnapshot ? sampleCharacterSheet(avatar) : std::nullopt);
             }
         }
 
@@ -1659,6 +1714,8 @@ namespace MWNet
             applyStats(avatar, *entity.mStats);
             applyHitReaction(avatar, entity.mId, entity.mStats->mHealth, /*localPlayer=*/false);
         }
+        if (entity.mSheet)
+            applyCharacterSheet(avatar, *entity.mSheet); // level/attributes/skills track the owner's sheet
         if (entity.mDrawState)
             applyDrawState(avatar, *entity.mDrawState);
         // Remember the locomotion exactly as received so the host relays it on verbatim
