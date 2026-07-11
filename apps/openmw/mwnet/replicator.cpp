@@ -618,6 +618,8 @@ namespace MWNet
         mWeatherAuthority.clear();
         mOutgoingWeather.clear();
         mLastWeatherGameHours = -1.f;
+        mWeatherPrevOccupied.clear();
+        mWeatherKnownAvatars.clear();
         // On the authority the ref-state and door records belong to the world being torn down —
         // the next world seeds them from its own save's REC_NETWORK_STATE (or starts clean). On a
         // client they are the cache of received states and SURVIVE, so a rejoining world (new
@@ -3284,6 +3286,16 @@ namespace MWNet
         for (const auto& [netId, avatar] : mAvatars)
             addRegion(avatar);
 
+        // A client that just finished joining must converge immediately, not sit on its own
+        // locally-rolled weather until the slow periodic re-assert. Detect a newly seen avatar and
+        // queue the FULL authority for it below — its region is usually one the host already tracks,
+        // so no fresh roll fires to carry the weather on its own.
+        bool newAvatarJoined = false;
+        for (const auto& [netId, avatar] : mAvatars)
+            if (mWeatherKnownAvatars.insert(netId).second)
+                newAvatarJoined = true;
+        std::erase_if(mWeatherKnownAvatars, [&](const ESM::RefNum& id) { return mAvatars.count(id) == 0; });
+
         for (const ESM::RefId& region : occupied)
         {
             const auto [it, inserted] = mWeatherAuthority.try_emplace(region);
@@ -3308,15 +3320,24 @@ namespace MWNet
             if (changed)
             {
                 // Drive the host's own sky (its WeatherManager rolls nothing itself while networked),
-                // scoped so the changeWeather hook doesn't feed this back into the authority, then
-                // queue it for the clients.
-                {
-                    RemoteApplyScope scope(this);
-                    world.changeWeather(region, static_cast<unsigned int>(it->second.mWeatherId));
-                }
-                mOutgoingWeather.push_back({ region.serializeText(), it->second.mWeatherId, mLocalPlayerNetId });
+                // scoped so the changeWeather hook doesn't feed this back into the authority.
+                RemoteApplyScope scope(this);
+                world.changeWeather(region, static_cast<unsigned int>(it->second.mWeatherId));
             }
+            // Broadcast this region's weather when it changed, or when a player just entered a region
+            // the host was already tracking (no roll, but the arriving peer still needs its value).
+            // Without the latter, a peer walking into — or joining in — an already-tracked region
+            // would show its own locally-rolled weather until the periodic re-assert corrected it.
+            if (changed || mWeatherPrevOccupied.count(region) == 0)
+                mOutgoingWeather.push_back({ region.serializeText(), it->second.mWeatherId, mLocalPlayerNetId });
         }
+        mWeatherPrevOccupied = std::move(occupied);
+
+        // A fresh joiner's region is typically already tracked and unchanged this tick, so the loop
+        // above emits nothing for it; hand it the whole authority so its own region syncs at once.
+        if (newAvatarJoined)
+            for (const auto& [region, auth] : mWeatherAuthority)
+                mOutgoingWeather.push_back({ region.serializeText(), auth.mWeatherId, mLocalPlayerNetId });
     }
 
     void Replicator::reportWeatherChanged(const ESM::RefId& region, int weatherId)

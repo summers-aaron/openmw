@@ -254,6 +254,11 @@ namespace MWWorld
 
         int getWeather();
 
+        /// Whether a specific weather has been assigned (by a roll, a ChangeWeather, or — in a
+        /// networked session — the host's broadcast). False means the region still holds the
+        /// invalid sentinel, i.e. getWeather() would roll a fresh one.
+        bool hasSetWeather() const;
+
     private:
         int mWeather;
         std::vector<uint8_t> mChances;
@@ -398,6 +403,13 @@ namespace MWWorld
         osg::Vec3f mStormDirection;
 
         ESM::RefId mCurrentRegion;
+        // Networked client only: while set, the next host weather applied to the current region is
+        // snapped to (forceWeather) rather than transitioned to. Armed on entering a region (a join
+        // or a region change) so the client catches up to the host's already-established weather at
+        // once instead of crawling through Morrowind's minute-long transitions — and, on a join, up
+        // through every weather the host has cycled. Cleared after the snap, so subsequent host-driven
+        // changes for that region play out as smooth transitions, matching the host's own sky.
+        bool mNetworkWeatherForcePending = true;
         float mTimePassed;
         bool mFastForward;
         float mWeatherUpdateTime;
@@ -424,6 +436,11 @@ namespace MWWorld
         bool updateWeatherRegion(const ESM::RefId& playerRegion);
         void updateWeatherTransitions(const float elapsedRealSeconds);
         void forceWeather(const int weatherID);
+
+        /// Bring the current region's displayed weather to \a weatherID: a networked client snaps
+        /// (forceWeather) on the first apply after entering the region and transitions afterwards
+        /// (see mNetworkWeatherForcePending); everyone else always transitions.
+        void driveCurrentRegionWeather(int weatherID);
 
         bool inTransition() const;
         void addWeatherTransition(const int weatherID);

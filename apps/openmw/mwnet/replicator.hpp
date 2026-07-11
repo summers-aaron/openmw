@@ -254,6 +254,16 @@ namespace MWNet
         float mLastWeatherGameHours = -1.f;
         // Host -> clients: per-region weather awaiting send (from a roll or a scripted change).
         std::vector<WeatherSync> mOutgoingWeather;
+        // Host only: the set of exterior regions a player occupied on the previous authority tick.
+        // A region that appears here anew (a player walked into a region the host already tracks)
+        // must have its current authoritative weather re-broadcast at once, so the arriving peer
+        // converges immediately instead of waiting out the slow periodic re-assert.
+        std::set<ESM::RefId> mWeatherPrevOccupied;
+        // Host only: the avatar net ids weather has been asserted to. A newly seen avatar (a client
+        // just finished joining) gets the FULL authority re-broadcast at once — its region is usually
+        // one the host already tracks (so no fresh roll fires), and it must not sit on its own
+        // locally-rolled weather until the next periodic re-assert.
+        std::set<ESM::RefNum> mWeatherKnownAvatars;
 
         /// Apply one recorded ref state where the ref is materialized (no-op otherwise, and for
         /// players), under a RemoteApplyScope so the enable/disable hook doesn't re-report it.
@@ -261,6 +271,9 @@ namespace MWNet
 
         /// Host: for every exterior region a player occupies, advance its weather timer on the shared
         /// clock, roll a new weather on expiry, drive the host's own sky, and queue the broadcast.
+        /// Also pushes at once — not only on a roll — when a peer newly enters a tracked region or a
+        /// client finishes joining, so an arriving peer converges immediately instead of showing its
+        /// own locally-rolled weather until the slow periodic re-assert.
         void updateWeatherAuthority();
 
         /// Roll a weather index for a region from its static probabilities (mirrors RegionWeather).

@@ -341,6 +341,11 @@ namespace MWWorld
         return mWeather;
     }
 
+    bool RegionWeather::hasSetWeather() const
+    {
+        return mWeather != invalidWeatherID;
+    }
+
     void RegionWeather::chooseNewWeather()
     {
         // All probabilities must add to 100 (responsibility of the user).
@@ -783,7 +788,21 @@ namespace MWWorld
             if (it != mRegions.end() && playerRegion != mCurrentRegion)
             {
                 mCurrentRegion = playerRegion;
-                forceWeather(it->second.getWeather());
+                // A networked client owns no weather: if the host has already sent this region's,
+                // snap to it; otherwise wait for the host's broadcast (arm the one-shot force) rather
+                // than rolling a local one. Single-player forces immediately as before.
+                const MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+                if (replicator != nullptr && replicator->isNetworkClient())
+                {
+                    mNetworkWeatherForcePending = true;
+                    if (it->second.hasSetWeather())
+                    {
+                        forceWeather(it->second.getWeather());
+                        mNetworkWeatherForcePending = false;
+                    }
+                }
+                else
+                    forceWeather(it->second.getWeather());
             }
         }
     }
@@ -816,13 +835,21 @@ namespace MWWorld
             // weather the region currently holds (the host's, once it has sent it).
             const MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
             const bool networked = replicator != nullptr && replicator->isNetworked();
-            // Add new transitions when either the player's current external region changes.
+            // Add new transitions when either the periodic timer expires (single-player only — a peer
+            // must not roll its own, that is the divergence the sync prevents) or the player's current
+            // external region changes.
             if ((!networked && updateWeatherTime()) || updateWeatherRegion(player.getCell()->getCell()->getRegion()))
             {
                 auto it = mRegions.find(mCurrentRegion);
-                if (it != mRegions.end())
+                // On a networked peer the host owns weather: apply only a value it has already
+                // broadcast for this region, never a locally-rolled one. Rolling here (getWeather()
+                // on an unset region) both diverges from the host and — worse — leaves that roll mid-
+                // transition, so the host's real weather queues up behind it instead of showing. When
+                // the host has not sent this region yet, wait: applyWeatherSyncs applies it the moment
+                // its value arrives (the host re-broadcasts as the peer enters the region).
+                if (it != mRegions.end() && (!networked || it->second.hasSetWeather()))
                 {
-                    addWeatherTransition(it->second.getWeather());
+                    driveCurrentRegionWeather(it->second.getWeather());
                 }
             }
 
@@ -1106,6 +1133,7 @@ namespace MWWorld
         stopSounds();
 
         mCurrentRegion = ESM::RefId();
+        mNetworkWeatherForcePending = true; // next region entry snaps to the host's weather again
         mTimePassed = 0.0f;
         mWeatherUpdateTime = 0.0f;
         forceWeather(0);
@@ -1134,14 +1162,34 @@ namespace MWWorld
 
     inline void WeatherManager::regionalWeatherChanged(const ESM::RefId& regionID, RegionWeather& region)
     {
-        // If the region is current, then add a weather transition for it.
+        // If the region is current, then bring its weather to the sky.
         MWWorld::ConstPtr player = MWMechanics::getPlayer();
         if (player.isInCell())
         {
             if (regionID == mCurrentRegion)
             {
-                addWeatherTransition(region.getWeather());
+                driveCurrentRegionWeather(region.getWeather());
             }
+        }
+    }
+
+    void WeatherManager::driveCurrentRegionWeather(int weatherID)
+    {
+        // A networked client mirrors the host's weather. The first apply after entering a region is a
+        // catch-up to the host's already-established state (a join, or a region change), so snap
+        // straight to it — otherwise the client would crawl through Morrowind's minute-long
+        // transitions, and on a join up through every weather the host has cycled since it started.
+        // Once caught up, later host-driven changes for this region transition smoothly, so a change
+        // the host makes plays out on the client the way it does on the host.
+        const MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+        if (replicator != nullptr && replicator->isNetworkClient() && mNetworkWeatherForcePending)
+        {
+            forceWeather(weatherID);
+            mNetworkWeatherForcePending = false;
+        }
+        else
+        {
+            addWeatherTransition(weatherID);
         }
     }
 
@@ -1171,6 +1219,9 @@ namespace MWWorld
         if (!playerRegion.empty() && playerRegion != mCurrentRegion)
         {
             mCurrentRegion = playerRegion;
+            // Entering a new region: a networked client should snap to the host's weather for it
+            // (catch-up), not transition, so arm the one-shot force. See driveCurrentRegionWeather.
+            mNetworkWeatherForcePending = true;
 
             return true;
         }
