@@ -8,7 +8,7 @@ namespace MWNet
 {
     namespace
     {
-        constexpr std::uint8_t sVersion = 15;
+        constexpr std::uint8_t sVersion = 16;
         // Smallest encoded CombatHit: attacker RefNum (4+4) + victim RefNum (4+4) + damage
         // (float, 4) + health-damage flag (1).
         constexpr std::uint32_t sMinHitBytes = 21;
@@ -60,8 +60,8 @@ namespace MWNet
         constexpr std::uint32_t sMinScriptRunBytes = 25;
         // Smallest encoded WeatherSync: zero-length region (4) + weatherId (4) + origin RefNum (4 + 4).
         constexpr std::uint32_t sMinWeatherSyncBytes = 16;
-        // Encoded DoorMove: ref RefNum (4 + 4) + state (1) + origin RefNum (4 + 4).
-        constexpr std::uint32_t sMinDoorMoveBytes = 17;
+        // Encoded DoorMove: ref RefNum (4 + 4) + state (1) + lock level (4) + origin RefNum (4 + 4).
+        constexpr std::uint32_t sMinDoorMoveBytes = 21;
 
         void writeContainerItem(ByteWriter& writer, const ContainerItem& item)
         {
@@ -291,6 +291,7 @@ namespace MWNet
             writer.write(move.mRef.mIndex);
             writer.write(move.mRef.mContentFile);
             writer.write(move.mState);
+            writer.write(move.mLockLevel);
             writer.write(move.mOrigin.mIndex);
             writer.write(move.mOrigin.mContentFile);
         }
@@ -654,7 +655,8 @@ namespace MWNet
         {
             DoorMove move;
             if (!reader.read(move.mRef.mIndex) || !reader.read(move.mRef.mContentFile) || !reader.read(move.mState)
-                || !reader.read(move.mOrigin.mIndex) || !reader.read(move.mOrigin.mContentFile))
+                || !reader.read(move.mLockLevel) || !reader.read(move.mOrigin.mIndex)
+                || !reader.read(move.mOrigin.mContentFile))
                 return std::nullopt;
             batch.mDoorMoves.push_back(move);
         }

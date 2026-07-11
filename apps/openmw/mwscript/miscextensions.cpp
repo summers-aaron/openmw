@@ -59,6 +59,8 @@
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
 
+#include "../mwnet/replicator.hpp"
+
 #include "../mwworld/cellstore.hpp"
 #include "../mwworld/class.hpp"
 #include "../mwworld/containerstore.hpp"
@@ -392,7 +394,15 @@ namespace MWScript
                 // This is done when using Lock in scripts, but not when using Lock spells.
                 if (ptr.getType() == ESM::Door::sRecordId && !ptr.getCellRef().getTeleport())
                 {
+                    // Multiplayer: this snap-shut reports the new lock through activateDoor's door hook.
                     MWBase::Environment::get().getWorld()->activateDoor(ptr, MWWorld::DoorState::Idle);
+                }
+                else if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+                {
+                    // A teleport ("load") door — the common locked door — takes no snap-shut, so nothing
+                    // above carried its lock. Report it directly (no-op for containers and off the
+                    // network). Non-teleport doors already reported via activateDoor, so aren't double-sent.
+                    replicator->reportDoorLock(ptr);
                 }
             }
         };
@@ -405,7 +415,15 @@ namespace MWScript
             {
                 MWWorld::Ptr ptr = R()(runtime);
                 if (ptr.getCellRef().isLocked())
+                {
                     ptr.getCellRef().unlock();
+                    // Multiplayer: a scripted Unlock on a door is shared state. Unlike Lock (which
+                    // snaps the door shut via activateDoor and reports the lock through that path),
+                    // Unlock does no swing, so report the new lock level directly. No-op for
+                    // containers and off the network.
+                    if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+                        replicator->reportDoorLock(ptr);
+                }
             }
         };
 

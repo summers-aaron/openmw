@@ -283,7 +283,7 @@ namespace MWNet
         /// RemoteApplyScope so the activateDoor hook doesn't re-report it. Change-guarded: a door
         /// already swinging the commanded way, or resting at the commanded pose, is left alone
         /// (periodic re-asserts and echoes must not churn settled doors).
-        void applyDoorState(const ESM::RefNum& ref, std::uint8_t state);
+        void applyDoorState(const ESM::RefNum& ref, std::uint8_t state, std::optional<std::int32_t> lockLevel);
 
         /// Apply one received script transition (skip-if-equal), under a RemoteApplyScope.
         void applyOneScriptRun(const ScriptRun& run);
@@ -664,9 +664,15 @@ namespace MWNet
         void applyRefStates();
 
         /// Report an interactable door's commanded state change (a player/NPC/script swinging it,
-        /// or a script's Lock snapping it shut) so every peer's copy of the door moves too. A
-        /// no-op off the network and while applying received state; only content refs cross.
-        void reportDoorMove(const ESM::RefNum& ref, MWWorld::DoorState state);
+        /// or a script's Lock snapping it shut) so every peer's copy of the door moves too. The
+        /// door's live lock level rides along so a client's lockpick/key/scripted Lock reaches every
+        /// peer. A no-op off the network and while applying received state; only content refs cross.
+        void reportDoorMove(const ESM::RefNum& ref, MWWorld::DoorState state, std::int32_t lockLevel);
+
+        /// Report a door's lock change with no accompanying swing (a lockpick that failed to open it,
+        /// a key, a scripted Lock/Unlock): sends the door's current state + live lock level so peers
+        /// converge. Reads state/lock off the door; a no-op for non-doors and off the network.
+        void reportDoorLock(const MWWorld::Ptr& door);
 
         /// Apply door commands reported by clients (host only): record, apply where the door is
         /// materialized, and relay onward (origin preserved).

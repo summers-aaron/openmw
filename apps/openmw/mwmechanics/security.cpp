@@ -10,6 +10,8 @@
 #include "../mwbase/mechanicsmanager.hpp"
 #include "../mwbase/world.hpp"
 
+#include "../mwnet/replicator.hpp"
+
 #include "creaturestats.hpp"
 #include "spellutil.hpp"
 
@@ -63,6 +65,12 @@ namespace MWMechanics
             if (Misc::Rng::roll0to99(prng) <= x)
             {
                 lock.getCellRef().unlock();
+                // Multiplayer: an unlocked door is shared world state — report the new lock level so
+                // the host and every other client converge (reportDoorLock no-ops for containers and
+                // off the network). The acting client rolls locally and reports the result, mirroring
+                // how combat hits and door swings already route.
+                if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+                    replicator->reportDoorLock(lock);
                 resultMessage = "#{sLockSuccess}";
                 resultSound = "Open Lock";
                 mActor.getClass().skillUsageSucceeded(mActor, ESM::Skill::Security, ESM::Skill::Security_PickLock);

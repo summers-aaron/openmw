@@ -2302,10 +2302,19 @@ namespace MWNet
                 batch.mWeatherSyncs.push_back({ region.serializeText(), auth.mWeatherId, mLocalPlayerNetId });
 
         // Host: likewise re-assert every commanded door state, so late joiners find doors
-        // standing the way the world left them. Receivers apply change-guarded.
+        // standing the way the world left them. The door's live lock rides along (read fresh, so it
+        // reflects a scripted lock or a save reload, not a stale record) — this is the path that
+        // converges a client's lock after its cell loaded at a stale level. Receivers apply
+        // change-guarded.
         if (mIsAuthority && (mTick % sReplicationRefreshInterval) == 0)
             for (const auto& [ref, state] : mDoorStates)
-                batch.mDoorMoves.push_back({ ref, state, mLocalPlayerNetId });
+            {
+                std::int32_t lockLevel = 0;
+                const MWWorld::Ptr door = MWBase::Environment::get().getWorldModel()->getPtr(ref);
+                if (!door.isEmpty() && door.isInCell() && door.getClass().isDoor())
+                    lockLevel = door.getCellRef().getLockLevel();
+                batch.mDoorMoves.push_back({ ref, state, lockLevel, mLocalPlayerNetId });
+            }
 
         // Host: broadcast the authoritative game clock — at the periodic cadence to correct the
         // slow drift of everyone's locally advancing clocks, and immediately after a discontinuous
@@ -3132,23 +3141,50 @@ namespace MWNet
             applyRefState(ref, enabled);
     }
 
-    void Replicator::reportDoorMove(const ESM::RefNum& ref, MWWorld::DoorState state)
+    void Replicator::reportDoorMove(const ESM::RefNum& ref, MWWorld::DoorState state, std::int32_t lockLevel)
     {
         if (!isNetworked() || isApplyingRemote() || !ref.hasContentFile())
             return;
         const std::uint8_t wire = static_cast<std::uint8_t>(state);
         if (mIsAuthority)
             mDoorStates[ref] = wire;
-        mOutgoingDoorMoves.push_back({ ref, wire, mLocalPlayerNetId });
+        mOutgoingDoorMoves.push_back({ ref, wire, lockLevel, mLocalPlayerNetId });
     }
 
-    void Replicator::applyDoorState(const ESM::RefNum& ref, std::uint8_t state)
+    void Replicator::reportDoorLock(const MWWorld::Ptr& door)
+    {
+        if (door.isEmpty() || !door.getClass().isDoor())
+            return; // container locks aren't shared this way; only doors ride the door channel
+        const ESM::RefNum ref = door.getCellRef().getRefNum();
+        if (!ref.hasContentFile())
+            return;
+        reportDoorMove(ref, door.getClass().getDoorState(door), door.getCellRef().getLockLevel());
+    }
+
+    void Replicator::applyDoorState(const ESM::RefNum& ref, std::uint8_t state, std::optional<std::int32_t> lockLevel)
     {
         const MWWorld::Ptr ptr = MWBase::Environment::get().getWorldModel()->getPtr(ref);
         // Not materialized here (its cell isn't loaded): the recorded command re-applies when the
-        // cell loads (applyDoorStates). Refuse hostile data naming a non-door or a teleport
-        // ("load") door rather than letting setDoorState throw.
-        if (ptr.isEmpty() || !ptr.isInCell() || !ptr.getClass().isDoor() || ptr.getCellRef().getTeleport())
+        // cell loads (applyDoorStates). Refuse hostile data naming a non-door.
+        if (ptr.isEmpty() || !ptr.isInCell() || !ptr.getClass().isDoor())
+            return;
+        // Lock rides ahead of the swing and outside its change-guard: a bare lock/unlock (a lockpick
+        // that didn't open the door, a key, a scripted Lock/Unlock) leaves the pose settled, so the
+        // guards below would early-return before the lock ever applied. The signed level carries both
+        // facts — > 0 locked at that pick difficulty, <= 0 unlocked (magnitude remembered) — matching
+        // CellRef's own encoding, so setLocked(level > 0) recovers the flag. Guarded so re-asserts
+        // don't churn. Applies to teleport ("load") doors too — a locked load door is the *common*
+        // locked door, and setLockLevel never throws — so the lock is handled before the swing's
+        // teleport guard below. No RemoteApplyScope needed for a lock-only change (setLockLevel
+        // reports nothing); the scope opened further down covers the swing.
+        if (lockLevel && *lockLevel != ptr.getCellRef().getLockLevel())
+        {
+            ptr.getCellRef().setLockLevel(*lockLevel);
+            ptr.getCellRef().setLocked(*lockLevel > 0);
+        }
+        // The swing, unlike the lock, must skip teleport doors: activateDoor/setDoorState is for
+        // physically swinging doors, and a load door has no pose to animate (letting it through throws).
+        if (ptr.getCellRef().getTeleport())
             return;
         const auto desired = static_cast<MWWorld::DoorState>(state);
         const MWWorld::DoorState current = ptr.getClass().getDoorState(ptr);
@@ -3176,7 +3212,7 @@ namespace MWNet
             if (move.mState > static_cast<std::uint8_t>(MWWorld::DoorState::Closing))
                 continue; // hostile data: not a DoorState
             mDoorStates[move.mRef] = move.mState;
-            applyDoorState(move.mRef, move.mState);
+            applyDoorState(move.mRef, move.mState, move.mLockLevel);
             // Relay onward verbatim (origin preserved): the reporting peer skips its echo, every
             // other peer applies. Even if the host couldn't resolve the door yet, the record
             // above re-asserts it once its cell loads.
@@ -3195,7 +3231,7 @@ namespace MWNet
             if (move.mState > static_cast<std::uint8_t>(MWWorld::DoorState::Closing))
                 continue;
             mDoorStates[move.mRef] = move.mState;
-            applyDoorState(move.mRef, move.mState);
+            applyDoorState(move.mRef, move.mState, move.mLockLevel);
         }
     }
 
@@ -3205,8 +3241,11 @@ namespace MWNet
         // the shared world yet.
         if (isNetworkClient() && !mLocalPlayerReady)
             return;
+        // State-only re-apply: mDoorStates records the pose, not the lock. A door whose lock the host
+        // changed while this cell was unloaded here converges at the host's next periodic re-assert
+        // (which reads the door's live lock), not on this load — a brief, non-visible lag.
         for (const auto& [ref, state] : mDoorStates)
-            applyDoorState(ref, state);
+            applyDoorState(ref, state, std::nullopt);
     }
 
     void Replicator::reportScriptRun(const ESM::RefId& name, bool running, const MWWorld::Ptr& target)

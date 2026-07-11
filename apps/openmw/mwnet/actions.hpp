@@ -286,6 +286,11 @@ namespace MWNet
     {
         ESM::RefNum mRef;
         std::uint8_t mState = 0; // MWWorld::DoorState: 0 idle (snapped shut), 1 opening, 2 closing
+        // The door's CellRef lock level (signed: > 0 locked at that pick difficulty; <= 0 unlocked,
+        // the magnitude remembered). Carried on every move and on a bare lock/unlock so a client's
+        // lockpick, a key, or a scripted Lock/Unlock reaches every peer — otherwise a shared door a
+        // client opened stays locked for the host and everyone else. Applied change-guarded.
+        std::int32_t mLockLevel = 0;
         ESM::RefNum mOrigin; // reporting peer's wire id, for echo suppression
 
         friend bool operator==(const DoorMove&, const DoorMove&) = default;
