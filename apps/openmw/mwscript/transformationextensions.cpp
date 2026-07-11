@@ -16,6 +16,8 @@
 #include "../mwbase/luamanager.hpp"
 #include "../mwbase/world.hpp"
 
+#include "../mwnet/replicator.hpp"
+
 #include "../mwworld/cellstore.hpp"
 #include "../mwworld/class.hpp"
 #include "../mwworld/manualref.hpp"
@@ -39,6 +41,31 @@ namespace MWScript
             MWBase::Environment::get().getWorld()->getActorsStandingOn(ptr, actors);
             for (auto& actor : actors)
                 MWBase::Environment::get().getWorld()->moveObjectBy(actor, diff, false);
+        }
+
+        // Multiplayer: scripted spawns (PlaceItem/PlaceItemCell/PlaceAtPC/PlaceAtMe) are
+        // host-authoritative. A networked client must place nothing — the host places and replicates
+        // it. True means the caller should return without spawning. (Player-relative PlaceAtPC resolves
+        // to the host's player, a known limitation of the wider "which PC" question in MP.)
+        bool suppressScriptedPlacementOnClient()
+        {
+            const MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+            return replicator != nullptr && replicator->isNetworkClient();
+        }
+
+        // Multiplayer host: give a scripted placement a shared network identity so it replicates to
+        // every client (which suppressed their own copy) — a creature adopts a reserved spawn RefNum
+        // and streams as a host-owned actor; a loose item is tracked on the item channel. A no-op off
+        // the host / in single-player, leaving the placement exactly as vanilla.
+        void routeScriptedPlacement(const MWWorld::Ptr& placed)
+        {
+            MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+            if (replicator == nullptr || !replicator->isAuthority())
+                return;
+            if (placed.getClass().isActor())
+                MWBase::Environment::get().getWorld()->assignNetworkSpawnRefNum(placed);
+            else
+                replicator->markNetworkItem(placed.getCellRef().getRefNum());
         }
 
         template <class R>
@@ -519,6 +546,11 @@ namespace MWScript
                 Interpreter::Type_Float zRotDegrees = runtime[0].mFloat;
                 runtime.pop();
 
+                // Client suppression only after every argument is popped, so the interpreter stack
+                // stays balanced (an early return before the pops would corrupt it).
+                if (suppressScriptedPlacementOnClient())
+                    return;
+
                 MWWorld::CellStore* const store = MWBase::Environment::get().getWorldModel()->findCell(cellName);
                 if (store == nullptr)
                 {
@@ -539,6 +571,7 @@ namespace MWScript
                 ref.getPtr().getCellRef().setPosition(pos);
                 MWWorld::Ptr placed = MWBase::Environment::get().getWorld()->placeObject(ref.getPtr(), store, pos);
                 placed.getClass().adjustPosition(placed, true);
+                routeScriptedPlacement(placed);
             }
         };
 
@@ -558,6 +591,10 @@ namespace MWScript
                 runtime.pop();
                 Interpreter::Type_Float zRotDegrees = runtime[0].mFloat;
                 runtime.pop();
+
+                // Client suppression only after every argument is popped (see OpPlaceItemCell).
+                if (suppressScriptedPlacementOnClient())
+                    return;
 
                 MWWorld::Ptr player = MWMechanics::getPlayer();
 
@@ -585,6 +622,7 @@ namespace MWScript
                 ref.getPtr().getCellRef().setPosition(pos);
                 MWWorld::Ptr placed = MWBase::Environment::get().getWorld()->placeObject(ref.getPtr(), store, pos);
                 placed.getClass().adjustPosition(placed, true);
+                routeScriptedPlacement(placed);
             }
         };
 
@@ -606,6 +644,10 @@ namespace MWScript
                 Interpreter::Type_Integer direction = runtime[0].mInteger;
                 runtime.pop();
 
+                // Client suppression only after every argument is popped (see OpPlaceItemCell).
+                if (suppressScriptedPlacementOnClient())
+                    return;
+
                 if (direction < 0 || direction > 3)
                     throw std::runtime_error("invalid direction");
 
@@ -624,6 +666,7 @@ namespace MWScript
                     MWWorld::Ptr ptr = MWBase::Environment::get().getWorld()->safePlaceObject(
                         ref.getPtr(), actor, actor.getCell(), direction, distance);
                     MWBase::Environment::get().getWorld()->scaleObject(ptr, actor.getCellRef().getScale());
+                    routeScriptedPlacement(ptr);
                 }
             }
         };

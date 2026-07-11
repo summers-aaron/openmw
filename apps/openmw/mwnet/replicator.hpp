@@ -726,6 +726,15 @@ namespace MWNet
         /// picked-up host item apart from any other deletion before reporting it back.
         bool isReplicatedItem(ESM::RefNum item) const { return mReplicatedItems.count(item) != 0; }
 
+        /// Track (host only) a loose item CREATED at runtime that isn't a client's drop — a scripted
+        /// PlaceItem/PlaceAtPC of a non-actor — so sampleDelta replicates its existence to every peer
+        /// (which suppress their own scripted placement). Same channel a client's drop lands on.
+        void markNetworkItem(ESM::RefNum item)
+        {
+            if (item.isSet())
+                mNetworkItems.insert(item);
+        }
+
         /// Report (host only) that a loose item was deleted from the shared world (a pickup, or a
         /// script/NPC delete), to broadcast as a removal so every peer drops its copy.
         void reportItemRemoved(ESM::RefNum item)

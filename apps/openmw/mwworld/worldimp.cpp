@@ -1043,8 +1043,15 @@ namespace MWWorld
             //    own copy below, so the actor sees it gone at once.
             const bool isLooseItem = ptr.getClass().isItem(ptr);
             const bool isCorpse = ptr.getClass().isActor() && ptr.getClass().getCreatureStats(ptr).isDead();
+            // A host-spawned dynamic actor (a summon or any other dynamic spawn) deleted while still
+            // alive — a scripted Disable/delete, or a leveled list re-roll deleting its previous
+            // creature — must vanish for every peer too, not only once it is a corpse. Its reserved
+            // RefNum marks it; without this, clients would keep rendering an orphaned copy.
+            const bool isDynamicActor
+                = ptr.getClass().isActor() && MWNet::isReservedSpawn(ptr.getCellRef().getRefNum());
             if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
-                replicator != nullptr && ptr.getCellRef().getRefNum().isSet() && (isLooseItem || isCorpse))
+                replicator != nullptr && ptr.getCellRef().getRefNum().isSet()
+                && (isLooseItem || isCorpse || isDynamicActor))
             {
                 if (replicator->isAuthority())
                     replicator->reportItemRemoved(ptr.getCellRef().getRefNum());
@@ -3692,8 +3699,7 @@ namespace MWWorld
         // the right avatar (every avatar looked like the same player). A dedicated negative content
         // file keeps these clear of real content (>= 0), generated refs (count down from -1) and the
         // net-player wire id (-1000); the index is monotonic so it is never reused.
-        constexpr std::int32_t sNetworkPlayerRefNumContentFile = -2000;
-        ptr.getCellRef().setRefNum(ESM::RefNum{ mNextNetworkPlayerRefNum++, sNetworkPlayerRefNumContentFile });
+        ptr.getCellRef().setRefNum(ESM::RefNum{ mNextNetworkPlayerRefNum++, MWNet::sNetworkPlayerRefNumContentFile });
         mWorldModel.registerPtr(ptr);
 
         // Load and keep the player's cell active so the cell that this player occupies is simulated.
@@ -3712,8 +3718,27 @@ namespace MWWorld
         // A reserved content file, clear of real content (>= 0), generated refs (count down from -1),
         // the net-player wire id (-1000) and network-player avatars (-2000). Clients never generate
         // into it, so a host summon's RefNum can't collide with a client's local refs.
-        constexpr std::int32_t sNetworkSummonRefNumContentFile = -3000;
-        return ESM::RefNum{ mNextNetworkSummonRefNum++, sNetworkSummonRefNumContentFile };
+        return ESM::RefNum{ mNextNetworkSummonRefNum++, MWNet::sNetworkSummonRefNumContentFile };
+    }
+
+    ESM::RefNum World::reserveNetworkSpawnRefNum()
+    {
+        // The sibling of reserveNetworkSummonRefNum for a host-spawned dynamic creature that isn't a
+        // summon (leveled creature list, random encounter, scripted PlaceAt*). A distinct reserved
+        // content file so a client can tell it apart from a summon (no summon puff), while sharing the
+        // collision-proof, clients-never-generate-into-it property. Monotonic index, never reused.
+        return ESM::RefNum{ mNextNetworkSpawnRefNum++, MWNet::sNetworkSpawnRefNumContentFile };
+    }
+
+    void World::assignNetworkSpawnRefNum(const MWWorld::Ptr& ptr)
+    {
+        // copyToCell (via placeObject/safePlaceObject) already registered this ref under a freshly
+        // generated RefNum. Drop that identity before adopting the reserved spawn RefNum, so the
+        // registry doesn't keep a stale generated-RefNum -> ptr mapping (which could later mis-resolve
+        // a client-generated ref). Mirrors the client's adopt dance in Replicator::applyWorldEntity.
+        mWorldModel.deregisterLiveCellRef(*ptr.getBase());
+        ptr.getCellRef().setRefNum(reserveNetworkSpawnRefNum());
+        mWorldModel.registerPtr(ptr);
     }
 
     MWWorld::Ptr World::placeNetworkPlayer(const MWWorld::Ptr& ptr, MWWorld::CellStore& cell, const osg::Vec3f& position)
@@ -4161,6 +4186,13 @@ namespace MWWorld
 
     void World::spawnRandomCreature(const ESM::RefId& creatureList)
     {
+        // Networked client: random encounters are host-authoritative. Roll and place nothing — the
+        // host spawns the creatures and replicates them. (A client's own rest-interrupt encounter thus
+        // spawns nothing; see the waitdialog gate and the follow-up to route it to the host.)
+        MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+        if (replicator != nullptr && replicator->isNetworkClient())
+            return;
+
         const ESM::CreatureLevList* list = mStore.get<ESM::CreatureLevList>().find(creatureList);
 
         static int iNumberCreatures = mStore.get<ESM::GameSetting>().find("iNumberCreatures")->mValue.getInteger();
@@ -4174,7 +4206,10 @@ namespace MWWorld
 
             MWWorld::ManualRef ref(mStore, selectedCreature, 1);
 
-            safePlaceObject(ref.getPtr(), getPlayerPtr(), getPlayerPtr().getCell(), 0, 220.f);
+            MWWorld::Ptr placed = safePlaceObject(ref.getPtr(), getPlayerPtr(), getPlayerPtr().getCell(), 0, 220.f);
+            // Host of a networked session: reserved RefNum so the encounter replicates to clients.
+            if (replicator != nullptr && replicator->isAuthority())
+                assignNetworkSpawnRefNum(placed);
         }
     }
 

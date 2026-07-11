@@ -20,9 +20,32 @@ namespace MWNet
     /// avatar rather than matched against a local world reference.
     inline constexpr std::int32_t sNetPlayerContentFile = -1000;
 
+    /// Reserved content-file for a network-player AVATAR ref — the non-primary player the host
+    /// materializes for each connected client. Distinct from the wire id (-1000) above.
+    inline constexpr std::int32_t sNetworkPlayerRefNumContentFile = -2000;
+
+    /// Reserved content-file for a host-SUMMONED creature (not in the shared save). Like any
+    /// dynamic spawn it ships a spawn descriptor so a receiver can instantiate it, and it appears
+    /// with the summon puff (VFX_Summon_Start).
+    inline constexpr std::int32_t sNetworkSummonRefNumContentFile = -3000;
+
+    /// Reserved content-file for any OTHER host-spawned dynamic creature (leveled creature list,
+    /// random rest encounter, scripted PlaceAt*). It ships the same spawn descriptor as a summon so
+    /// a client can instantiate it, but appears with no puff — only the content-file tells them apart.
+    inline constexpr std::int32_t sNetworkSpawnRefNumContentFile = -3001;
+
     inline bool isNetPlayer(const ESM::RefNum& id)
     {
         return id.mContentFile == sNetPlayerContentFile;
+    }
+
+    /// A host-spawned dynamic actor a client cannot have from shared content or the save (a summon
+    /// or any other dynamic spawn). The host must ship a spawn descriptor for it and the client must
+    /// suppress its own spawn and adopt the host's — its RefNum carries the host's reserved identity.
+    inline bool isReservedSpawn(const ESM::RefNum& id)
+    {
+        return id.mContentFile == sNetworkSummonRefNumContentFile
+            || id.mContentFile == sNetworkSpawnRefNumContentFile;
     }
 
     /// Replicated rigid-body state for one entity: world position and Euler

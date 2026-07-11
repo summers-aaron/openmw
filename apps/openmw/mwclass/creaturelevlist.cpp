@@ -14,6 +14,8 @@
 
 #include "../mwmechanics/creaturestats.hpp"
 
+#include "../mwnet/replicator.hpp"
+
 #include "../mwbase/environment.hpp"
 #include "../mwbase/world.hpp"
 
@@ -102,6 +104,14 @@ namespace MWClass
     void CreatureLevList::insertObjectRendering(
         const MWWorld::Ptr& ptr, const std::string& model, MWRender::RenderingInterface& renderingInterface) const
     {
+        // Networked client: creature spawns are host-authoritative. Roll and place nothing — the host
+        // rolls this leveled list and its creature arrives over the snapshot channel (a reserved-RefNum
+        // spawn) for the client to render. Leaving customData untouched (mSpawn stays true) is inert:
+        // respawn() early-returns while mSpawn is true, and the levlist marker ref renders nothing.
+        if (const MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+            replicator != nullptr && replicator->isNetworkClient())
+            return;
+
         ensureCustomData(ptr);
 
         CreatureLevListCustomData& customData = ptr.getRefData().getCustomData()->asCreatureLevListCustomData();
@@ -125,7 +135,13 @@ namespace MWClass
             manualRef.getPtr().getCellRef().setScale(ptr.getCellRef().getScale());
             MWWorld::Ptr placed = MWBase::Environment::get().getWorld()->placeObject(
                 manualRef.getPtr(), ptr.getCell(), ptr.getRefData().getPosition());
-            MWBase::Environment::get().getWorldModel()->registerPtr(placed);
+            // Host of a networked session: give the spawn a reserved RefNum so it replicates to clients
+            // (which suppressed their own roll above). Single-player keeps the generated RefNum.
+            if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+                replicator != nullptr && replicator->isAuthority())
+                MWBase::Environment::get().getWorld()->assignNetworkSpawnRefNum(placed);
+            else
+                MWBase::Environment::get().getWorldModel()->registerPtr(placed);
             customData.mSpawnedActor = placed.getCellRef().getRefNum();
             customData.mSpawn = false;
         }

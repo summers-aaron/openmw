@@ -19,13 +19,18 @@ namespace MWGui
 {
     namespace
     {
-        // Multiplayer: a corpse's inventory IS a shared lootable, so syncing a take/put from it works
-        // exactly like a container. But this same model also drives the player's own inventory and a
-        // live NPC's gear (pickpocket), which must NOT sync — so report only when the owner is a dead
-        // body. On a client the take/put is resolved by the host; on the host its contents broadcast.
+        // Multiplayer: an actor's inventory IS a shared lootable when its loot window is open — a
+        // corpse, or a knocked-down actor you can steal from (the states Npc/Creature::activate opens
+        // ActionOpen for). Syncing a take/put from it works exactly like a container. This same model
+        // also drives the player's own inventory and a live NPC's gear via pickpocket (a separate
+        // model), which must NOT sync — hence the dead-or-knocked-down gate. On a client the take/put
+        // is resolved by the host; on the host its contents broadcast.
         void reportCorpseMutation(const MWWorld::Ptr& actor, const MWWorld::Ptr& item, int count, bool take)
         {
-            if (!actor.getClass().isActor() || !actor.getClass().getCreatureStats(actor).isDead())
+            if (!actor.getClass().isActor())
+                return;
+            const MWMechanics::CreatureStats& stats = actor.getClass().getCreatureStats(actor);
+            if (!stats.isDead() && !stats.getKnockedDown())
                 return;
             MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
             if (replicator == nullptr)

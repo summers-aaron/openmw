@@ -109,6 +109,10 @@ namespace MWWorld
         // content file so they never collide with a client's locally-generated refs (its avatars and
         // instantiated items use the normal generated space, which a host summon would otherwise share).
         std::uint32_t mNextNetworkSummonRefNum = 1;
+        // The same, for host-spawned dynamic creatures that aren't summons (leveled lists, random
+        // encounters, scripted PlaceAt*), in its own reserved content file so a client renders them
+        // without the summon puff. See reserveNetworkSpawnRefNum.
+        std::uint32_t mNextNetworkSpawnRefNum = 1;
         // Dedicated server: the primary player is a stationary placeholder (no human controls it), so
         // the navmesh must follow the network avatars instead of it. Set by the engine at startup.
         bool mDedicatedServer = false;
@@ -268,6 +272,8 @@ namespace MWWorld
         std::vector<MWWorld::SimulationAnchor> getSimulationAnchors() const override;
         bool applyNetworkCharacter(std::size_t index, const std::string& recordBlob) override;
         ESM::RefNum reserveNetworkSummonRefNum() override;
+        ESM::RefNum reserveNetworkSpawnRefNum() override;
+        void assignNetworkSpawnRefNum(const MWWorld::Ptr& ptr) override;
         // Mark this World as belonging to a dedicated server (no local human player). The primary
         // placeholder is flagged as a non-anchor, so simulation (navmesh, actor AI, cell
         // keep-alive) follows the network avatars rather than the stationary placeholder.

@@ -775,10 +775,22 @@ namespace MWNet
             if (!id.isSet())
                 continue; // no stable network identity (e.g. the player ref, sent above)
 
-            // A summon carries its spawn descriptor (creature RefId) and cell so a receiver that has
+            // Any host-spawned dynamic creature the receiver can't have from shared content/save — a
+            // summon OR any other reserved-RefNum spawn (leveled list, random encounter, scripted
+            // PlaceAt*) — carries its spawn descriptor (creature RefId) and cell so a receiver that has
             // never seen it can instantiate it; both are sent every tick it's replicated (cheap — few
-            // summons) so it appears promptly rather than waiting for the next full refresh.
-            const bool isSummon = summons.contains(id);
+            // such actors) so it appears promptly rather than waiting for the next full refresh. A
+            // summon is additionally tracked in `summons` for the effect-ended removal below.
+            const bool needsSpawnDescriptor = MWNet::isReservedSpawn(id);
+            // Once an actor is lootable (dead, or knocked down), its gear is host-authoritative through
+            // the CONTAINER channel: applyContainerState re-dresses a corpse in its remaining gear and
+            // drops whatever a peer took. Re-asserting its worn slots via the equipment channel too
+            // would fight that — applyEquipment conjures back an equipped item a client just looted, so
+            // the loot appears to "come back". Stop sampling equipment once lootable; the last live
+            // sample already dressed it and the container channel keeps it in step from here.
+            const bool lootable = actor.getClass().isActor()
+                && (actor.getClass().getCreatureStats(actor).isDead()
+                    || actor.getClass().getCreatureStats(actor).getKnockedDown());
             const ESM::Position& position = actor.getRefData().getPosition();
             include(id,
                 TransformState{ position.asVec3(), osg::Vec3f(position.rot[0], position.rot[1], position.rot[2]) },
@@ -788,10 +800,10 @@ namespace MWNet
                 // deterministic roll usually matches, but when it can't (a host save carrying an
                 // older roll, peers at different levels resolving a level-gated list differently)
                 // this re-dresses the NPC to what the host — whose store is also what a loot
-                // window shows — actually equipped.
-                fullSnapshot ? sampleEquipment(actor) : std::nullopt,
-                isSummon ? sampleCellId(actor) : std::nullopt, std::nullopt,
-                isSummon ? std::optional(actor.getCellRef().getRefId().serializeText()) : std::nullopt);
+                // window shows — actually equipped. Suppressed once lootable (see above).
+                (fullSnapshot && !lootable) ? sampleEquipment(actor) : std::nullopt,
+                needsSpawnDescriptor ? sampleCellId(actor) : std::nullopt, std::nullopt,
+                needsSpawnDescriptor ? std::optional(actor.getCellRef().getRefId().serializeText()) : std::nullopt);
 
             // Host: an actor's inventory is host-authoritative. The first time it's replicated,
             // record its resolved contents and broadcast them on the container channel, so every
@@ -1783,9 +1795,10 @@ namespace MWNet
         MWBase::World& world = *MWBase::Environment::get().getWorld();
         MWWorld::WorldModel& worldModel = *MWBase::Environment::get().getWorldModel();
 
-        // A summoned creature isn't in the shared save: instantiate it the first time we see it
-        // (like a loose item), adopting the host's RefNum, then fall through to the world-entity
-        // drive below which marks it remote-owned and applies its transform/stats/animation.
+        // A host-spawned dynamic creature (a summon or any other reserved-RefNum spawn — leveled list,
+        // random encounter, scripted PlaceAt*) isn't in the shared save: instantiate it the first time
+        // we see it (like a loose item), adopting the host's RefNum, then fall through to the
+        // world-entity drive below which marks it remote-owned and applies its transform/stats/anim.
         if (entity.mCreature && worldModel.getPtr(entity.mId).isEmpty())
         {
             const MWWorld::Ptr localPlayer = world.getPlayerPtr();
@@ -1803,13 +1816,20 @@ namespace MWNet
                 worldModel.deregisterLiveCellRef(*placed.getBase()); // adopt the host's RefNum
                 placed.getCellRef().setRefNum(entity.mId);
                 worldModel.registerPtr(placed);
-                mInstantiatedSummons.insert(entity.mId); // so its despawn plays the end VFX
-                // Play the summon-start VFX where the host attaches it on spawn, so the creature
-                // appears with a puff rather than popping into existence.
-                if (const ESM::Static* fx
-                    = world.getStore().get<ESM::Static>().search(ESM::RefId::stringRefId("VFX_Summon_Start")))
-                    world.spawnEffect(Misc::ResourceHelpers::correctMeshPath(VFS::Path::Normalized(fx->mModel)), "",
-                        entity.mTransform->mPosition);
+                // Only a SUMMON gets the summon cosmetics — the start puff here and the end puff its
+                // despawn plays (mInstantiatedSummons). A plain dynamic spawn (a leveled rat, a scripted
+                // creature) just pops in quietly; both share this instantiation path, the content-file
+                // tells them apart.
+                if (entity.mId.mContentFile == sNetworkSummonRefNumContentFile)
+                {
+                    mInstantiatedSummons.insert(entity.mId);
+                    // Play the summon-start VFX where the host attaches it on spawn, so the creature
+                    // appears with a puff rather than popping into existence.
+                    if (const ESM::Static* fx
+                        = world.getStore().get<ESM::Static>().search(ESM::RefId::stringRefId("VFX_Summon_Start")))
+                        world.spawnEffect(Misc::ResourceHelpers::correctMeshPath(VFS::Path::Normalized(fx->mModel)),
+                            "", entity.mTransform->mPosition);
+                }
             }
             catch (const std::exception&)
             {
@@ -1937,7 +1957,12 @@ namespace MWNet
                     = world.getStore().get<ESM::Static>().search(ESM::RefId::stringRefId("VFX_Summon_End")))
                     world.spawnEffect(Misc::ResourceHelpers::correctMeshPath(VFS::Path::Normalized(fx->mModel)), "",
                         item.getRefData().getPosition().asVec3());
+            // This deletion is the host's removal being applied, not a local pickup/dispose — the
+            // handoff guard keeps deleteObject's hook from reporting it back to the host (a live
+            // reserved-spawn actor would otherwise echo as a spurious "take").
+            mHandingOffDrop = true;
             world.deleteObject(item);
+            mHandingOffDrop = false;
         }
     }
 

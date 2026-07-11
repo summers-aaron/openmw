@@ -496,7 +496,14 @@ namespace MWWorld
         // do this before insertCell, to make sure we don't add scripts from levelled creature spawning twice
         mWorld.getLocalScripts().addCell(&cell);
 
-        if (respawn)
+        // A networked client runs no autonomous respawn: reviving dead NPCs, clearing corpses and
+        // re-rolling container / leveled-list contents are all the host's to decide and replicate.
+        // The host (and single-player) respawns normally; its effects reach the client over the
+        // snapshot and container channels.
+        bool networkClient = false;
+        if (const MWNet::Replicator* rep = MWBase::Environment::get().getReplicator())
+            networkClient = rep->isNetworkClient();
+        if (respawn && !networkClient)
             cell.respawn();
 
         insertCell(cell, loadingListener, navigatorUpdateGuard);

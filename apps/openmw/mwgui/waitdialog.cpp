@@ -17,6 +17,8 @@
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
 
+#include "../mwnet/replicator.hpp"
+
 #include "../mwworld/cellstore.hpp"
 #include "../mwworld/class.hpp"
 #include "../mwworld/datetimemanager.hpp"
@@ -201,7 +203,11 @@ namespace MWGui
         // FIXME: move this somewhere else?
         mInterruptAt = -1;
         MWWorld::Ptr player = world->getPlayerPtr();
-        if (mSleeping && player.getCell()->isExterior())
+        // Networked client: rest encounters are host-authoritative and its spawnRandomCreature is
+        // suppressed, so don't schedule a local interrupt — it would wake the player with no creature.
+        const MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+        const bool networkClient = replicator != nullptr && replicator->isNetworkClient();
+        if (!networkClient && mSleeping && player.getCell()->isExterior())
         {
             const ESM::RefId& regionstr = player.getCell()->getCell()->getRegion();
             if (!regionstr.empty())

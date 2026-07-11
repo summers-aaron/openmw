@@ -210,6 +210,18 @@ namespace MWBase
         /// counting down from -1, would share). Monotonic index; never reused.
         virtual ESM::RefNum reserveNetworkSummonRefNum() = 0;
 
+        /// The sibling of reserveNetworkSummonRefNum for a host-spawned dynamic creature that is NOT a
+        /// summon (leveled creature list, random encounter, scripted PlaceAt*): its own reserved content
+        /// file so a client can render it without the summon puff. Monotonic index; never reused.
+        virtual ESM::RefNum reserveNetworkSpawnRefNum() = 0;
+
+        /// Host only: replace a freshly placed dynamic creature's generated RefNum with a reserved
+        /// network-spawn RefNum (reserveNetworkSpawnRefNum), re-registering it under the new identity so
+        /// no stale entry lingers. This is what makes the host's sampler ship a spawn descriptor for it
+        /// and clients adopt the host's identity rather than rolling their own. No-op is the caller's job
+        /// (gate on isAuthority()); single-player never calls it.
+        virtual void assignNetworkSpawnRefNum(const MWWorld::Ptr& ptr) = 0;
+
         /// True when this instance is a headless dedicated server (no local human player / window).
         virtual bool isDedicatedServer() const = 0;
 
