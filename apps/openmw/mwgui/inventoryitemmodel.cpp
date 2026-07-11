@@ -19,18 +19,16 @@ namespace MWGui
 {
     namespace
     {
-        // Multiplayer: an actor's inventory IS a shared lootable when its loot window is open — a
-        // corpse, or a knocked-down actor you can steal from (the states Npc/Creature::activate opens
-        // ActionOpen for). Syncing a take/put from it works exactly like a container. This same model
-        // also drives the player's own inventory and a live NPC's gear via pickpocket (a separate
-        // model), which must NOT sync — hence the dead-or-knocked-down gate. On a client the take/put
-        // is resolved by the host; on the host its contents broadcast.
-        void reportCorpseMutation(const MWWorld::Ptr& actor, const MWWorld::Ptr& item, int count, bool take)
+        // Multiplayer: a non-player actor's inventory is host-authoritative and shared, so any take/put
+        // the player makes through this model — looting a corpse or a knocked-down actor, pickpocketing
+        // a live one (a wrapping model, but the take still flows through here), sharing a companion's
+        // pack — must sync exactly like a container. Without it the host re-asserts the actor's contents
+        // and a pickpocketed item reappears, letting the client steal it again (duplication). The gate
+        // is only "not the player's own inventory": the player's own is this client's, never shared.
+        // On a client the take/put is resolved by the host; on the host its contents rebroadcast.
+        void reportSharedInventoryMutation(const MWWorld::Ptr& actor, const MWWorld::Ptr& item, int count, bool take)
         {
-            if (!actor.getClass().isActor())
-                return;
-            const MWMechanics::CreatureStats& stats = actor.getClass().getCreatureStats(actor);
-            if (!stats.isDead() && !stats.getKnockedDown())
+            if (!actor.getClass().isActor() || MWMechanics::isPlayer(actor))
                 return;
             MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
             if (replicator == nullptr)
@@ -78,7 +76,7 @@ namespace MWGui
 
     MWWorld::Ptr InventoryItemModel::addItem(const ItemStack& item, size_t count, bool allowAutoEquip)
     {
-        reportCorpseMutation(mActor, item.mBase, static_cast<int>(count), /*take=*/false);
+        reportSharedInventoryMutation(mActor, item.mBase, static_cast<int>(count), /*take=*/false);
         if (item.mBase.getContainerStore() == &mActor.getClass().getContainerStore(mActor))
             throw std::runtime_error("Item to add needs to be from a different container!");
         return *mActor.getClass().getContainerStore(mActor).add(item.mBase, static_cast<int>(count), allowAutoEquip);
@@ -86,7 +84,7 @@ namespace MWGui
 
     MWWorld::Ptr InventoryItemModel::copyItem(const ItemStack& item, size_t count, bool allowAutoEquip)
     {
-        reportCorpseMutation(mActor, item.mBase, static_cast<int>(count), /*take=*/false);
+        reportSharedInventoryMutation(mActor, item.mBase, static_cast<int>(count), /*take=*/false);
         if (item.mBase.getContainerStore() == &mActor.getClass().getContainerStore(mActor))
             throw std::runtime_error("Item to copy needs to be from a different container!");
 
@@ -97,7 +95,7 @@ namespace MWGui
 
     void InventoryItemModel::removeItem(const ItemStack& item, size_t count)
     {
-        reportCorpseMutation(mActor, item.mBase, static_cast<int>(count), /*take=*/true);
+        reportSharedInventoryMutation(mActor, item.mBase, static_cast<int>(count), /*take=*/true);
         int removed = 0;
         // Re-equipping makes sense only if a target has inventory
         if (mActor.getClass().hasInventoryStore(mActor))
