@@ -2465,6 +2465,20 @@ namespace MWNet
         const MWWorld::Ptr ptr = MWBase::Environment::get().getWorldModel()->getPtr(state.mId);
         if (ptr.isEmpty() || !ptr.isInCell())
             return; // its cell isn't loaded here; it will resolve deterministically when it loads
+        // The RefNum must resolve to something with a container store on THIS peer. It won't if it
+        // means a different object here — a generated RefNum a host actor carries can collide with a
+        // client's own locally-generated ref (a projectile, an effect), resolving to a non-container.
+        // buildContainerState applies the same guard on the sending side; without it here,
+        // getContainerStore throws "class does not have a container store" and takes the peer down
+        // (seen when a client looted a corpse whose id collided). Skip instead — it re-syncs on the
+        // next authoritative re-assert if the collision clears.
+        if (ptr.getType() != ESM::REC_CONT && !ptr.getClass().isActor())
+        {
+            Log(Debug::Verbose) << "Replicator: container state id=(" << state.mId.mIndex << ","
+                                << state.mId.mContentFile << ") resolved to non-container "
+                                << ptr.getCellRef().getRefId() << "; skipping";
+            return;
+        }
         MWWorld::ContainerStore& store = ptr.getClass().getContainerStore(ptr);
 
         // Skip if our contents already match: this avoids tearing down and rebuilding the store (and
