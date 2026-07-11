@@ -41,6 +41,7 @@
 #include "../mwbase/world.hpp"
 
 #include "../mwmechanics/aipackage.hpp"
+#include "../mwmechanics/activespells.hpp"
 #include "../mwmechanics/aisequence.hpp"
 #include "../mwmechanics/character.hpp"
 #include "../mwmechanics/creaturestats.hpp"
@@ -609,6 +610,7 @@ namespace MWNet
         mTimeSyncPending = false;
         mOutgoingRefEnables.clear();
         mOutgoingDoorMoves.clear();
+        mOutgoingSpellCasts.clear();
         // The script overrides derive from GlobalScripts (persisted in the save as REC_GSCR).
         mOutgoingScriptRuns.clear();
         mScriptOverrides.clear();
@@ -1999,6 +2001,9 @@ namespace MWNet
         // A client routed its player's summon here so the creature is host-authoritative.
         if (mIsAuthority)
             applySummonActions(batch);
+        // A client routed its player's spell cast on a host-owned actor here.
+        if (mIsAuthority)
+            applySpellCasts(batch);
     }
 
     void Replicator::applyHitActions(const ActionBatch& batch)
@@ -2227,6 +2232,7 @@ namespace MWNet
         batch.mScriptRuns = std::move(mOutgoingScriptRuns); // both ways: StartScript/StopScript
         batch.mWeatherSyncs = std::move(mOutgoingWeather); // host -> clients: per-region weather
         batch.mDoorMoves = std::move(mOutgoingDoorMoves); // both ways: interactable door swings
+        batch.mSpellCasts = std::move(mOutgoingSpellCasts); // client -> host: casts on host-owned actors
         mOutgoingHits.clear();
         mOutgoingPlayerDamages.clear();
         mOutgoingBounties.clear();
@@ -3246,6 +3252,91 @@ namespace MWNet
         // (which reads the door's live lock), not on this load — a brief, non-visible lag.
         for (const auto& [ref, state] : mDoorStates)
             applyDoorState(ref, state, std::nullopt);
+    }
+
+    void Replicator::reportSpellCast(const MWWorld::Ptr& caster, const MWWorld::Ptr& target,
+        const ESM::RefId& sourceSpellId, std::string_view displayName, const ESM::RefNum& item, std::int32_t flags,
+        std::vector<SpellEffect> effects)
+    {
+        // Only a client routes, and only its own player's casts: a client never simulates a host-owned
+        // actor's cast (its AI is ceased), and a script cast that runs here also runs on the host, which
+        // applies it authoritatively — so routing those too would double-apply.
+        if (!isNetworkClient() || isApplyingRemote() || effects.empty())
+            return;
+        if (caster.isEmpty() || caster != MWBase::Environment::get().getWorld()->getPlayerPtr())
+            return;
+        // Resolve the target the same way reportHit does: a peer's player avatar has only a
+        // this-client-local RefNum, so carry it under that peer's network id (PvP magic); a host-owned
+        // world actor is carried by its shared RefNum, which the host resolves directly.
+        ESM::RefNum targetId = target.getCellRef().getRefNum();
+        for (const auto& [netId, avatar] : mAvatars)
+        {
+            if (avatar == target)
+            {
+                targetId = netId;
+                break;
+            }
+        }
+        if (!targetId.isSet())
+            return;
+        SpellCast cast;
+        cast.mCaster = mLocalPlayerNetId;
+        cast.mTarget = targetId;
+        cast.mSourceSpellId = sourceSpellId.serializeText();
+        cast.mDisplayName = std::string(displayName);
+        cast.mItem = item;
+        cast.mFlags = flags;
+        cast.mEffects = std::move(effects);
+        cast.mOrigin = mLocalPlayerNetId;
+        mOutgoingSpellCasts.push_back(std::move(cast));
+    }
+
+    void Replicator::applySpellCasts(const ActionBatch& batch)
+    {
+        for (const SpellCast& cast : batch.mSpellCasts)
+        {
+            // PvP magic (target is another peer's player) is Direction B — routing a cast onward to
+            // the owning client so its real player holds the effect. Not handled yet; the health
+            // portion still rides the avatar hit path today, so drop the routed cast rather than
+            // apply it to the host's avatar proxy (which the real player wouldn't reflect).
+            if (isNetPlayer(cast.mTarget))
+                continue;
+            const MWWorld::Ptr target = MWBase::Environment::get().getWorldModel()->getPtr(cast.mTarget);
+            if (!isReplicableActor(target))
+                continue;
+            // The caster is the routing client's avatar (our authoritative copy of that player). It may
+            // be absent briefly on join; caster-linked effects (e.g. Absorb) then no-op, but direct
+            // damage still applies, so proceed with an empty caster rather than dropping the cast.
+            MWWorld::Ptr caster;
+            if (const auto it = mAvatars.find(cast.mCaster); it != mAvatars.end())
+                caster = it->second;
+
+            MWMechanics::ActiveSpells::ActiveSpellParams params(
+                caster, ESM::RefId::deserializeText(cast.mSourceSpellId), cast.mDisplayName, cast.mItem);
+            params.setFlag(static_cast<ESM::ActiveSpells::Flags>(cast.mFlags));
+            for (const SpellEffect& wire : cast.mEffects)
+            {
+                ESM::ActiveEffect effect;
+                effect.mEffectId = ESM::RefId::deserializeText(wire.mEffectId);
+                effect.mArg = ESM::RefId::deserializeText(wire.mArg);
+                effect.mMagnitude = 0.f;
+                effect.mMinMagnitude = wire.mMinMagnitude;
+                effect.mMaxMagnitude = wire.mMaxMagnitude;
+                effect.mDuration = wire.mDuration;
+                effect.mTimeLeft = wire.mDuration;
+                effect.mEffectIndex = wire.mEffectIndex;
+                effect.mFlags = wire.mFlags;
+                params.getEffects().push_back(effect);
+            }
+            if (params.getEffects().empty())
+                continue;
+            // The host owns this actor and ticks its ActiveSpells, so adding the spell here lets the
+            // damage/paralyze/death play out authoritatively and replicate back via the actor's
+            // stat/position snapshots — exactly like a spell the host itself cast. The scope keeps the
+            // add from being seen as a fresh local cast to re-report.
+            RemoteApplyScope scope(this);
+            target.getClass().getCreatureStats(target).getActiveSpells().addSpell(params);
+        }
     }
 
     void Replicator::reportScriptRun(const ESM::RefId& name, bool running, const MWWorld::Ptr& target)

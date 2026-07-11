@@ -296,6 +296,41 @@ namespace MWNet
         friend bool operator==(const DoorMove&, const DoorMove&) = default;
     };
 
+    /// One magic effect of a routed spell/enchant cast, mirroring ESM::ActiveEffect but only the
+    /// fields needed to reconstruct it on the owner. Magnitude is sent as min/max, not rolled — the
+    /// owner rolls, staying authoritative over its own actor's RNG, resistance and reflection.
+    struct SpellEffect
+    {
+        std::string mEffectId; // ESM::RefId serialized text (the magic effect)
+        std::string mArg; // skill/attribute RefId serialized text (empty when the effect has none)
+        float mMinMagnitude = 0.f;
+        float mMaxMagnitude = 0.f;
+        float mDuration = 0.f;
+        std::int32_t mEffectIndex = 0;
+        std::int32_t mFlags = 0; // ESM::ActiveEffect::Flags
+
+        friend bool operator==(const SpellEffect&, const SpellEffect&) = default;
+    };
+
+    /// client -> host: a player cast a spell/enchant on a host-owned actor. A magic effect is not
+    /// applied where it's cast — it's added to the target's ActiveSpells and ticked every frame by
+    /// the actor's owner. So a client can't apply it to the host's replica (the host would overwrite
+    /// it); instead it routes the cast here and the host adds it to the authoritative actor, whose
+    /// stat/position snapshots then carry the outcome (damage, paralyze, death) back to every peer.
+    struct SpellCast
+    {
+        ESM::RefNum mCaster; // casting player's wire id
+        ESM::RefNum mTarget; // host-owned actor's shared RefNum (or a peer's wire id for PvP magic)
+        std::string mSourceSpellId; // ESM::RefId serialized text (recast/dispel/UI key)
+        std::string mDisplayName; // spell/source display name
+        ESM::RefNum mItem; // enchant source item, unset for a plain spell
+        std::int32_t mFlags = 0; // ESM::ActiveSpells::Flags
+        std::vector<SpellEffect> mEffects;
+        ESM::RefNum mOrigin; // reporting peer's wire id, for echo suppression
+
+        friend bool operator==(const SpellCast&, const SpellCast&) = default;
+    };
+
     /// A global script started or stopped outside the content defaults (StartScript/StopScript —
     /// quest machinery like escort timers and staged events). Only entries differing from the
     /// default running set ("main" + the ESM::StartScript store, which addStartup starts on every
@@ -405,6 +440,9 @@ namespace MWNet
         std::vector<WeatherSync> mWeatherSyncs;
         // both ways: interactable door swings (same flow as ref enables).
         std::vector<DoorMove> mDoorMoves;
+        // client -> host: a player's spell/enchant cast on a host-owned actor, for the host to apply
+        // to the authoritative actor (the outcome returns via the actor's stat/position snapshots).
+        std::vector<SpellCast> mSpellCasts;
 
         bool empty() const
         {
@@ -413,7 +451,7 @@ namespace MWNet
                 && mSummons.empty() && mBounties.empty() && mSpeech.empty() && mSounds.empty() && mArrests.empty()
                 && mCombatRequests.empty() && mJournalDeltas.empty() && mGlobalDeltas.empty() && mTimeSyncs.empty()
                 && mTimeRequests.empty() && mRefEnables.empty() && mScriptRuns.empty() && mWeatherSyncs.empty()
-                && mDoorMoves.empty();
+                && mDoorMoves.empty() && mSpellCasts.empty();
         }
 
         friend bool operator==(const ActionBatch&, const ActionBatch&) = default;

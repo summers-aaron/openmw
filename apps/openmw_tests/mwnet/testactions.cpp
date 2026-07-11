@@ -320,6 +320,42 @@ namespace MWNet
             EXPECT_EQ(parsed->mDoorMoves[2].mLockLevel, 100);
         }
 
+        TEST(MWNetActionsTest, spellCastsRoundTrip)
+        {
+            ActionBatch batch;
+            // A two-effect harmful spell (fire damage + a drain with a skill/attribute arg) routed by
+            // one player onto a host-owned actor, and a zero-effect cast (degenerate but must survive).
+            SpellCast fireAndDrain;
+            fireAndDrain.mCaster = ESM::RefNum{ 1, -1000 };
+            fireAndDrain.mTarget = ESM::RefNum{ 909, 2 };
+            fireAndDrain.mSourceSpellId = "fireball";
+            fireAndDrain.mDisplayName = "Fireball";
+            fireAndDrain.mItem = ESM::RefNum{ 0, 0 };
+            fireAndDrain.mFlags = 3;
+            fireAndDrain.mEffects.push_back({ "fire_damage", "", 10.f, 25.f, 0.f, 0, 0 });
+            fireAndDrain.mEffects.push_back({ "drain_skill", "longblade", 5.f, 5.f, 30.f, 1, 4 });
+            fireAndDrain.mOrigin = ESM::RefNum{ 1, -1000 };
+            batch.mSpellCasts.push_back(fireAndDrain);
+
+            SpellCast empty;
+            empty.mCaster = ESM::RefNum{ 2, -1000 };
+            empty.mTarget = ESM::RefNum{ 42, 0 };
+            empty.mOrigin = ESM::RefNum{ 2, -1000 };
+            batch.mSpellCasts.push_back(empty);
+
+            const std::optional<ActionBatch> parsed = deserializeActions(serializeActions(batch));
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(*parsed, batch);
+            ASSERT_EQ(parsed->mSpellCasts.size(), 2u);
+            ASSERT_EQ(parsed->mSpellCasts[0].mEffects.size(), 2u);
+            EXPECT_EQ(parsed->mSpellCasts[0].mSourceSpellId, "fireball");
+            EXPECT_EQ(parsed->mSpellCasts[0].mTarget.mContentFile, 2);
+            EXPECT_EQ(parsed->mSpellCasts[0].mEffects[1].mArg, "longblade");
+            EXPECT_FLOAT_EQ(parsed->mSpellCasts[0].mEffects[0].mMaxMagnitude, 25.f);
+            EXPECT_FLOAT_EQ(parsed->mSpellCasts[0].mEffects[1].mDuration, 30.f);
+            EXPECT_TRUE(parsed->mSpellCasts[1].mEffects.empty());
+        }
+
         TEST(MWNetActionsTest, rejectsEmptyBuffer)
         {
             EXPECT_FALSE(deserializeActions(std::span<const std::byte>{}).has_value());
@@ -335,10 +371,11 @@ namespace MWNet
         TEST(MWNetActionsTest, rejectsImplausibleCount)
         {
             std::vector<std::byte> bytes = serializeActions(ActionBatch{});
-            // version + 21 4-byte 0 counts (hits, playerDamages, drops, taken, containers, changes,
+            // version + 22 4-byte 0 counts (hits, playerDamages, drops, taken, containers, changes,
             // revokes, summons, bounties, speech, sounds, arrests, combatRequests, journalDeltas,
-            // globalDeltas, timeSyncs, timeRequests, refEnables, scriptRuns, weatherSyncs, doorMoves)
-            ASSERT_EQ(bytes.size(), 85u);
+            // globalDeltas, timeSyncs, timeRequests, refEnables, scriptRuns, weatherSyncs, doorMoves,
+            // spellCasts)
+            ASSERT_EQ(bytes.size(), 89u);
             for (std::size_t i = 0; i < 4; ++i)
                 bytes[1 + i] = std::byte{ 0xff }; // implausible hit count
             EXPECT_FALSE(deserializeActions(bytes).has_value());

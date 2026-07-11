@@ -8,7 +8,7 @@ namespace MWNet
 {
     namespace
     {
-        constexpr std::uint8_t sVersion = 16;
+        constexpr std::uint8_t sVersion = 17;
         // Smallest encoded CombatHit: attacker RefNum (4+4) + victim RefNum (4+4) + damage
         // (float, 4) + health-damage flag (1).
         constexpr std::uint32_t sMinHitBytes = 21;
@@ -62,6 +62,13 @@ namespace MWNet
         constexpr std::uint32_t sMinWeatherSyncBytes = 16;
         // Encoded DoorMove: ref RefNum (4 + 4) + state (1) + lock level (4) + origin RefNum (4 + 4).
         constexpr std::uint32_t sMinDoorMoveBytes = 21;
+        // Encoded SpellCast with zero effects: caster RefNum (4 + 4) + target RefNum (4 + 4) +
+        // zero-length spell id (4) + zero-length name (4) + item RefNum (4 + 4) + flags (4) +
+        // effect count (4) + origin RefNum (4 + 4).
+        constexpr std::uint32_t sMinSpellCastBytes = 48;
+        // Encoded SpellEffect: zero-length effect id (4) + zero-length arg (4) + min/max/duration
+        // (3 * 4) + effect index (4) + flags (4).
+        constexpr std::uint32_t sMinSpellEffectBytes = 28;
 
         void writeContainerItem(ByteWriter& writer, const ContainerItem& item)
         {
@@ -294,6 +301,32 @@ namespace MWNet
             writer.write(move.mLockLevel);
             writer.write(move.mOrigin.mIndex);
             writer.write(move.mOrigin.mContentFile);
+        }
+        writer.write(static_cast<std::uint32_t>(batch.mSpellCasts.size()));
+        for (const SpellCast& cast : batch.mSpellCasts)
+        {
+            writer.write(cast.mCaster.mIndex);
+            writer.write(cast.mCaster.mContentFile);
+            writer.write(cast.mTarget.mIndex);
+            writer.write(cast.mTarget.mContentFile);
+            writer.writeString(cast.mSourceSpellId);
+            writer.writeString(cast.mDisplayName);
+            writer.write(cast.mItem.mIndex);
+            writer.write(cast.mItem.mContentFile);
+            writer.write(cast.mFlags);
+            writer.write(static_cast<std::uint32_t>(cast.mEffects.size()));
+            for (const SpellEffect& effect : cast.mEffects)
+            {
+                writer.writeString(effect.mEffectId);
+                writer.writeString(effect.mArg);
+                writer.write(effect.mMinMagnitude);
+                writer.write(effect.mMaxMagnitude);
+                writer.write(effect.mDuration);
+                writer.write(effect.mEffectIndex);
+                writer.write(effect.mFlags);
+            }
+            writer.write(cast.mOrigin.mIndex);
+            writer.write(cast.mOrigin.mContentFile);
         }
         return out;
     }
@@ -659,6 +692,41 @@ namespace MWNet
                 || !reader.read(move.mOrigin.mContentFile))
                 return std::nullopt;
             batch.mDoorMoves.push_back(move);
+        }
+
+        std::uint32_t spellCastCount = 0;
+        if (!reader.read(spellCastCount))
+            return std::nullopt;
+        if (spellCastCount > reader.remaining() / sMinSpellCastBytes)
+            return std::nullopt;
+        batch.mSpellCasts.reserve(spellCastCount);
+        for (std::uint32_t i = 0; i < spellCastCount; ++i)
+        {
+            SpellCast cast;
+            if (!reader.read(cast.mCaster.mIndex) || !reader.read(cast.mCaster.mContentFile)
+                || !reader.read(cast.mTarget.mIndex) || !reader.read(cast.mTarget.mContentFile)
+                || !reader.readString(cast.mSourceSpellId) || !reader.readString(cast.mDisplayName)
+                || !reader.read(cast.mItem.mIndex) || !reader.read(cast.mItem.mContentFile) || !reader.read(cast.mFlags))
+                return std::nullopt;
+            std::uint32_t effectCount = 0;
+            if (!reader.read(effectCount))
+                return std::nullopt;
+            if (effectCount > reader.remaining() / sMinSpellEffectBytes)
+                return std::nullopt;
+            cast.mEffects.reserve(effectCount);
+            for (std::uint32_t j = 0; j < effectCount; ++j)
+            {
+                SpellEffect effect;
+                if (!reader.readString(effect.mEffectId) || !reader.readString(effect.mArg)
+                    || !reader.read(effect.mMinMagnitude) || !reader.read(effect.mMaxMagnitude)
+                    || !reader.read(effect.mDuration) || !reader.read(effect.mEffectIndex)
+                    || !reader.read(effect.mFlags))
+                    return std::nullopt;
+                cast.mEffects.push_back(std::move(effect));
+            }
+            if (!reader.read(cast.mOrigin.mIndex) || !reader.read(cast.mOrigin.mContentFile))
+                return std::nullopt;
+            batch.mSpellCasts.push_back(std::move(cast));
         }
         return batch;
     }

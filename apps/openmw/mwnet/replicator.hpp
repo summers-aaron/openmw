@@ -219,6 +219,8 @@ namespace MWNet
         bool mTimeSyncPending = false;
         // Both ways: interactable door swings awaiting send.
         std::vector<DoorMove> mOutgoingDoorMoves;
+        // client -> host: player spell/enchant casts on host-owned actors awaiting send.
+        std::vector<SpellCast> mOutgoingSpellCasts;
         // Every interactable door commanded open/shut this session, dual-role like mRefStates: on
         // the host the authoritative last command per door (periodically re-asserted, persisted in
         // the server save's REC_NETWORK_STATE); on a client the received commands, kept even for
@@ -686,6 +688,19 @@ namespace MWNet
         /// finishes loading (next to applyRefStates), so a door opened while this cell was
         /// unloaded here stands open once it loads. Idempotent and cheap when converged.
         void applyDoorStates();
+
+        /// Client only: route the local player's spell/enchant cast on a host-owned actor to the
+        /// host, whose authoritative copy owns that actor's ActiveSpells; the outcome returns via
+        /// the actor's stat/position snapshots. A no-op off the network, while applying received
+        /// state, and unless the local player is the caster. mEffects carry min/max magnitudes for
+        /// the host to roll. The client suppresses the local apply itself (routes instead of adding).
+        void reportSpellCast(const MWWorld::Ptr& caster, const MWWorld::Ptr& target,
+            const ESM::RefId& sourceSpellId, std::string_view displayName, const ESM::RefNum& item,
+            std::int32_t flags, std::vector<SpellEffect> effects);
+
+        /// Host only: apply a client's routed spell cast to the authoritative target actor's
+        /// ActiveSpells, so the host ticks it and its snapshots carry the outcome to every peer.
+        void applySpellCasts(const ActionBatch& batch);
 
         /// Report a global script starting (running=true, with its target if any) or stopping —
         /// quest machinery like StartScript/StopScript. A no-op off the network and while
