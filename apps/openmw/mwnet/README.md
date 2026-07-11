@@ -97,6 +97,18 @@ second move).
 - **World NPCs are simulated by the host** and replicated to clients. A client stops
   running local AI on a host-owned actor (`isRemoteOwned` → cease-remote-sim), so the two
   sides don't fight over the same actor.
+- **NPC/creature inventories and equipment are host-authoritative.** An actor's
+  leveled-list loot is resolved on the host and broadcast on the container channel the
+  first time the actor is replicated (then re-asserted periodically, which also covers
+  late joiners), so the weapon a guard wields, what a pickpocket window shows, and what
+  its corpse holds are the same on every peer regardless of host-save history or player
+  level. The worn slots additionally ride the full-refresh snapshot (like an avatar's),
+  pinning the visible dress to exactly what the host equipped. As a first line of
+  defense every peer also *rolls* identically: in a networked session, leveled-list
+  fills (NPCs, creatures, containers) are seeded from the ref's shared RefNum
+  (`levelledListSeed`) from process start, so a store resolved before the broadcast
+  arrives is already almost always right. Single-player keeps the historical random
+  roll.
 - **Summoned creatures** are host-authoritative. A host NPC's summon spawns host-side and
   replicates like any NPC; a **player's** summon is intercepted on the client and routed to the
   host (a `SummonAction`), which spawns the creature bound to that player's avatar. Because the
@@ -190,11 +202,12 @@ cast, block, hit/knockdown/knockout/death, idle fidgets). Deliberately left out:
 2. Multi-anchor cell ref-counting → fix exterior accumulation (limitation #2).
 3. Disconnect handling: `removePlayer` + release kept-alive cells + drop the avatar.
 4. Host-side combat validation (limitation #4).
-5. Broaden replicated world state and world script state. Container contents, loose floor
-   items and interactable door swings already cross the wire (doors as `DoorMove`: the
-   commanded open/close/snap-shut edge, animated locally on each peer, re-asserted for
-   late joiners and persisted in the server save); extend item coverage to NPC death
-   drops and other host-side runtime drops.
+5. Broaden replicated world state: world script state next. Container/corpse contents,
+   NPC/creature inventories, take/put arbitration, loose floor items and interactable
+   door swings already cross the wire (doors as `DoorMove`: the commanded
+   open/close/snap-shut edge, animated locally on each peer, re-asserted for late
+   joiners and persisted in the server save). Remaining item gap: host-side runtime
+   floor drops beyond player drops.
 6. Networked navmesh strategy for headless servers, or document the host-renders
    requirement (limitation #1).
 

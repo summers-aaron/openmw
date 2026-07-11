@@ -187,6 +187,11 @@ namespace MWClass
 
             if (hasInventory)
                 getInventoryStore(ptr).autoEquip();
+
+            // Multiplayer: like an NPC, a creature's inventory is host-authoritative — apply the
+            // host's contents if they arrived before this cell loaded (no-op on the host / in SP).
+            if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+                replicator->syncContainerFromCache(ptr);
         }
     }
 

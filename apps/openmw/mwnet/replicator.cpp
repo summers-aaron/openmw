@@ -260,11 +260,20 @@ namespace MWNet
                     inv.unequipSlot(slot);
                 if (desired[slot].empty())
                     continue;
+                // Prefer an item the actor already carries (a world NPC's store is real loot, so
+                // don't grow it when the desired item is present); conjure one only when absent.
+                auto existing = inv.end();
+                for (auto it = inv.begin(); existing == inv.end() && it != inv.end(); ++it)
+                    if (it->getCellRef().getRefId() == desired[slot] && it->getCellRef().getCount() > 0)
+                        existing = it;
                 try
                 {
-                    MWWorld::ManualRef itemRef(*MWBase::Environment::get().getESMStore(), desired[slot]);
-                    const auto added = inv.add(itemRef.getPtr(), 1, /*allowAutoEquip=*/false);
-                    inv.equip(slot, added);
+                    if (existing == inv.end())
+                    {
+                        MWWorld::ManualRef itemRef(*MWBase::Environment::get().getESMStore(), desired[slot]);
+                        existing = inv.add(itemRef.getPtr(), 1, /*allowAutoEquip=*/false);
+                    }
+                    inv.equip(slot, existing);
                 }
                 catch (const std::exception&)
                 {
@@ -772,8 +781,23 @@ namespace MWNet
             include(id,
                 TransformState{ position.asVec3(), osg::Vec3f(position.rot[0], position.rot[1], position.rot[2]) },
                 sampleStats(actor), sampleDrawState(actor), sampleMoveFlags(actor), sampleSwing(actor, id),
-                sampleSpeed(actor), std::nullopt, std::nullopt, isSummon ? sampleCellId(actor) : std::nullopt,
-                std::nullopt, isSummon ? std::optional(actor.getCellRef().getRefId().serializeText()) : std::nullopt);
+                sampleSpeed(actor), std::nullopt,
+                // Worn equipment rides the full-refresh tick (like an avatar's): the receiver's own
+                // deterministic roll usually matches, but when it can't (a host save carrying an
+                // older roll, peers at different levels resolving a level-gated list differently)
+                // this re-dresses the NPC to what the host — whose store is also what a loot
+                // window shows — actually equipped.
+                fullSnapshot ? sampleEquipment(actor) : std::nullopt,
+                isSummon ? sampleCellId(actor) : std::nullopt, std::nullopt,
+                isSummon ? std::optional(actor.getCellRef().getRefId().serializeText()) : std::nullopt);
+
+            // Host: an actor's inventory is host-authoritative. The first time it's replicated,
+            // record its resolved contents and broadcast them on the container channel, so every
+            // peer's copy — the gear it renders, and the loot its corpse will hold — is what the
+            // HOST rolled, not a local re-roll (which can differ across a host save carrying an
+            // older roll, or peers whose levels resolve a level-gated list differently).
+            if (mIsAuthority && !mAuthoritativeContainers.contains(id))
+                mDirtyContainers.insert(id);
         }
 
         // A summon that vanished from every summoner's map since last tick (its effect ended or it died)
@@ -1856,6 +1880,8 @@ namespace MWNet
             applySwing(ptr, entity.mId, *entity.mSwing);
         else
             mAppliedSwingSeq.try_emplace(entity.mId, 0); // witnessed its pre-swing state: the first real swing will play
+        if (entity.mEquipment)
+            applyEquipment(ptr, *entity.mEquipment); // dress it as the host does (no-op when already matching)
         return true;
     }
 
@@ -2348,7 +2374,16 @@ namespace MWNet
         {
             for (const auto& [id, state] : mAuthoritativeContainers)
             {
-                applyContainerState(state);
+                // A LIVE actor's store is the truth and the record follows it (its own simulation
+                // may re-equip or consume items; re-applying a stale record would revert that) —
+                // marking it dirty below rebuilds the record from the store before broadcasting.
+                // Containers and corpses stay record-driven: the record is the loot arbitration
+                // result, and re-applying restores a store rolled back by a cell unload/reload.
+                const MWWorld::Ptr ptr = MWBase::Environment::get().getWorldModel()->getPtr(id);
+                const bool liveActor = !ptr.isEmpty() && ptr.getClass().isActor()
+                    && !ptr.getClass().getCreatureStats(ptr).isDead();
+                if (!liveActor)
+                    applyContainerState(state);
                 mDirtyContainers.insert(id);
             }
         }
@@ -2372,9 +2407,11 @@ namespace MWNet
         if (ptr.isEmpty() || !ptr.isInCell())
             return std::nullopt;
         const bool isContainer = ptr.getType() == ESM::REC_CONT;
-        const bool isCorpse = ptr.getClass().isActor() && ptr.getClass().getCreatureStats(ptr).isDead();
-        if (!isContainer && !isCorpse)
-            return std::nullopt; // a live actor's gear / the player's inventory isn't a shared lootable
+        // Actors are included alive or dead: a live host-owned actor's inventory is broadcast so
+        // every peer carries the host's roll (and its corpse needs no reconciliation on death).
+        // The player's own inventory never crosses here (players aren't sampled as world refs).
+        if (!isContainer && !ptr.getClass().isActor())
+            return std::nullopt;
         ContainerState state;
         state.mId = id;
         MWWorld::ContainerStore& store = ptr.getClass().getContainerStore(ptr);
