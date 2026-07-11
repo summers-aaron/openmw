@@ -245,9 +245,9 @@ namespace MWMechanics
 
             if (Misc::Rng::roll0to99(world->getPrng()) >= getHitChance(attacker, victim, skillValue))
             {
-                // Remote-owned victim (shared-world actor): a client's miss still aggros a host NPC, so
+                // Host-owned victim (shared-world actor): a client's miss still aggros a host NPC, so
                 // report a zero-damage hit; never apply locally to the replica the host owns.
-                if (victim.getRefData().isRemoteOwned())
+                if (isNetworkRemoteActor(victim))
                 {
                     MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
                     if (replicator && !replicator->isAuthority() && attacker == getPlayer())
@@ -306,7 +306,7 @@ namespace MWMechanics
         // the damage is fully resolved above, so hand it across the network rather than applying it to a
         // remote-owned replica (which the host's snapshots would just overwrite). A client asks the host
         // to resolve its hit; the host tells the avatar's owning client it was hit.
-        if (validVictim && victim.getRefData().isRemoteOwned())
+        if (validVictim && isNetworkRemoteActor(victim))
         {
             if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
             {

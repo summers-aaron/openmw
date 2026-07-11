@@ -1457,7 +1457,7 @@ namespace MWMechanics
             // one's — nor with remote-owned actors, whose motion is replicated from the
             // owning peer and would fight a locally computed correction. They still
             // remain in the cache above so others give way to them.
-            if (world->isPlayer(ptr) || ptr.getRefData().isRemoteOwned())
+            if (world->isPlayer(ptr) || isNetworkRemoteActor(ptr))
                 continue;
 
             const float maxSpeed = cached.mMaxSpeed;
@@ -1654,9 +1654,10 @@ namespace MWMechanics
                 // Cease-remote-sim (M11): an actor owned by the host on a network client is
                 // driven purely by applied snapshots, so skip its local AI/movement/character
                 // update — otherwise the local simulation fights the authoritative pose and the
-                // actor jitters. In single-player nothing is ever flagged remote-owned, so this
-                // is byte-identical.
-                if (actor.getPtr().getRefData().isRemoteOwned())
+                // actor jitters. On a client this holds for every world actor from the moment it
+                // loads (isNetworkRemoteActor), not only once the host's first snapshot claims it,
+                // so it never runs a frame of divergent AI. In single-player this is byte-identical.
+                if (isNetworkRemoteActor(actor.getPtr()))
                 {
                     // Head-tracking is the exception: it is cosmetic, never leaves this machine,
                     // and is not carried by snapshots. Run it locally so host-driven NPCs still
@@ -1953,11 +1954,11 @@ namespace MWMechanics
             if (!stats.isDead())
                 continue;
 
-            // A remote-owned actor died in the shared world: the host already resolved the
+            // A host-owned actor died in the shared world: the host already resolved the
             // authoritative consequences (soul trap, kill counts, the actorDied Lua hook), so
             // here we only play the death animation and do the local visual/physics cleanup —
             // re-running the consequences on every client would double-count and double-fire.
-            const bool remoteOwned = actor.getPtr().getRefData().isRemoteOwned();
+            const bool remoteOwned = isNetworkRemoteActor(actor.getPtr());
 
             MWBase::Environment::get().getWorld()->removeActorPath(actor.getPtr());
             CharacterController::KillResult killResult = actor.getCharacterController().kill();

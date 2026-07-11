@@ -304,10 +304,12 @@ namespace MWClass
         if (!MWMechanics::isInMeleeReach(ptr, victim, MWMechanics::getMeleeWeaponReach(ptr, weapon)))
             return;
 
-        // A remote-owned victim is a remote player's avatar (creatures never attack our own
+        // A host-owned victim is a remote player's avatar (creatures never attack our own
         // player, only NPCs do). On the host we resolve the hit below and report the damage to
-        // the owning client instead of applying it locally; a miss needs no report.
-        const bool remoteVictim = victim.getRefData().isRemoteOwned();
+        // the owning client instead of applying it locally; a miss needs no report. (This runs on
+        // the host — a client's host-owned creatures are cease-remote-sim'd — where the helper is
+        // just the flag.)
+        const bool remoteVictim = MWMechanics::isNetworkRemoteActor(victim);
 
         if (!success)
         {

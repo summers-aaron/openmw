@@ -649,9 +649,9 @@ namespace MWClass
         // rather than this peer. We still run the full local damage formula below (so the
         // reported number is the real one), but instead of applying it we hand it across the
         // network: a client asks the host to resolve its hit; the host tells the owning client
-        // its player (avatar) was hit. In single-player nothing is remote-owned, so this never
-        // triggers.
-        const bool remoteVictim = victim.getRefData().isRemoteOwned();
+        // its player (avatar) was hit. On a client this covers every host-owned victim from
+        // cell-load, not just once claimed. In single-player nothing is remote, so this never fires.
+        const bool remoteVictim = MWMechanics::isNetworkRemoteActor(victim);
 
         if (ptr == MWMechanics::getPlayer())
             MWBase::Environment::get().getWindowManager()->setEnemy(victim);

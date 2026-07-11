@@ -3,8 +3,11 @@
 #include "../mwbase/environment.hpp"
 #include "../mwbase/world.hpp"
 
+#include "../mwnet/replicator.hpp"
+
 #include "../mwworld/class.hpp"
 #include "../mwworld/player.hpp"
+#include "../mwworld/refdata.hpp"
 
 #include "../mwmechanics/creaturestats.hpp"
 #include "../mwmechanics/magiceffects.hpp"
@@ -31,6 +34,19 @@ namespace MWMechanics
     bool isPlayer(const MWWorld::ConstPtr& ptr)
     {
         return MWBase::Environment::get().getWorld()->isPlayer(ptr);
+    }
+
+    bool isNetworkRemoteActor(const MWWorld::Ptr& actor)
+    {
+        if (actor.isEmpty())
+            return false;
+        if (actor.getRefData().isRemoteOwned())
+            return true; // already claimed by the host (also the only path on the host / in SP)
+        const MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+        // On a client every world actor is the host's; the local player is this client's own. Peer
+        // avatars are players too but are already flagged remote-owned above, so excluding all players
+        // here still leaves them remote — it only spares the local player from cease-remote-sim.
+        return replicator != nullptr && replicator->isNetworkClient() && !isPlayer(actor);
     }
 
     bool isPlayerInCombat()
