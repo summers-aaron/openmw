@@ -95,6 +95,11 @@ namespace MWScript
                 Interpreter::Type_Integer count = runtime[0].mInteger;
                 runtime.pop();
 
+                // Multiplayer: a host-owned actor's inventory is host-authoritative (the host runs
+                // this and replicates it); a networked client must not mutate it locally.
+                if (MWScript::suppressClientMutation(ptr))
+                    return;
+
                 if (!MWBase::Environment::get().getESMStore()->find(item))
                 {
                     runtime.getContext().report("Failed to add item '" + item.getRefIdString() + "': unknown ID");
@@ -223,6 +228,10 @@ namespace MWScript
                 Interpreter::Type_Integer count = runtime[0].mInteger;
                 runtime.pop();
 
+                // Multiplayer: host-owned actor inventory is host-authoritative; skip on a client.
+                if (MWScript::suppressClientMutation(ptr))
+                    return;
+
                 if (!MWBase::Environment::get().getESMStore()->find(item))
                 {
                     runtime.getContext().report("Failed to remove item '" + item.getRefIdString() + "': unknown ID");
@@ -314,6 +323,10 @@ namespace MWScript
 
                 ESM::RefId item = ESM::RefId::stringRefId(runtime.getStringLiteral(runtime[0].mInteger));
                 runtime.pop();
+
+                // Multiplayer: host-owned actor equipment is host-authoritative; skip on a client.
+                if (MWScript::suppressClientMutation(ptr))
+                    return;
 
                 MWWorld::InventoryStore& invStore = ptr.getClass().getInventoryStore(ptr);
                 auto found = invStore.end();

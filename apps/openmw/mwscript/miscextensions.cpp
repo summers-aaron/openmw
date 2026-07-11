@@ -725,6 +725,13 @@ namespace MWScript
                 if (!ptr.getClass().isActor())
                     return;
 
+                // Multiplayer: a host-owned actor's inventory is host-authoritative — the host runs
+                // this Drop and replicates it. A networked client must not drop locally, or it fights
+                // the host's equipment re-assertion and spawns the item endlessly (a freed slave's
+                // bracer). See MWScript::suppressClientMutation.
+                if (MWScript::suppressClientMutation(ptr))
+                    return;
+
                 MWWorld::InventoryStore* invStorePtr = nullptr;
                 if (ptr.getClass().hasInventoryStore(ptr))
                 {
