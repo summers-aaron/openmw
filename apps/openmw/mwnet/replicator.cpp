@@ -2001,9 +2001,9 @@ namespace MWNet
         // A client routed its player's summon here so the creature is host-authoritative.
         if (mIsAuthority)
             applySummonActions(batch);
-        // A client routed its player's spell cast on a host-owned actor here.
-        if (mIsAuthority)
-            applySpellCasts(batch);
+        // Spell casts route both ways: a client's cast on a host actor (host applies), and a cast on a
+        // player's avatar relayed to that player's client (client applies to its real player).
+        applySpellCasts(batch);
     }
 
     void Replicator::applyHitActions(const ActionBatch& batch)
@@ -3254,33 +3254,67 @@ namespace MWNet
             applyDoorState(ref, state, std::nullopt);
     }
 
+    bool Replicator::isSpellTargetOwnedElsewhere(const MWWorld::Ptr& target) const
+    {
+        if (target.isEmpty() || !isNetworked())
+            return false;
+        if (isNetworkClient())
+            // A client owns only its own player; every world actor and peer avatar is simulated elsewhere.
+            return target != MWBase::Environment::get().getWorld()->getPlayerPtr();
+        // The host owns every world actor except remote players' avatars (owned by their clients).
+        for (const auto& [netId, avatar] : mAvatars)
+            if (avatar == target)
+                return true;
+        return false;
+    }
+
+    ESM::RefNum Replicator::spellActorWireId(const MWWorld::Ptr& actor) const
+    {
+        if (actor.isEmpty())
+            return {};
+        // The local player (a client, or a listen-server host) and each remote player's avatar carry
+        // their network id, so the receiver resolves the real player rather than a meaningless local
+        // ref. Every other actor is a shared world ref carried by its RefNum.
+        if (mLocalPlayerNetId.isSet() && actor == MWBase::Environment::get().getWorld()->getPlayerPtr())
+            return mLocalPlayerNetId;
+        for (const auto& [netId, avatar] : mAvatars)
+            if (avatar == actor)
+                return netId;
+        return actor.getCellRef().getRefNum();
+    }
+
+    MWWorld::Ptr Replicator::resolveSpellActor(const ESM::RefNum& id) const
+    {
+        if (!id.isSet())
+            return {};
+        if (isNetPlayer(id))
+        {
+            if (id == mLocalPlayerNetId)
+                return MWBase::Environment::get().getWorld()->getPlayerPtr();
+            if (const auto it = mAvatars.find(id); it != mAvatars.end())
+                return it->second;
+            return {};
+        }
+        return MWBase::Environment::get().getWorldModel()->getPtr(id);
+    }
+
     void Replicator::reportSpellCast(const MWWorld::Ptr& caster, const MWWorld::Ptr& target,
         const ESM::RefId& sourceSpellId, std::string_view displayName, const ESM::RefNum& item, std::int32_t flags,
         std::vector<SpellEffect> effects)
     {
-        // Only a client routes, and only its own player's casts: a client never simulates a host-owned
-        // actor's cast (its AI is ceased), and a script cast that runs here also runs on the host, which
-        // applies it authoritatively — so routing those too would double-apply.
-        if (!isNetworkClient() || isApplyingRemote() || effects.empty())
+        if (!isNetworked() || isApplyingRemote() || effects.empty())
             return;
-        if (caster.isEmpty() || caster != MWBase::Environment::get().getWorld()->getPlayerPtr())
-            return;
-        // Resolve the target the same way reportHit does: a peer's player avatar has only a
-        // this-client-local RefNum, so carry it under that peer's network id (PvP magic); a host-owned
-        // world actor is carried by its shared RefNum, which the host resolves directly.
-        ESM::RefNum targetId = target.getCellRef().getRefNum();
-        for (const auto& [netId, avatar] : mAvatars)
-        {
-            if (avatar == target)
-            {
-                targetId = netId;
-                break;
-            }
-        }
+        const ESM::RefNum targetId = spellActorWireId(target);
+        const ESM::RefNum casterId = spellActorWireId(caster);
         if (!targetId.isSet())
             return;
+        // A client sends only its own player's casts: a scripted/AI cast that reaches a client also
+        // runs on the host, which applies it authoritatively, so routing it too would double-apply.
+        // (The host reaches here only for a cast landing on a player's avatar, which always routes.)
+        if (isNetworkClient() && casterId != mLocalPlayerNetId)
+            return;
         SpellCast cast;
-        cast.mCaster = mLocalPlayerNetId;
+        cast.mCaster = casterId;
         cast.mTarget = targetId;
         cast.mSourceSpellId = sourceSpellId.serializeText();
         cast.mDisplayName = std::string(displayName);
@@ -3291,51 +3325,64 @@ namespace MWNet
         mOutgoingSpellCasts.push_back(std::move(cast));
     }
 
+    void Replicator::applySpellCastToActor(const SpellCast& cast, const MWWorld::Ptr& target)
+    {
+        if (target.isEmpty() || cast.mEffects.empty())
+            return;
+        // The caster resolves to our copy of the casting actor (an avatar, the local player, or a world
+        // actor). It may be absent briefly on join; caster-linked effects (e.g. Absorb) then no-op, but
+        // direct effects still apply, so proceed with an empty caster rather than dropping the cast.
+        const MWWorld::Ptr caster = resolveSpellActor(cast.mCaster);
+        MWMechanics::ActiveSpells::ActiveSpellParams params(
+            caster, ESM::RefId::deserializeText(cast.mSourceSpellId), cast.mDisplayName, cast.mItem);
+        params.setFlag(static_cast<ESM::ActiveSpells::Flags>(cast.mFlags));
+        for (const SpellEffect& wire : cast.mEffects)
+        {
+            ESM::ActiveEffect effect;
+            effect.mEffectId = ESM::RefId::deserializeText(wire.mEffectId);
+            effect.mArg = ESM::RefId::deserializeText(wire.mArg);
+            effect.mMagnitude = 0.f;
+            effect.mMinMagnitude = wire.mMinMagnitude;
+            effect.mMaxMagnitude = wire.mMaxMagnitude;
+            effect.mDuration = wire.mDuration;
+            effect.mTimeLeft = wire.mDuration;
+            effect.mEffectIndex = wire.mEffectIndex;
+            effect.mFlags = wire.mFlags;
+            params.getEffects().push_back(effect);
+        }
+        if (params.getEffects().empty())
+            return;
+        // The receiver owns this actor and ticks its ActiveSpells, so adding the spell here lets the
+        // roll, resistance, reflection, damage and death play out authoritatively and replicate back
+        // via the actor's stat/position snapshots — exactly like a spell it cast itself. The scope
+        // keeps the add from being seen as a fresh local cast to re-report.
+        RemoteApplyScope scope(this);
+        target.getClass().getCreatureStats(target).getActiveSpells().addSpell(params);
+    }
+
     void Replicator::applySpellCasts(const ActionBatch& batch)
     {
         for (const SpellCast& cast : batch.mSpellCasts)
         {
-            // PvP magic (target is another peer's player) is Direction B — routing a cast onward to
-            // the owning client so its real player holds the effect. Not handled yet; the health
-            // portion still rides the avatar hit path today, so drop the routed cast rather than
-            // apply it to the host's avatar proxy (which the real player wouldn't reflect).
             if (isNetPlayer(cast.mTarget))
+            {
+                // The cast lands on a player. If it's us, apply to our real player (a host NPC's spell,
+                // PvP magic, or a spell reflected back at us) — our player owns and ticks its own
+                // ActiveSpells. If it's another player, the host relays the cast to that player's client
+                // (it owns neither peer's player); a client ignores it.
+                if (cast.mTarget == mLocalPlayerNetId)
+                    applySpellCastToActor(cast, MWBase::Environment::get().getWorld()->getPlayerPtr());
+                else if (mIsAuthority)
+                    mOutgoingSpellCasts.push_back(cast);
+                continue;
+            }
+            // The cast lands on a world actor, which only the host owns.
+            if (!mIsAuthority)
                 continue;
             const MWWorld::Ptr target = MWBase::Environment::get().getWorldModel()->getPtr(cast.mTarget);
             if (!isReplicableActor(target))
                 continue;
-            // The caster is the routing client's avatar (our authoritative copy of that player). It may
-            // be absent briefly on join; caster-linked effects (e.g. Absorb) then no-op, but direct
-            // damage still applies, so proceed with an empty caster rather than dropping the cast.
-            MWWorld::Ptr caster;
-            if (const auto it = mAvatars.find(cast.mCaster); it != mAvatars.end())
-                caster = it->second;
-
-            MWMechanics::ActiveSpells::ActiveSpellParams params(
-                caster, ESM::RefId::deserializeText(cast.mSourceSpellId), cast.mDisplayName, cast.mItem);
-            params.setFlag(static_cast<ESM::ActiveSpells::Flags>(cast.mFlags));
-            for (const SpellEffect& wire : cast.mEffects)
-            {
-                ESM::ActiveEffect effect;
-                effect.mEffectId = ESM::RefId::deserializeText(wire.mEffectId);
-                effect.mArg = ESM::RefId::deserializeText(wire.mArg);
-                effect.mMagnitude = 0.f;
-                effect.mMinMagnitude = wire.mMinMagnitude;
-                effect.mMaxMagnitude = wire.mMaxMagnitude;
-                effect.mDuration = wire.mDuration;
-                effect.mTimeLeft = wire.mDuration;
-                effect.mEffectIndex = wire.mEffectIndex;
-                effect.mFlags = wire.mFlags;
-                params.getEffects().push_back(effect);
-            }
-            if (params.getEffects().empty())
-                continue;
-            // The host owns this actor and ticks its ActiveSpells, so adding the spell here lets the
-            // damage/paralyze/death play out authoritatively and replicate back via the actor's
-            // stat/position snapshots — exactly like a spell the host itself cast. The scope keeps the
-            // add from being seen as a fresh local cast to re-report.
-            RemoteApplyScope scope(this);
-            target.getClass().getCreatureStats(target).getActiveSpells().addSpell(params);
+            applySpellCastToActor(cast, target);
         }
     }
 

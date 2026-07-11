@@ -379,6 +379,7 @@ namespace MWMechanics
         const auto caster = MWBase::Environment::get().getWorldModel()->getPtr(spellIt->mCaster);
         bool removedSpell = false;
         std::optional<ActiveSpellParams> reflected;
+        MWWorld::Ptr reflectedCaster; // who the reflected spell now emanates from (see below)
         for (auto it = spellIt->mEffects.begin(); it != spellIt->mEffects.end();)
         {
             if (it->mFlags & ESM::ActiveEffect::Flag_Remove && it->mTimeLeft <= 0.f
@@ -393,9 +394,15 @@ namespace MWMechanics
                 if (!reflected)
                 {
                     if (Settings::game().mClassicReflectedAbsorbSpellsBehavior)
+                    {
                         reflected = { *spellIt, caster };
+                        reflectedCaster = caster;
+                    }
                     else
+                    {
                         reflected = { *spellIt, ptr };
+                        reflectedCaster = ptr;
+                    }
                 }
                 auto& reflectedEffect = reflected->mEffects.emplace_back(*it);
                 reflectedEffect.mFlags
@@ -434,7 +441,11 @@ namespace MWMechanics
                     = Misc::ResourceHelpers::correctMeshPath(VFS::Path::Normalized(reflectStatic->mModel));
                 animation->addEffect(reflectStaticModel, ESM::MagicEffect::Reflect.getValue(), false);
             }
-            caster.getClass().getCreatureStats(caster).getActiveSpells().addSpell(*reflected);
+            // The reflected spell lands on the original caster. In multiplayer that caster may be a
+            // remote player's avatar (a host NPC's spell reflected back at a player) or a host actor
+            // (a player reflecting a host NPC's spell) — routeOrAddSpell sends it to whoever owns that
+            // actor's ActiveSpells rather than adding to a replica.
+            routeOrAddSpell(caster, *reflected, reflectedCaster);
         }
         if (removedSpell)
             return true;

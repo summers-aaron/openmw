@@ -289,6 +289,19 @@ namespace MWNet
 
         /// Apply one received script transition (skip-if-equal), under a RemoteApplyScope.
         void applyOneScriptRun(const ScriptRun& run);
+
+        /// The wire id an actor is carried under in a SpellCast: the local player and remote players'
+        /// avatars map to their network ids (so the receiver resolves the real player); every other
+        /// actor maps to its shared world RefNum.
+        ESM::RefNum spellActorWireId(const MWWorld::Ptr& actor) const;
+
+        /// Resolve a SpellCast wire id back to a live actor on receipt: a network id to the local
+        /// player or a peer avatar; a RefNum to the shared world actor. Empty if unresolved.
+        MWWorld::Ptr resolveSpellActor(const ESM::RefNum& id) const;
+
+        /// Rebuild the spell params from a received cast and add them to \a target's ActiveSpells
+        /// under a RemoteApplyScope, so the owner ticks it without re-reporting.
+        void applySpellCastToActor(const SpellCast& cast, const MWWorld::Ptr& target);
         // Host only: arrests (a guard caught a player's avatar) awaiting send to that player's client.
         std::vector<ArrestRequest> mOutgoingArrests;
         // Client only: requests for the host to put a host-owned actor into combat with our player
@@ -689,17 +702,24 @@ namespace MWNet
         /// unloaded here stands open once it loads. Idempotent and cheap when converged.
         void applyDoorStates();
 
-        /// Client only: route the local player's spell/enchant cast on a host-owned actor to the
-        /// host, whose authoritative copy owns that actor's ActiveSpells; the outcome returns via
-        /// the actor's stat/position snapshots. A no-op off the network, while applying received
-        /// state, and unless the local player is the caster. mEffects carry min/max magnitudes for
-        /// the host to roll. The client suppresses the local apply itself (routes instead of adding).
+        /// True when a spell landing on \a target must be routed rather than added locally, because
+        /// this peer doesn't own that actor's simulation: on a client, everything but the local
+        /// player; on the host, a remote player's avatar (owned by its client). False off the network
+        /// and for actors this peer owns (added locally). Drives MWMechanics::routeOrAddSpell.
+        bool isSpellTargetOwnedElsewhere(const MWWorld::Ptr& target) const;
+
+        /// Route a cast to the actor's owner (see routeOrAddSpell). Client -> host for a cast on a
+        /// host actor (the host applies + snapshots the outcome); host -> a player's client for a cast
+        /// on that player's avatar (its own player applies it). mEffects carry min/max magnitudes for
+        /// the owner to roll. A no-op while applying received state; a client sends only its own
+        /// player's casts (a scripted/AI cast also runs on the host, which applies it).
         void reportSpellCast(const MWWorld::Ptr& caster, const MWWorld::Ptr& target,
             const ESM::RefId& sourceSpellId, std::string_view displayName, const ESM::RefNum& item,
             std::int32_t flags, std::vector<SpellEffect> effects);
 
-        /// Host only: apply a client's routed spell cast to the authoritative target actor's
-        /// ActiveSpells, so the host ticks it and its snapshots carry the outcome to every peer.
+        /// Apply received spell casts. Host: casts on its world actors (add to the authoritative
+        /// ActiveSpells) and relays casts aimed at a player to that player's client. Client: applies a
+        /// cast aimed at its own player to its real player (a host NPC's spell, PvP magic, a reflect).
         void applySpellCasts(const ActionBatch& batch);
 
         /// Report a global script starting (running=true, with its target if any) or stopping —

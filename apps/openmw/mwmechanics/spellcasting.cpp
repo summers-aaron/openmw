@@ -24,6 +24,7 @@
 #include "../mwnet/replicator.hpp"
 
 #include "actorutil.hpp"
+#include "activespells.hpp"
 #include "creaturestats.hpp"
 #include "spelleffects.hpp"
 #include "spellutil.hpp"
@@ -250,39 +251,7 @@ namespace MWMechanics
                 if (targetIsActor)
                 {
                     if (!targetIsDeadActor)
-                    {
-                        // Multiplayer: a magic effect isn't applied here — it's added to the target's
-                        // ActiveSpells and ticked every frame by whoever owns the actor. A client
-                        // doesn't own a host actor's ActiveSpells, so adding to its replica does
-                        // nothing (the host's next snapshot overwrites it). Route our own player's cast
-                        // to the host instead (it applies + snapshots the outcome back); a scripted/AI
-                        // cast that reaches here also runs on the host, so just suppress the local add.
-                        MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
-                        if (replicator && replicator->isNetworkClient() && isNetworkRemoteActor(target))
-                        {
-                            if (!mCaster.isEmpty() && mCaster == getPlayer())
-                            {
-                                std::vector<MWNet::SpellEffect> wire;
-                                wire.reserve(params.getEffects().size());
-                                for (const auto& effect : params.getEffects())
-                                {
-                                    MWNet::SpellEffect out;
-                                    out.mEffectId = effect.mEffectId.serializeText();
-                                    out.mArg = effect.getSkillOrAttribute().serializeText();
-                                    out.mMinMagnitude = effect.mMinMagnitude;
-                                    out.mMaxMagnitude = effect.mMaxMagnitude;
-                                    out.mDuration = effect.mDuration;
-                                    out.mEffectIndex = effect.mEffectIndex;
-                                    out.mFlags = effect.mFlags;
-                                    wire.push_back(std::move(out));
-                                }
-                                replicator->reportSpellCast(
-                                    mCaster, target, mId, mSourceName, mItem, mFlags, std::move(wire));
-                            }
-                        }
-                        else
-                            target.getClass().getCreatureStats(target).getActiveSpells().addSpell(params);
-                    }
+                        routeOrAddSpell(target, params, mCaster);
                 }
                 else
                 {
@@ -626,5 +595,40 @@ namespace MWMechanics
                     castStaticModel.value(), magicEffect.mId.getRefIdString(), loop, {}, magicEffect.mParticle);
             }
         }
+    }
+
+    void routeOrAddSpell(
+        const MWWorld::Ptr& target, const ActiveSpells::ActiveSpellParams& params, const MWWorld::Ptr& caster)
+    {
+        MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+        if (replicator != nullptr && replicator->isSpellTargetOwnedElsewhere(target))
+        {
+            // This peer doesn't own the target's simulation, so adding to its replica does nothing
+            // (the owner's snapshot overwrites it). Route the cast to the owner; reportSpellCast
+            // decides whether we're the right one to send it (a client sends only its own player's
+            // casts; the host sends any cast landing on a remote player's avatar).
+            if (!params.getEffects().empty())
+            {
+                std::vector<MWNet::SpellEffect> wire;
+                wire.reserve(params.getEffects().size());
+                for (const auto& effect : params.getEffects())
+                {
+                    MWNet::SpellEffect out;
+                    out.mEffectId = effect.mEffectId.serializeText();
+                    out.mArg = effect.getSkillOrAttribute().serializeText();
+                    out.mMinMagnitude = effect.mMinMagnitude;
+                    out.mMaxMagnitude = effect.mMaxMagnitude;
+                    out.mDuration = effect.mDuration;
+                    out.mEffectIndex = effect.mEffectIndex;
+                    out.mFlags = effect.mFlags;
+                    wire.push_back(std::move(out));
+                }
+                replicator->reportSpellCast(caster, target, params.getSourceSpellId(), params.getDisplayName(),
+                    params.getItem(), params.getFlags(), std::move(wire));
+            }
+            return;
+        }
+        if (!target.isEmpty())
+            target.getClass().getCreatureStats(target).getActiveSpells().addSpell(params);
     }
 }

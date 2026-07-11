@@ -79,6 +79,7 @@ namespace MWMechanics
             ESM::RefId getEnchantment() const;
 
             const ESM::Spell* getSpell() const;
+            ESM::ActiveSpells::Flags getFlags() const { return mFlags; }
             bool hasFlag(ESM::ActiveSpells::Flags flags) const;
             void setFlag(ESM::ActiveSpells::Flags flags);
 
@@ -174,6 +175,15 @@ namespace MWMechanics
 
         void unloadActor(const MWWorld::Ptr& ptr);
     };
+
+    /// Add a spell to \a target's ActiveSpells, or — in multiplayer, when this peer doesn't own the
+    /// target's simulation (a client vs any host actor, a host vs a remote player's avatar) — route
+    /// the cast (from \a caster) to the owner over the network instead so the owner applies and
+    /// replicates it. Every site that adds a spell to an actor (a fresh cast and a reflected spell)
+    /// must go through here so the client never mutates a replica the host will overwrite, and effects
+    /// reach the actor that actually ticks them. A plain local add off the network.
+    void routeOrAddSpell(
+        const MWWorld::Ptr& target, const ActiveSpells::ActiveSpellParams& params, const MWWorld::Ptr& caster);
 }
 
 #endif
