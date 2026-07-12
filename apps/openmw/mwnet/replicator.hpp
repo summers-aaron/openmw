@@ -100,6 +100,9 @@ namespace MWNet
         // Sampling side: each actor's idle-fidget state last tick (an idle2..idle9 group playing on the
         // lower body), so a fidget emits on the discrete channel once per rising edge — like a swing.
         std::map<ESM::RefNum, bool> mWasFidgeting;
+        // Sampling side: each creature's melee-attack state last tick (an attack1..3 / swimattack1..3
+        // group on the torso), so its one-shot claw/bite emits once per rising edge — like a swing.
+        std::map<ESM::RefNum, bool> mWasCreatureAttacking;
         std::map<ESM::RefNum, SwingState> mSampledSwing;
         // Applying side: the swing counter last played on each actor, so a received swing fires its
         // segment exactly once — when the counter changes. The first counter seen for an actor is

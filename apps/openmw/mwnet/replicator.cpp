@@ -293,6 +293,16 @@ namespace MWNet
                 || group == "handtohand" || group == "spellcast";
         }
 
+        // A creature's melee attack group. Unlike an NPC's weapon groups above, a creature plays one
+        // whole animation ("attack1".."attack3", or "swimattack1".."3") full-body with no chargeable
+        // wind-up/release, so it rides the discrete channel as a single one-shot (like an idle fidget)
+        // rather than the two-phase weapon swing.
+        bool isCreatureAttackGroup(std::string_view group)
+        {
+            return group == "attack1" || group == "attack2" || group == "attack3" || group == "swimattack1"
+                || group == "swimattack2" || group == "swimattack3";
+        }
+
         // The random standing-idle variations ("idle2".."idle9") an actor's AI plays as fidgets via the
         // animation queue. Identified by name so they can ride the discrete channel like a swing.
         bool isIdleFidget(std::string_view group)
@@ -1309,9 +1319,23 @@ namespace MWNet
         }
         wasFidgeting = fidgeting;
 
+        // A creature's melee attack. It isn't a chargeable weapon swing (the wind-up path above, which
+        // only recognizes NPC weapon groups, never captures it), so — like a cast or a fidget — detect
+        // the rising edge of its attack group on the torso and emit it once for the receiver to replay.
+        const bool creatureAttacking = anim != nullptr && isCreatureAttackGroup(anim->getActiveGroup(MWRender::BoneGroup_Torso));
+        bool& wasCreatureAttacking = mWasCreatureAttacking[id];
+        if (creatureAttacking && !wasCreatureAttacking)
+        {
+            SwingState attack;
+            attack.mGroup = std::string(anim->getActiveGroup(MWRender::BoneGroup_Torso));
+            attack.mSeq = mSampledSwing[id].mSeq + 1;
+            mSampledSwing[id] = std::move(attack);
+        }
+        wasCreatureAttacking = creatureAttacking;
+
         const auto it = mSampledSwing.find(id);
         if (it == mSampledSwing.end() || it->second.mSeq == 0)
-            return std::nullopt; // this actor has not swung, cast, blocked or fidgeted yet
+            return std::nullopt; // this actor has not swung, cast, blocked, fidgeted or clawed yet
         return it->second;
     }
 
@@ -1419,6 +1443,17 @@ namespace MWNet
             animation->play("shield", MWRender::Animation::AnimPriority(MWMechanics::Priority_Block),
                 MWRender::BlendMask_LeftArm, /*autodisable=*/true, /*speedmult=*/1.f, "block start", "block stop",
                 /*startpoint=*/0.f, /*loops=*/0);
+            return;
+        }
+        // A creature's melee attack: one whole animation, played full-body at weapon priority and
+        // auto-disabled when it ends, so the receiver sees the claw/bite it never simulated (its AI is
+        // suppressed). No wind-up/release split — creatures don't charge — so it runs "start" -> "stop"
+        // once, mirroring the controller's own creature-attack play.
+        if (isCreatureAttackGroup(swing.mGroup))
+        {
+            animation->play(swing.mGroup, MWRender::Animation::AnimPriority(MWMechanics::Priority_Weapon),
+                MWRender::BlendMask_All, /*autodisable=*/true, /*speedmult=*/1.f, "start", "stop", /*startpoint=*/0.f,
+                /*loops=*/0);
             return;
         }
         // A charged weapon attack is replayed in two slices so a witness sees the same hold-then-strike
