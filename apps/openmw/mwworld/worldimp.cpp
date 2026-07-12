@@ -3742,6 +3742,13 @@ namespace MWWorld
         mWorldModel.deregisterLiveCellRef(*ptr.getBase());
         ptr.getCellRef().setRefNum(reserveNetworkSpawnRefNum());
         mWorldModel.registerPtr(ptr);
+        // placeObject already added this actor to the scene, which auto-started its local Lua scripts
+        // bound to the generated RefNum we just dropped. Those scripts can no longer resolve the object
+        // (getPtr returns empty -> "Object is not available") and never run — including omw/combat's
+        // local script, so a spawned creature processes no Hit events and can't be killed. Drop and
+        // re-start the local scripts under the reserved RefNum so it behaves like any other actor.
+        ptr.getRefData().setLuaScripts(nullptr);
+        MWBase::Environment::get().getLuaManager()->objectAddedToScene(ptr);
     }
 
     MWWorld::Ptr World::placeNetworkPlayer(const MWWorld::Ptr& ptr, MWWorld::CellStore& cell, const osg::Vec3f& position)
