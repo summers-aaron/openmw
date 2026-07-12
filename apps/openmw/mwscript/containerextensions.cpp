@@ -157,6 +157,8 @@ namespace MWScript
                             else
                                 addToStore(itemPtr, count, store, store.isResolved());
                         }
+                        // Multiplayer: replicate this host-side change to every client's copy.
+                        MWScript::reportScriptContainerChange(container);
                     }
                     return;
                 }
@@ -165,6 +167,8 @@ namespace MWScript
                     addRandomToStore(itemPtr, count, store);
                 else
                     addToStore(itemPtr, count, store);
+                // Multiplayer: replicate this host-side change to every client's copy.
+                MWScript::reportScriptContainerChange(ptr);
 
                 // Spawn a messagebox (only for items added to player's inventory and if player is talking to someone)
                 if (ptr == MWBase::Environment::get().getWorld()->getPlayerPtr())
@@ -274,6 +278,8 @@ namespace MWScript
                             if (!store.isResolved())
                                 store.remove(item, count, false, false);
                         }
+                        // Multiplayer: replicate this host-side change to every client's copy.
+                        MWScript::reportScriptContainerChange(container);
                     }
                     return;
                 }
@@ -290,6 +296,8 @@ namespace MWScript
                 }
 
                 int numRemoved = store.remove(item, count);
+                // Multiplayer: replicate this host-side change to every client's copy.
+                MWScript::reportScriptContainerChange(ptr);
 
                 // Spawn a messagebox (only for items removed from player's inventory)
                 if ((numRemoved > 0) && (ptr == MWMechanics::getPlayer()))

@@ -30,6 +30,12 @@ namespace MWScript
     /// re-assertion and loops: e.g. a client freeing a slave drops its bracer endlessly as the host
     /// keeps re-equipping it. A no-op on the host and in single-player.
     bool suppressClientMutation(const MWWorld::Ptr& actor);
+
+    /// Multiplayer: a host script just changed a world container's or actor's contents (e.g. Fargoth
+    /// planting gold in his hiding place). Mark it so its full contents replicate to every client,
+    /// exactly as the GUI take/put and harvest paths already do — scripted edits were the gap. Host
+    /// only; the player's own inventory rides the avatar upload, not the world container channel.
+    void reportScriptContainerChange(const MWWorld::Ptr& ptr);
 }
 
 #endif

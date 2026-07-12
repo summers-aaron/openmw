@@ -1,5 +1,6 @@
 #include "ref.hpp"
 
+#include <components/esm/defs.hpp>
 #include <components/interpreter/runtime.hpp>
 
 #include "../mwbase/environment.hpp"
@@ -9,6 +10,7 @@
 
 #include "../mwnet/replicator.hpp"
 
+#include "../mwworld/cellref.hpp"
 #include "../mwworld/class.hpp"
 #include "../mwworld/refdata.hpp"
 
@@ -44,4 +46,23 @@ bool MWScript::suppressClientMutation(const MWWorld::Ptr& actor)
     // from cell-load (not only once the host's first snapshot flags it remote-owned) and a peer avatar
     // (flagged), while sparing the local player. Mirrors MWMechanics::isNetworkRemoteActor.
     return actor.getRefData().isRemoteOwned() || !MWMechanics::isPlayer(actor);
+}
+
+void MWScript::reportScriptContainerChange(const MWWorld::Ptr& ptr)
+{
+    if (ptr.isEmpty())
+        return;
+    MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+    if (replicator == nullptr || !replicator->isAuthority())
+        return;
+    // The player's own inventory is not a world container — it rides the avatar upload / normal save.
+    if (MWMechanics::isPlayer(ptr))
+        return;
+    // Only a container or an actor has a store the container channel can carry (same guard as
+    // buildContainerState). markContainerDirty then broadcasts its full resolved contents next tick.
+    if (ptr.getType() != ESM::REC_CONT && !ptr.getClass().isActor())
+        return;
+    const ESM::RefNum id = ptr.getCellRef().getRefNum();
+    if (id.isSet())
+        replicator->markContainerDirty(id);
 }
