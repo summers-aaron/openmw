@@ -910,6 +910,7 @@ void OMW::Engine::pumpTransport()
                     {
                         mReplicator->applyActions(*actions);
                         mReplicator->applyContainerChanges(*actions); // resolve clients' take/put requests
+                        mReplicator->applyAvatarInventory(*actions); // store a client's full backpack on its avatar
                         mReplicator->applyAvatarBounty(*actions); // a client cleared its avatar's bounty
                         mReplicator->applyCombatRequests(*actions); // a client's avatar resisted arrest
                         // A client's own-player sounds (casts, swishes): play here and relay onward.

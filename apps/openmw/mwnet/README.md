@@ -67,6 +67,11 @@ second move).
 - Two clients connect to a headless dedicated server and load the shared save.
 - Clients **see each other as avatars** with the correct race/sex/head/hair and worn
   equipment.
+- A client's **full inventory** (not just worn equipment) is uploaded to the host on the
+  container channel, keyed by its net id and applied to its avatar (never relayed to other
+  peers, who only need the visible equipment). The host carries it on the avatar and persists
+  it with the character record (`REC_PLAYER_EXTRA`), so items a client picked up, bought, or
+  was given survive a server save/restart and are served back when it rejoins.
 - Remote avatars **animate** across the player animation state space:
   - **locomotion** — walk/idle at the right speed, run/sneak gait, strafe, swimming, and
     jump/fall/land (an airborne flag on the wire; the puppet's own controller plays the arc);

@@ -462,6 +462,11 @@ namespace MWNet
         std::vector<SpellCast> mSpellCasts;
         // host -> clients: cosmetic magic-effect hit VFX to replay on a host-owned actor.
         std::vector<SpellVfx> mSpellVfx;
+        // client -> host ONLY (never relayed): the peer's full player inventory — equipped items
+        // included — keyed by its net id (mId is the sNetPlayerContentFile net id, not a world
+        // RefNum). Unlike equipment (which every peer needs to dress the avatar), the backpack is
+        // uploaded solely so the host's avatar carries it and persists it with the character record.
+        std::vector<ContainerState> mAvatarInventory;
 
         bool empty() const
         {
@@ -470,7 +475,7 @@ namespace MWNet
                 && mSummons.empty() && mBounties.empty() && mSpeech.empty() && mSounds.empty() && mArrests.empty()
                 && mCombatRequests.empty() && mJournalDeltas.empty() && mGlobalDeltas.empty() && mTimeSyncs.empty()
                 && mTimeRequests.empty() && mRefEnables.empty() && mScriptRuns.empty() && mWeatherSyncs.empty()
-                && mDoorMoves.empty() && mSpellCasts.empty() && mSpellVfx.empty();
+                && mDoorMoves.empty() && mSpellCasts.empty() && mSpellVfx.empty() && mAvatarInventory.empty();
         }
 
         friend bool operator==(const ActionBatch&, const ActionBatch&) = default;

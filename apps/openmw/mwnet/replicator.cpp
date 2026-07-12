@@ -622,6 +622,7 @@ namespace MWNet
         mOutgoingDoorMoves.clear();
         mOutgoingSpellCasts.clear();
         mOutgoingSpellVfx.clear();
+        mOutgoingAvatarInventory.reset();
         // The script overrides derive from GlobalScripts (persisted in the save as REC_GSCR).
         mOutgoingScriptRuns.clear();
         mScriptOverrides.clear();
@@ -696,6 +697,9 @@ namespace MWNet
             self.mAppearance = sampleAppearance(player);
             self.mEquipment = sampleEquipment(player);
             self.mSheet = sampleCharacterSheet(player);
+            // Our full backpack rides the container channel (client -> host, not this snapshot), on the
+            // same cadence as equipment. The host stores it on our avatar and persists it with the save.
+            sampleLocalInventory(player);
         }
         delta.mEntities.push_back(self);
     }
@@ -2329,6 +2333,11 @@ namespace MWNet
         batch.mDoorMoves = std::move(mOutgoingDoorMoves); // both ways: interactable door swings
         batch.mSpellCasts = std::move(mOutgoingSpellCasts); // client -> host: casts on host-owned actors
         batch.mSpellVfx = std::move(mOutgoingSpellVfx); // host -> clients: cosmetic hit VFX on host actors
+        if (mOutgoingAvatarInventory) // client -> host: our own backpack, for the host to carry + persist
+        {
+            batch.mAvatarInventory.push_back(std::move(*mOutgoingAvatarInventory));
+            mOutgoingAvatarInventory.reset();
+        }
         mOutgoingHits.clear();
         mOutgoingPlayerDamages.clear();
         mOutgoingBounties.clear();
@@ -2564,15 +2573,22 @@ namespace MWNet
         // resolved the same way, so the resolved contents match across peers.
         if (isContainer && !store.isResolved())
             store.resolve();
+        state.mItems = collectStoreItems(store);
+        return state;
+    }
+
+    std::vector<ContainerItem> Replicator::collectStoreItems(MWWorld::ContainerStore& store)
+    {
+        std::vector<ContainerItem> items;
         for (const MWWorld::Ptr& item : store)
         {
             if (item.getCellRef().getCount() <= 0)
                 continue;
             const MWWorld::CellRef& ref = item.getCellRef();
-            state.mItems.push_back(ContainerItem{ ref.getRefId().serializeText(), ref.getCount(), ref.getCharge(),
+            items.push_back(ContainerItem{ ref.getRefId().serializeText(), ref.getCount(), ref.getCharge(),
                 ref.getEnchantmentCharge(), ref.getSoul().serializeText() });
         }
-        return state;
+        return items;
     }
 
     void Replicator::applyContainerState(const ContainerState& state)
@@ -2594,13 +2610,21 @@ namespace MWNet
                                 << ptr.getCellRef().getRefId() << "; skipping";
             return;
         }
+        // allowAutoEquip so a corpse re-dresses in its remaining gear instead of appearing stripped
+        // after a synced loot; for a (non-actor) container it has no effect.
+        reconcileStore(ptr, state.mItems, /*allowAutoEquip=*/true);
+    }
+
+    void Replicator::reconcileStore(
+        const MWWorld::Ptr& ptr, const std::vector<ContainerItem>& items, bool allowAutoEquip)
+    {
         MWWorld::ContainerStore& store = ptr.getClass().getContainerStore(ptr);
 
         // Skip if our contents already match: this avoids tearing down and rebuilding the store (and
         // disrupting an open loot window) on the very peer that made the change and is now getting it
         // relayed back to it, and avoids needless churn generally. Compared as total count per item id.
         std::map<std::string, std::int64_t> incoming, current;
-        for (const ContainerItem& item : state.mItems)
+        for (const ContainerItem& item : items)
             incoming[item.mRefId] += item.mCount;
         for (const MWWorld::Ptr& item : store)
             if (item.getCellRef().getCount() > 0)
@@ -2613,7 +2637,7 @@ namespace MWNet
             store.resolve();
         store.clear();
         const auto& esmStore = *MWBase::Environment::get().getESMStore();
-        for (const ContainerItem& item : state.mItems)
+        for (const ContainerItem& item : items)
         {
             try
             {
@@ -2623,9 +2647,7 @@ namespace MWNet
                 ref.getPtr().getCellRef().setCharge(item.mCharge);
                 ref.getPtr().getCellRef().setEnchantmentCharge(item.mEnchantCharge);
                 ref.getPtr().getCellRef().setSoul(ESM::RefId::deserializeText(item.mSoul));
-                // allowAutoEquip so a corpse re-dresses in its remaining gear instead of appearing
-                // stripped after a synced loot; for a (non-actor) container it has no effect.
-                store.add(ref.getPtr(), item.mCount, /*allowAutoEquip=*/true);
+                store.add(ref.getPtr(), item.mCount, allowAutoEquip);
             }
             catch (const std::exception&)
             {
@@ -2635,6 +2657,42 @@ namespace MWNet
         // If a peer has this container/corpse open, live-refresh the loot window to show the change
         // (otherwise it would only update on the next local interaction or a reopen).
         MWBase::Environment::get().getWindowManager()->inventoryUpdated(ptr);
+    }
+
+    void Replicator::sampleLocalInventory(const MWWorld::Ptr& player)
+    {
+        // Only a client uploads its backpack: the host's own player 0 is saved as REC_PLAY normally,
+        // and single-player has no host to carry it. Keyed by our net id — the host maps that to our
+        // avatar (applyAvatarInventory) and never relays it, since witnesses only need our equipment.
+        if (!isNetworkClient() || !mLocalPlayerNetId.isSet() || player.isEmpty()
+            || !player.getClass().hasInventoryStore(player))
+            return;
+        ContainerState state;
+        state.mId = mLocalPlayerNetId;
+        state.mItems = collectStoreItems(player.getClass().getContainerStore(player));
+        mOutgoingAvatarInventory = std::move(state);
+    }
+
+    void Replicator::applyAvatarInventory(const ActionBatch& batch)
+    {
+        if (!mIsAuthority)
+            return; // only the host carries a client's avatar and persists it
+        for (const ContainerState& inv : batch.mAvatarInventory)
+        {
+            if (!isNetPlayer(inv.mId))
+                continue;
+            const auto found = mAvatars.find(inv.mId);
+            if (found == mAvatars.end())
+                continue;
+            const MWWorld::Ptr avatar = found->second;
+            if (avatar.isEmpty() || !avatar.getClass().hasInventoryStore(avatar))
+                continue;
+            // Rebuild the whole backpack (equipped items included — they ride the same list). No
+            // auto-equip: what the avatar wears is reconciled separately by applyEquipment, which
+            // re-equips from these items on its own full-refresh cadence.
+            RemoteApplyScope scope(this);
+            reconcileStore(avatar, inv.mItems, /*allowAutoEquip=*/false);
+        }
     }
 
     void Replicator::applyContainers(const ActionBatch& batch, bool relay)

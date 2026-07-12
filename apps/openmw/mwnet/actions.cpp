@@ -8,7 +8,7 @@ namespace MWNet
 {
     namespace
     {
-        constexpr std::uint8_t sVersion = 19;
+        constexpr std::uint8_t sVersion = 20;
         // Smallest encoded CombatHit: attacker RefNum (4+4) + victim RefNum (4+4) + damage
         // (float, 4) + health-damage flag (1).
         constexpr std::uint32_t sMinHitBytes = 21;
@@ -338,6 +338,15 @@ namespace MWNet
             writer.write(vfx.mActor.mIndex);
             writer.write(vfx.mActor.mContentFile);
             writer.writeString(vfx.mEffectId);
+        }
+        writer.write(static_cast<std::uint32_t>(batch.mAvatarInventory.size()));
+        for (const ContainerState& inv : batch.mAvatarInventory)
+        {
+            writer.write(inv.mId.mIndex);
+            writer.write(inv.mId.mContentFile);
+            writer.write(static_cast<std::uint32_t>(inv.mItems.size()));
+            for (const ContainerItem& item : inv.mItems)
+                writeContainerItem(writer, item);
         }
         return out;
     }
@@ -753,6 +762,31 @@ namespace MWNet
                 || !reader.readString(vfx.mEffectId))
                 return std::nullopt;
             batch.mSpellVfx.push_back(std::move(vfx));
+        }
+
+        std::uint32_t avatarInvCount = 0;
+        if (!reader.read(avatarInvCount))
+            return std::nullopt;
+        if (avatarInvCount > reader.remaining() / sMinContainerBytes)
+            return std::nullopt;
+        batch.mAvatarInventory.reserve(avatarInvCount);
+        for (std::uint32_t i = 0; i < avatarInvCount; ++i)
+        {
+            ContainerState inv;
+            std::uint32_t itemCount = 0;
+            if (!reader.read(inv.mId.mIndex) || !reader.read(inv.mId.mContentFile) || !reader.read(itemCount))
+                return std::nullopt;
+            if (itemCount > reader.remaining() / sMinContainerItemBytes)
+                return std::nullopt;
+            inv.mItems.reserve(itemCount);
+            for (std::uint32_t j = 0; j < itemCount; ++j)
+            {
+                ContainerItem item;
+                if (!readContainerItem(reader, item))
+                    return std::nullopt;
+                inv.mItems.push_back(std::move(item));
+            }
+            batch.mAvatarInventory.push_back(std::move(inv));
         }
         return batch;
     }

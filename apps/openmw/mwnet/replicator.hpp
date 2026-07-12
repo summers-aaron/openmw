@@ -226,6 +226,9 @@ namespace MWNet
         std::vector<SpellCast> mOutgoingSpellCasts;
         // host -> clients: cosmetic magic-effect hit VFX on host-owned actors awaiting send.
         std::vector<SpellVfx> mOutgoingSpellVfx;
+        // client -> host: this peer's own full inventory (sampled on a full-refresh tick), awaiting
+        // send so the host's avatar carries and persists it. Empty on the host / in single-player.
+        std::optional<ContainerState> mOutgoingAvatarInventory;
         // Every interactable door commanded open/shut this session, dual-role like mRefStates: on
         // the host the authoritative last command per door (periodically re-asserted, persisted in
         // the server save's REC_NETWORK_STATE); on a client the received commands, kept even for
@@ -846,6 +849,10 @@ namespace MWNet
         /// rest), always apply a put — then update the live store and broadcast the new contents.
         void applyContainerChanges(const ActionBatch& batch);
 
+        /// Host: apply a client's uploaded full inventory to its avatar's store so it persists with the
+        /// avatar's player record. Resolves the net id via mAvatars; never relayed to other peers.
+        void applyAvatarInventory(const ActionBatch& batch);
+
         /// Apply received over-take corrections (client only): drop from this peer's own inventory the
         /// items the host says it claimed but the container didn't have.
         void applyContainerRevokes(const ActionBatch& batch);
@@ -976,6 +983,17 @@ namespace MWNet
         /// Overwrite a lootable inventory's local contents to match a received ContainerState, and
         /// keep it from being re-rolled by a later lazy resolve.
         void applyContainerState(const ContainerState& state);
+
+        /// Serialize a container store's full contents (stacks with charge/soul) into wire items.
+        static std::vector<ContainerItem> collectStoreItems(MWWorld::ContainerStore& store);
+
+        /// Rebuild an actor/container store to match a received item list (no-op if already equal).
+        /// allowAutoEquip re-dresses a corpse; pass false where equipment is reconciled separately.
+        void reconcileStore(const MWWorld::Ptr& ptr, const std::vector<ContainerItem>& items, bool allowAutoEquip);
+
+        /// Client -> host: sample this peer's own full inventory for upload (into mOutgoingAvatarInventory).
+        /// No-op unless this is a networked client whose avatar is ready. Keyed by the peer's net id.
+        void sampleLocalInventory(const MWWorld::Ptr& player);
 
         /// Apply one entity from a delta. Each returns true when it actually updated an entity
         /// (so applyDelta can count it); false when it couldn't this tick (not placeable yet, our

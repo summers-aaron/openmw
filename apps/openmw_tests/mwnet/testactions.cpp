@@ -373,6 +373,26 @@ namespace MWNet
             EXPECT_TRUE(parsed->mSpellVfx[1].mEffectId.empty());
         }
 
+        TEST(MWNetActionsTest, avatarInventoryRoundTrip)
+        {
+            ActionBatch batch;
+            ContainerState inv;
+            inv.mId = ESM::RefNum{ 7, -1000 }; // a net-player id (sNetPlayerContentFile)
+            inv.mItems.push_back(ContainerItem{ "gold_001", 342, -1, -1, "" });
+            inv.mItems.push_back(ContainerItem{ "iron_dagger", 1, 88, -1, "" });
+            inv.mItems.push_back(ContainerItem{ "misc_soulgem_common", 1, -1, -1, "rat" }); // filled gem
+            batch.mAvatarInventory.push_back(std::move(inv));
+            const std::optional<ActionBatch> parsed = deserializeActions(serializeActions(batch));
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(*parsed, batch);
+            ASSERT_EQ(parsed->mAvatarInventory.size(), 1u);
+            EXPECT_EQ(parsed->mAvatarInventory[0].mId.mContentFile, -1000);
+            ASSERT_EQ(parsed->mAvatarInventory[0].mItems.size(), 3u);
+            EXPECT_EQ(parsed->mAvatarInventory[0].mItems[0].mRefId, "gold_001");
+            EXPECT_EQ(parsed->mAvatarInventory[0].mItems[0].mCount, 342);
+            EXPECT_EQ(parsed->mAvatarInventory[0].mItems[2].mSoul, "rat");
+        }
+
         TEST(MWNetActionsTest, rejectsEmptyBuffer)
         {
             EXPECT_FALSE(deserializeActions(std::span<const std::byte>{}).has_value());
@@ -388,11 +408,11 @@ namespace MWNet
         TEST(MWNetActionsTest, rejectsImplausibleCount)
         {
             std::vector<std::byte> bytes = serializeActions(ActionBatch{});
-            // version + 23 4-byte 0 counts (hits, playerDamages, drops, taken, containers, changes,
+            // version + 24 4-byte 0 counts (hits, playerDamages, drops, taken, containers, changes,
             // revokes, summons, bounties, speech, sounds, arrests, combatRequests, journalDeltas,
             // globalDeltas, timeSyncs, timeRequests, refEnables, scriptRuns, weatherSyncs, doorMoves,
-            // spellCasts, spellVfx)
-            ASSERT_EQ(bytes.size(), 93u);
+            // spellCasts, spellVfx, avatarInventory)
+            ASSERT_EQ(bytes.size(), 97u);
             for (std::size_t i = 0; i < 4; ++i)
                 bytes[1 + i] = std::byte{ 0xff }; // implausible hit count
             EXPECT_FALSE(deserializeActions(bytes).has_value());
