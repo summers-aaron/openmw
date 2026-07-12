@@ -25,6 +25,15 @@ namespace MWMechanics
     /// @param carrier The disease carrier.
     inline void diseaseContact(const MWWorld::Ptr& actor, const MWWorld::Ptr& carrier)
     {
+        // Multiplayer: a host-owned actor's disease/spell state is the host's to roll and replicate,
+        // so a client must never contract one for it — a second local roll would diverge. The melee
+        // callers already bail on a remote-owned victim before reaching here, but guard the choke
+        // point too so the invariant does not depend on every caller remembering to. A no-op on the
+        // host and in single-player; the local player (who catches disease by looting) is never
+        // remote-owned, so its own contraction still rolls and rides its character sheet to the host.
+        if (isNetworkRemoteActor(actor))
+            return;
+
         if (!carrier.getClass().isActor() || carrier == getPlayer())
             return;
 
