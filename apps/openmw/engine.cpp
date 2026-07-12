@@ -1127,8 +1127,12 @@ bool OMW::Engine::frame(unsigned frameNumber, float frametime)
                     {
                         if (stats.isDeathAnimationFinished())
                         {
-                            stats.resurrect();
-                            for (int i = 1; i < 3; ++i) // magicka, fatigue (resurrect already refilled health)
+                            // Full revive: MechanicsManager::resurrect clears the dead state, refills
+                            // health AND resets the CharacterController's death pose so the player stands
+                            // up with controls back — CreatureStats::resurrect alone leaves them on the
+                            // floor. Then top up magicka and fatigue (resurrect only refills health).
+                            mMechanicsManager->resurrect(player);
+                            for (int i = 1; i < 3; ++i) // magicka, fatigue
                             {
                                 MWMechanics::DynamicStat<float> stat = stats.getDynamic(i);
                                 stat.setCurrent(stat.getModified());
