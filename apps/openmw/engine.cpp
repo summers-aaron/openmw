@@ -1114,8 +1114,32 @@ bool OMW::Engine::frame(unsigned frameNumber, float frametime)
             if (mStateManager->getState() == MWBase::StateManager::State_Running)
             {
                 MWWorld::Ptr player = mWorld->getPlayerPtr();
-                if (!paused && player.getClass().getCreatureStats(player).isDead())
-                    mStateManager->endGame();
+                MWMechanics::CreatureStats& stats = player.getClass().getCreatureStats(player);
+                if (!paused && stats.isDead())
+                {
+                    // Multiplayer: a dead player respawns at the nearest Divine Intervention marker
+                    // rather than dropping to the Load/New Game/Exit menu, which would tear them out of
+                    // the shared session. Let the death animation finish first so the death still reads,
+                    // then revive (resurrect refills health; top up magicka and fatigue too) and teleport
+                    // to the closest divine marker. Their revived stats and new cell ride the normal
+                    // player upload, so the host and other clients see them stand up and move.
+                    if (mReplicator->isNetworkedSession())
+                    {
+                        if (stats.isDeathAnimationFinished())
+                        {
+                            stats.resurrect();
+                            for (int i = 1; i < 3; ++i) // magicka, fatigue (resurrect already refilled health)
+                            {
+                                MWMechanics::DynamicStat<float> stat = stats.getDynamic(i);
+                                stat.setCurrent(stat.getModified());
+                                stats.setDynamic(i, stat);
+                            }
+                            mWorld->teleportToClosestMarker(player, ESM::RefId::stringRefId("divinemarker"));
+                        }
+                    }
+                    else
+                        mStateManager->endGame();
+                }
             }
         }
 
