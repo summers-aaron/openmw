@@ -302,20 +302,23 @@ namespace MWNet
         TEST(MWNetActionsTest, doorMovesRoundTrip)
         {
             ActionBatch batch;
-            // A swing open on an unlocked door, a swing shut still locked at 50, and a script Lock's
-            // snap-shut (state 0) freshly locked at 100. The lock level rides each move and must
-            // survive the round trip, including negative (an unlocked door remembering its level).
-            batch.mDoorMoves.push_back({ ESM::RefNum{ 111, 0 }, 1, -25, ESM::RefNum{ 2, -1000 } });
-            batch.mDoorMoves.push_back({ ESM::RefNum{ 222, 3 }, 2, 50, ESM::RefNum{ 0, -1000 } });
-            batch.mDoorMoves.push_back({ ESM::RefNum{ 333, 0 }, 0, 100, ESM::RefNum{ 0, -1000 } });
+            // A swing open on an unlocked but still-trapped door, a swing shut still locked at 50 and
+            // untrapped, and a script Lock's snap-shut (state 0) freshly locked at 100. The lock level
+            // (incl. negative, an unlocked door remembering its level) and the trap spell ride each
+            // move and must survive the round trip.
+            batch.mDoorMoves.push_back({ ESM::RefNum{ 111, 0 }, 1, -25, "fire_trap", ESM::RefNum{ 2, -1000 } });
+            batch.mDoorMoves.push_back({ ESM::RefNum{ 222, 3 }, 2, 50, "", ESM::RefNum{ 0, -1000 } });
+            batch.mDoorMoves.push_back({ ESM::RefNum{ 333, 0 }, 0, 100, "", ESM::RefNum{ 0, -1000 } });
             const std::optional<ActionBatch> parsed = deserializeActions(serializeActions(batch));
             ASSERT_TRUE(parsed.has_value());
             EXPECT_EQ(*parsed, batch);
             ASSERT_EQ(parsed->mDoorMoves.size(), 3u);
             EXPECT_EQ(parsed->mDoorMoves[0].mState, 1);
             EXPECT_EQ(parsed->mDoorMoves[0].mLockLevel, -25);
+            EXPECT_EQ(parsed->mDoorMoves[0].mTrap, "fire_trap");
             EXPECT_EQ(parsed->mDoorMoves[1].mRef.mContentFile, 3);
             EXPECT_EQ(parsed->mDoorMoves[1].mLockLevel, 50);
+            EXPECT_TRUE(parsed->mDoorMoves[1].mTrap.empty());
             EXPECT_EQ(parsed->mDoorMoves[2].mState, 0);
             EXPECT_EQ(parsed->mDoorMoves[2].mLockLevel, 100);
         }

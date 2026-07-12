@@ -121,6 +121,11 @@ namespace MWMechanics
             if (Misc::Rng::roll0to99(prng) <= x)
             {
                 trap.getCellRef().setTrap(ESM::RefId());
+                // Multiplayer: a disarmed door trap is shared world state — report it so the host and
+                // every other client converge (reportDoorLock no-ops for containers and off the
+                // network). The acting client rolls locally and reports the result, like the lockpick.
+                if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+                    replicator->reportDoorLock(trap);
 
                 resultSound = "Disarm Trap";
                 resultMessage = "#{sTrapSuccess}";

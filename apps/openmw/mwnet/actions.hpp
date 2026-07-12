@@ -291,6 +291,10 @@ namespace MWNet
         // lockpick, a key, or a scripted Lock/Unlock reaches every peer — otherwise a shared door a
         // client opened stays locked for the host and everyone else. Applied change-guarded.
         std::int32_t mLockLevel = 0;
+        // The door's CellRef trap spell (ESM::RefId serialized text; empty = untrapped/disarmed).
+        // Rides alongside the lock so a client's disarmed trap, or a trap consumed when the door was
+        // opened, reaches every peer — otherwise another peer re-triggers a trap that's already gone.
+        std::string mTrap;
         ESM::RefNum mOrigin; // reporting peer's wire id, for echo suppression
 
         friend bool operator==(const DoorMove&, const DoorMove&) = default;

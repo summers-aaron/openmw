@@ -8,7 +8,7 @@ namespace MWNet
 {
     namespace
     {
-        constexpr std::uint8_t sVersion = 17;
+        constexpr std::uint8_t sVersion = 18;
         // Smallest encoded CombatHit: attacker RefNum (4+4) + victim RefNum (4+4) + damage
         // (float, 4) + health-damage flag (1).
         constexpr std::uint32_t sMinHitBytes = 21;
@@ -60,8 +60,9 @@ namespace MWNet
         constexpr std::uint32_t sMinScriptRunBytes = 25;
         // Smallest encoded WeatherSync: zero-length region (4) + weatherId (4) + origin RefNum (4 + 4).
         constexpr std::uint32_t sMinWeatherSyncBytes = 16;
-        // Encoded DoorMove: ref RefNum (4 + 4) + state (1) + lock level (4) + origin RefNum (4 + 4).
-        constexpr std::uint32_t sMinDoorMoveBytes = 21;
+        // Encoded DoorMove: ref RefNum (4 + 4) + state (1) + lock level (4) + zero-length trap (4) +
+        // origin RefNum (4 + 4).
+        constexpr std::uint32_t sMinDoorMoveBytes = 25;
         // Encoded SpellCast with zero effects: caster RefNum (4 + 4) + target RefNum (4 + 4) +
         // zero-length spell id (4) + zero-length name (4) + item RefNum (4 + 4) + flags (4) +
         // effect count (4) + origin RefNum (4 + 4).
@@ -299,6 +300,7 @@ namespace MWNet
             writer.write(move.mRef.mContentFile);
             writer.write(move.mState);
             writer.write(move.mLockLevel);
+            writer.writeString(move.mTrap);
             writer.write(move.mOrigin.mIndex);
             writer.write(move.mOrigin.mContentFile);
         }
@@ -688,7 +690,7 @@ namespace MWNet
         {
             DoorMove move;
             if (!reader.read(move.mRef.mIndex) || !reader.read(move.mRef.mContentFile) || !reader.read(move.mState)
-                || !reader.read(move.mLockLevel) || !reader.read(move.mOrigin.mIndex)
+                || !reader.read(move.mLockLevel) || !reader.readString(move.mTrap) || !reader.read(move.mOrigin.mIndex)
                 || !reader.read(move.mOrigin.mContentFile))
                 return std::nullopt;
             batch.mDoorMoves.push_back(move);

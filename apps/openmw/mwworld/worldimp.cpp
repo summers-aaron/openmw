@@ -2524,7 +2524,8 @@ namespace MWWorld
         // command (with the door's lock level, so a client's key/lockpick crosses too) so every
         // peer's copy of the door swings too (each plays the animation locally).
         if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
-            replicator->reportDoorMove(door.getCellRef().getRefNum(), state, door.getCellRef().getLockLevel());
+            replicator->reportDoorMove(
+                door.getCellRef().getRefNum(), state, door.getCellRef().getLockLevel(), door.getCellRef().getTrap());
     }
 
     void World::activateDoor(const Ptr& door, MWWorld::DoorState state)
@@ -2545,7 +2546,8 @@ namespace MWWorld
 
         if (state != oldState || state == MWWorld::DoorState::Idle)
             if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
-                replicator->reportDoorMove(door.getCellRef().getRefNum(), state, door.getCellRef().getLockLevel());
+                replicator->reportDoorMove(
+                door.getCellRef().getRefNum(), state, door.getCellRef().getLockLevel(), door.getCellRef().getTrap());
     }
 
     bool World::getPlayerStandingOn(const MWWorld::ConstPtr& object)
