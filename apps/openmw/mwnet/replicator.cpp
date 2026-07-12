@@ -926,6 +926,49 @@ namespace MWNet
         }
     }
 
+    void Replicator::reconcileLoadedCellItems(const MWWorld::CellStore& cell)
+    {
+        // Host only. A joining client loads the world fresh from content (it is served only a
+        // character, never the host's save), so it never sees the item changes the host's save baked
+        // in — until the host, as it loads each cell, re-derives them from the live world and feeds
+        // them into the same two channels a running session uses. Neither channel's backing set
+        // survives a save/boot (they hold wire RefNums, not saved records), so they start empty and
+        // must be rebuilt here or a save-booted host silently stops syncing floor items.
+        if (!mIsAuthority)
+            return;
+        cell.forEachConst([&](const MWWorld::ConstPtr& ptr) {
+            if (!ptr.getClass().isItem(ptr))
+                return true;
+            const ESM::RefNum refNum = ptr.getCellRef().getRefNum();
+            if (!refNum.isSet())
+                return true;
+            if (ptr.getCellRef().getCount() <= 0)
+            {
+                // Consumed in the host's save: a content item picked up in an earlier session reloads
+                // at count 0 but stays enumerable (isAccessible keeps a content-file ref visible). The
+                // client still shows the pickable copy, so record and broadcast the removal — the
+                // periodic re-assert and the client's own cell-load purge then drop that ghost.
+                if (mRemovedWorldItems.insert(refNum).second)
+                    mPendingItemRemovals.push_back(refNum);
+            }
+            else if (!refNum.hasContentFile() || ptr.getRefData().hasChanged())
+            {
+                // Track it for replication. Either a generated (negative-contentFile) RefNum — placed at
+                // runtime in an earlier session (a drop / scripted placement) and saved, so it is absent
+                // from a client's content-only world — or a content item the save MOVED/modified, which
+                // the client holds at the content-default position. hasChanged is the save's own "this
+                // ref differs from content" flag (loadImp sets it for every ref restored from a save; an
+                // untouched content ref stays false and is skipped, since it loads identically
+                // everywhere). A content item is never re-spawned from this channel — applyWorldEntity
+                // only repositions the client's own copy (see its content-RefNum guard). (A cross-cell
+                // move within the same worldspace rides moveObject's position; a rare cross-worldspace
+                // move isn't tracked, which needs pickup+drop and so already crosses as a drop.)
+                mNetworkItems.insert(refNum);
+            }
+            return true;
+        });
+    }
+
     void Replicator::recordMotion(const ESM::RefNum& id, const MWWorld::Ptr& actor, const osg::Vec3f& target,
         const osg::Vec3f& rotation, std::optional<float> speed)
     {
@@ -1884,6 +1927,13 @@ namespace MWNet
             const MWWorld::Ptr existing = worldModel.getPtr(entity.mId);
             if (existing.isEmpty() || !existing.isInCell())
             {
+                // A shared CONTENT item (contentFile >= 0) is never spawned from replication: every peer
+                // loads its own copy from content, so placing one here would duplicate it. This channel
+                // carries such an item only to relay a save-time MOVE (reconcileLoadedCellItems) — defer
+                // until the client's own copy has loaded, when the move-branch below repositions it (the
+                // host re-sends it each full snapshot, so it converges shortly after the cell loads).
+                if (entity.mId.hasContentFile())
+                    return false;
                 const MWWorld::Ptr localPlayer = world.getPlayerPtr();
                 if (localPlayer.isEmpty() || !localPlayer.isInCell())
                     return false;
@@ -2182,6 +2232,15 @@ namespace MWNet
             const MWWorld::Ptr item = worldModel.getPtr(taken);
             if (!item.isEmpty() && item.getCellRef().getCount() > 0)
                 world.deleteObject(item);
+            else
+                // The host can't resolve the item, so deleteObject's removal hook never fires — broadcast
+                // the removal directly instead. This is the load-from-save case: a client loads the world
+                // fresh from content, so it still shows a save item the host already consumed in an earlier
+                // session (deleted in the host's save, absent here), and picking that copy up would sync to
+                // nobody. It also covers an item whose cell is currently unloaded on the host — recording
+                // the removal makes purgeRemovedItems delete the host's copy when that cell loads, and tells
+                // every other peer holding a copy to drop it.
+                reportItemRemoved(taken);
         }
     }
 

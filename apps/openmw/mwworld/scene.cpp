@@ -547,6 +547,11 @@ namespace MWWorld
         if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
         {
             replicator->purgeRemovedItems();
+            // Host only: re-derive from this just-loaded cell the loose-item changes the host's save
+            // baked in (items it already consumed, and items it placed at runtime), which a client's
+            // content-only world can't know on its own, and feed them to the removal / replication
+            // channels so a save-booted server keeps floor items in sync with joiners.
+            replicator->reconcileLoadedCellItems(cell);
             replicator->applyRefStates();
             replicator->applyDoorStates();
         }

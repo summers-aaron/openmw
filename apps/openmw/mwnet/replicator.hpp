@@ -808,6 +808,21 @@ namespace MWNet
         /// doesn't reappear on the shelf. A no-op with nothing removed / in single-player.
         void purgeRemovedItems();
 
+        /// Called (host only) as a cell loads: reconcile the loose items the host's SAVE carries but a
+        /// client — which loads the world fresh from content — cannot derive on its own. A client's
+        /// world diverges from a save-booted host's in three ways this closes:
+        ///  - a save item the host already CONSUMED in an earlier session reloads at count 0 but stays
+        ///    enumerable; the client still shows the pickable copy, so its RefNum is recorded/broadcast
+        ///    as a removal (mRemovedWorldItems) to drop that ghost everywhere;
+        ///  - a loose item PLACED at runtime in an earlier session (a drop / scripted placement, marked
+        ///    by a generated negative-contentFile RefNum) is absent from a client's content-only world,
+        ///    so it is tracked for replication (mNetworkItems) like an in-session drop; and
+        ///  - a content item the save MOVED/modified (hasChanged, which load-from-save sets) sits at its
+        ///    content-default position on the client, so it too is tracked for replication — carried only
+        ///    to relay its transform, never re-spawned (applyWorldEntity guards a shared content RefNum).
+        /// A no-op on a client and in single-player.
+        void reconcileLoadedCellItems(const MWWorld::CellStore& cell);
+
         /// Mark a lootable inventory (a world container or a corpse) as changed, so this tick's
         /// action batch carries its new contents. Called by the loot UI on whichever peer made the
         /// change. No-op outside a networked session, so single-player is unaffected.
