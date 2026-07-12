@@ -8,7 +8,7 @@ namespace MWNet
 {
     namespace
     {
-        constexpr std::uint8_t sVersion = 18;
+        constexpr std::uint8_t sVersion = 19;
         // Smallest encoded CombatHit: attacker RefNum (4+4) + victim RefNum (4+4) + damage
         // (float, 4) + health-damage flag (1).
         constexpr std::uint32_t sMinHitBytes = 21;
@@ -70,6 +70,8 @@ namespace MWNet
         // Encoded SpellEffect: zero-length effect id (4) + zero-length arg (4) + min/max/duration
         // (3 * 4) + effect index (4) + flags (4).
         constexpr std::uint32_t sMinSpellEffectBytes = 28;
+        // Encoded SpellVfx: actor RefNum (4 + 4) + zero-length effect id (4).
+        constexpr std::uint32_t sMinSpellVfxBytes = 12;
 
         void writeContainerItem(ByteWriter& writer, const ContainerItem& item)
         {
@@ -329,6 +331,13 @@ namespace MWNet
             }
             writer.write(cast.mOrigin.mIndex);
             writer.write(cast.mOrigin.mContentFile);
+        }
+        writer.write(static_cast<std::uint32_t>(batch.mSpellVfx.size()));
+        for (const SpellVfx& vfx : batch.mSpellVfx)
+        {
+            writer.write(vfx.mActor.mIndex);
+            writer.write(vfx.mActor.mContentFile);
+            writer.writeString(vfx.mEffectId);
         }
         return out;
     }
@@ -729,6 +738,21 @@ namespace MWNet
             if (!reader.read(cast.mOrigin.mIndex) || !reader.read(cast.mOrigin.mContentFile))
                 return std::nullopt;
             batch.mSpellCasts.push_back(std::move(cast));
+        }
+
+        std::uint32_t spellVfxCount = 0;
+        if (!reader.read(spellVfxCount))
+            return std::nullopt;
+        if (spellVfxCount > reader.remaining() / sMinSpellVfxBytes)
+            return std::nullopt;
+        batch.mSpellVfx.reserve(spellVfxCount);
+        for (std::uint32_t i = 0; i < spellVfxCount; ++i)
+        {
+            SpellVfx vfx;
+            if (!reader.read(vfx.mActor.mIndex) || !reader.read(vfx.mActor.mContentFile)
+                || !reader.readString(vfx.mEffectId))
+                return std::nullopt;
+            batch.mSpellVfx.push_back(std::move(vfx));
         }
         return batch;
     }

@@ -930,6 +930,7 @@ void OMW::Engine::pumpTransport()
                     {
                         mReplicator->applyIncomingPlayerDamage(*actions);
                         mReplicator->applySpellCasts(*actions); // a spell a host NPC / another player cast on us
+                        mReplicator->applySpellVfx(*actions); // cosmetic hit VFX on host-owned actors
                         mReplicator->applyIncomingPlayerBounty(*actions); // crime bounty the host gave our avatar
                         mReplicator->applyContainerRevokes(*actions); // drop items we lost a take race for
                         mReplicator->applyNpcSpeech(*actions); // replay voiced lines host NPCs spoke

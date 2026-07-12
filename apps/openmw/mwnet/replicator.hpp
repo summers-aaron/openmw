@@ -224,6 +224,8 @@ namespace MWNet
         std::vector<DoorMove> mOutgoingDoorMoves;
         // client -> host: player spell/enchant casts on host-owned actors awaiting send.
         std::vector<SpellCast> mOutgoingSpellCasts;
+        // host -> clients: cosmetic magic-effect hit VFX on host-owned actors awaiting send.
+        std::vector<SpellVfx> mOutgoingSpellVfx;
         // Every interactable door commanded open/shut this session, dual-role like mRefStates: on
         // the host the authoritative last command per door (periodically re-asserted, persisted in
         // the server save's REC_NETWORK_STATE); on a client the received commands, kept even for
@@ -728,6 +730,15 @@ namespace MWNet
         /// ActiveSpells) and relays casts aimed at a player to that player's client. Client: applies a
         /// cast aimed at its own player to its real player (a host NPC's spell, PvP magic, a reflect).
         void applySpellCasts(const ActionBatch& batch);
+
+        /// Host only: a magic effect's hit VFX just played on a host-owned actor (playEffects) — queue
+        /// it so clients replay the same cosmetic flash on their copy. A no-op off the network, on a
+        /// client, and for players (a player's own hits are visualized locally).
+        void reportSpellVfx(const MWWorld::Ptr& actor, const ESM::RefId& effectId);
+
+        /// Client only: replay a host-owned actor's magic-effect hit VFX (playEffects) so a witness
+        /// sees the target react to a spell, not just its health tick.
+        void applySpellVfx(const ActionBatch& batch);
 
         /// Report a global script starting (running=true, with its target if any) or stopping —
         /// quest machinery like StartScript/StopScript. A no-op off the network and while

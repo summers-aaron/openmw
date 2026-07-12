@@ -335,6 +335,19 @@ namespace MWNet
         friend bool operator==(const SpellCast&, const SpellCast&) = default;
     };
 
+    /// host -> clients: a magic effect's hit VFX (the coloured flash/particles on the model, from
+    /// playEffects) just played on a host-owned actor. The effect itself rides the actor's stat
+    /// snapshots; this is purely cosmetic, so a witness sees the target react when a spell lands
+    /// rather than just its health tick down. The player's own hits are visualized locally (the
+    /// effect lives in its own ActiveSpells), so only host NPCs/creatures cross here.
+    struct SpellVfx
+    {
+        ESM::RefNum mActor; // the struck host-owned actor's shared RefNum
+        std::string mEffectId; // ESM::RefId serialized text of the magic effect whose VFX to play
+
+        friend bool operator==(const SpellVfx&, const SpellVfx&) = default;
+    };
+
     /// A global script started or stopped outside the content defaults (StartScript/StopScript —
     /// quest machinery like escort timers and staged events). Only entries differing from the
     /// default running set ("main" + the ESM::StartScript store, which addStartup starts on every
@@ -447,6 +460,8 @@ namespace MWNet
         // client -> host: a player's spell/enchant cast on a host-owned actor, for the host to apply
         // to the authoritative actor (the outcome returns via the actor's stat/position snapshots).
         std::vector<SpellCast> mSpellCasts;
+        // host -> clients: cosmetic magic-effect hit VFX to replay on a host-owned actor.
+        std::vector<SpellVfx> mSpellVfx;
 
         bool empty() const
         {
@@ -455,7 +470,7 @@ namespace MWNet
                 && mSummons.empty() && mBounties.empty() && mSpeech.empty() && mSounds.empty() && mArrests.empty()
                 && mCombatRequests.empty() && mJournalDeltas.empty() && mGlobalDeltas.empty() && mTimeSyncs.empty()
                 && mTimeRequests.empty() && mRefEnables.empty() && mScriptRuns.empty() && mWeatherSyncs.empty()
-                && mDoorMoves.empty() && mSpellCasts.empty();
+                && mDoorMoves.empty() && mSpellCasts.empty() && mSpellVfx.empty();
         }
 
         friend bool operator==(const ActionBatch&, const ActionBatch&) = default;

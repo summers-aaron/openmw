@@ -1351,7 +1351,17 @@ namespace MWMechanics
                 bool isEquipment = spellParams.hasFlag(ESM::ActiveSpells::Flag_Equipment);
 
                 if (!spellParams.hasFlag(ESM::ActiveSpells::Flag_Lua))
+                {
                     playEffects(target, *magicEffect, (isTemporary || (isEquipment && playNonLooping)));
+                    // Multiplayer: this hit VFX plays only where the effect is applied (the host, for its
+                    // NPCs/creatures). Replicate it so every witness sees the target flash, not just its
+                    // health tick down. Only for a temporary spell (an actual cast) — a permanent
+                    // ability/enchantment would otherwise spam every NPC's racial VFX on cell load. A
+                    // no-op off the host and for players (visualized locally).
+                    if (isTemporary)
+                        if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
+                            replicator->reportSpellVfx(target, effect.mEffectId);
+                }
 
                 if (effect.mEffectId == ESM::MagicEffect::Soultrap && !target.getClass().isNpc()
                     && target.getType() == ESM::Creature::sRecordId

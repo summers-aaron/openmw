@@ -621,6 +621,7 @@ namespace MWNet
         mOutgoingRefEnables.clear();
         mOutgoingDoorMoves.clear();
         mOutgoingSpellCasts.clear();
+        mOutgoingSpellVfx.clear();
         // The script overrides derive from GlobalScripts (persisted in the save as REC_GSCR).
         mOutgoingScriptRuns.clear();
         mScriptOverrides.clear();
@@ -2268,6 +2269,7 @@ namespace MWNet
         batch.mWeatherSyncs = std::move(mOutgoingWeather); // host -> clients: per-region weather
         batch.mDoorMoves = std::move(mOutgoingDoorMoves); // both ways: interactable door swings
         batch.mSpellCasts = std::move(mOutgoingSpellCasts); // client -> host: casts on host-owned actors
+        batch.mSpellVfx = std::move(mOutgoingSpellVfx); // host -> clients: cosmetic hit VFX on host actors
         mOutgoingHits.clear();
         mOutgoingPlayerDamages.clear();
         mOutgoingBounties.clear();
@@ -3429,6 +3431,41 @@ namespace MWNet
             if (!isReplicableActor(target))
                 continue;
             applySpellCastToActor(cast, target);
+        }
+    }
+
+    void Replicator::reportSpellVfx(const MWWorld::Ptr& actor, const ESM::RefId& effectId)
+    {
+        // Only the host, and only for its own NPCs/creatures: a player's hits are visualized on the
+        // player's own client (the effect lives in its ActiveSpells there), and a client's replica
+        // never owns the effect, so its playEffects is the host's replay of this very message.
+        if (!mIsAuthority || isApplyingRemote() || actor.isEmpty() || !actor.getClass().isActor()
+            || MWBase::Environment::get().getWorld()->isPlayer(actor))
+            return;
+        const ESM::RefNum ref = actor.getCellRef().getRefNum();
+        if (!ref.hasContentFile())
+            return;
+        mOutgoingSpellVfx.push_back({ ref, effectId.serializeText() });
+    }
+
+    void Replicator::applySpellVfx(const ActionBatch& batch)
+    {
+        if (mIsAuthority)
+            return; // the host played every one of these locally as it applied the effect
+        const MWWorld::ESMStore& store = *MWBase::Environment::get().getESMStore();
+        for (const SpellVfx& vfx : batch.mSpellVfx)
+        {
+            const MWWorld::Ptr actor = MWBase::Environment::get().getWorldModel()->getPtr(vfx.mActor);
+            if (!isReplicableActor(actor))
+                continue;
+            const ESM::MagicEffect* magicEffect
+                = store.get<ESM::MagicEffect>().search(ESM::RefId::deserializeText(vfx.mEffectId));
+            if (magicEffect == nullptr)
+                continue;
+            // Same call the owner made in applyMagicEffect — the coloured flash/particles + hit sound
+            // on the model. Purely cosmetic; the effect's real outcome already rode the stat snapshots.
+            RemoteApplyScope scope(this);
+            MWMechanics::playEffects(actor, *magicEffect);
         }
     }
 
