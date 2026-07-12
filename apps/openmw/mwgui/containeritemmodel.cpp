@@ -23,19 +23,31 @@ namespace
     // container/corpse. On a client, ask the host to resolve it authoritatively (it grants a take
     // only up to what's actually there, so two peers can't loot the same item); on the host, mark the
     // source so its new contents are broadcast. A no-op in single-player.
+    void reportContainerMutation(const MWWorld::Ptr& container, const MWWorld::Ptr& item, int count, bool take)
+    {
+        if (count <= 0)
+            return;
+        MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
+        if (replicator == nullptr)
+            return;
+        const ESM::RefNum refNum = container.getCellRef().getRefNum();
+        if (!refNum.isSet())
+            return;
+        if (replicator->isNetworkClient())
+            replicator->reportContainerChange(refNum, item, count, take);
+        else
+            replicator->markContainerDirty(refNum); // host's own change (or single-player no-op)
+    }
+
     void reportContainerMutation(const std::vector<std::pair<MWWorld::Ptr, MWWorld::ResolutionHandle>>& sources,
         const MWWorld::Ptr& item, int count, bool take)
     {
-        MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator();
-        if (replicator == nullptr || sources.empty())
-            return;
-        const ESM::RefNum container = sources[0].first.getCellRef().getRefNum();
-        if (!container.isSet())
-            return;
-        if (replicator->isNetworkClient())
-            replicator->reportContainerChange(container, item, count, take);
-        else
-            replicator->markContainerDirty(container); // host's own change (or single-player no-op)
+        // A put lands in the primary source (the merchant's own inventory); a take must instead be
+        // reported per source as removeItem consumes it — an item bought from a merchant's owned
+        // stock chest lives in a later source, and reporting it against the merchant's inventory (which
+        // never held it) makes the host revoke the purchase. So this vector form is for puts only.
+        if (!sources.empty())
+            reportContainerMutation(sources[0].first, item, count, take);
     }
 
     bool stacks(const MWWorld::Ptr& left, const MWWorld::Ptr& right)
@@ -144,7 +156,6 @@ namespace MWGui
 
     void ContainerItemModel::removeItem(const ItemStack& item, size_t count)
     {
-        reportContainerMutation(mItemSources, item.mBase, static_cast<int>(count), /*take=*/true);
         int toRemove = static_cast<int>(count);
 
         for (auto& source : mItemSources)
@@ -160,7 +171,14 @@ namespace MWGui
                     if (quantity < 0 && mTrading)
                         toRemove += quantity;
                     else
-                        toRemove -= store.remove(*it, toRemove);
+                    {
+                        const int removed = store.remove(*it, toRemove);
+                        // Multiplayer: report the take against the source it actually came from (this
+                        // may be a later source — a merchant's owned stock chest — not the primary one),
+                        // only for what was really removed (a restocking item above reports nothing).
+                        reportContainerMutation(source.first, item.mBase, removed, /*take=*/true);
+                        toRemove -= removed;
+                    }
                     if (toRemove <= 0)
                         return;
                 }
