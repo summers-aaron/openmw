@@ -134,6 +134,11 @@ namespace MWNet
         // speed factor non-zero, so downstream peers kept playing its walk cycle in place.
         std::map<ESM::RefNum, std::optional<float>> mAvatarSpeed;
         std::map<ESM::RefNum, std::optional<std::uint8_t>> mAvatarMoveFlags;
+        // The last equipment received for each avatar, relayed VERBATIM rather than re-sampled from the
+        // host puppet's store: that store is transiently cleared+rebuilt when the owner's full inventory
+        // is applied (applyAvatarInventory), so a re-sample would broadcast a momentarily-naked avatar
+        // and flicker its gear on every witness whenever its inventory changes.
+        std::map<ESM::RefNum, std::vector<EquipmentSlot>> mAvatarEquipment;
         // Per actor, the health last applied and the tick we last played a hit reaction, so a drop
         // in replicated health makes the victim flinch + grunt once per hit on this client (the
         // authoritative damage is applied directly, bypassing the onHit that would normally react).

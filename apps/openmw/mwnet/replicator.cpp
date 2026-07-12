@@ -584,6 +584,7 @@ namespace MWNet
         mAvatarSwing.clear();
         mAvatarSpeed.clear();
         mAvatarMoveFlags.clear();
+        mAvatarEquipment.clear();
         mLastHealth.clear();
         mLastHitReactionTick.clear();
         mPendingAggro.clear();
@@ -859,6 +860,7 @@ namespace MWNet
                 const auto storedSwing = mAvatarSwing.find(netId);
                 const auto storedSpeed = mAvatarSpeed.find(netId);
                 const auto storedMoveFlags = mAvatarMoveFlags.find(netId);
+                const auto storedEquipment = mAvatarEquipment.find(netId);
                 include(netId,
                     TransformState{ pos.asVec3(), osg::Vec3f(pos.rot[0], pos.rot[1], pos.rot[2]) },
                     sampleStats(avatar), sampleDrawState(avatar),
@@ -866,7 +868,12 @@ namespace MWNet
                     storedSwing != mAvatarSwing.end() ? storedSwing->second : std::nullopt,
                     storedSpeed != mAvatarSpeed.end() ? storedSpeed->second : std::nullopt,
                     fullSnapshot ? sampleAppearance(avatar) : std::nullopt,
-                    fullSnapshot ? sampleEquipment(avatar) : std::nullopt,
+                    // Relay the equipment the OWNER reported, not a re-sample of the host puppet's store
+                    // (which applyAvatarInventory transiently clears): re-sampling flickers gear on every
+                    // witness when the owner's inventory changes.
+                    fullSnapshot && storedEquipment != mAvatarEquipment.end()
+                        ? std::optional(storedEquipment->second)
+                        : std::nullopt,
                     // Relay the cell we placed the avatar in (kept correct on receipt below), so a
                     // downstream client puts its copy in the same cell rather than the host's.
                     sampleCellId(avatar), std::nullopt /*item*/, std::nullopt /*creature*/,
@@ -1434,6 +1441,7 @@ namespace MWNet
         mAvatarSwing.erase(id);
         mAvatarSpeed.erase(id);
         mAvatarMoveFlags.erase(id);
+        mAvatarEquipment.erase(id);
         mLastHealth.erase(id);
         mLastHitReactionTick.erase(id);
         mRemoteMotion.erase(id);
@@ -1871,7 +1879,12 @@ namespace MWNet
         else
             mAppliedSwingSeq.try_emplace(entity.mId, 0); // witnessed its pre-swing state: the first real swing will play
         if (entity.mEquipment)
+        {
+            // Remember it for verbatim relay (only carried on a full-refresh, so store only when
+            // present — never clobber the kept value with a nullopt from a between-refresh tick).
+            mAvatarEquipment[entity.mId] = *entity.mEquipment;
             applyEquipment(avatar, *entity.mEquipment);
+        }
         return true;
     }
 
