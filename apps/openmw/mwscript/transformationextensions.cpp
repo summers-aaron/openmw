@@ -1,3 +1,5 @@
+#include <algorithm>
+
 #include <components/debug/debuglog.hpp>
 
 #include <components/sceneutil/positionattitudetransform.hpp>
@@ -114,21 +116,39 @@ namespace MWScript
                     return;
                 }
 
-                float distance;
-                // If the objects are in different worldspaces, return a large value (just like vanilla)
-                if (!to.isInCell() || !from.isInCell()
-                    || to.getCell()->getCell()->getWorldSpace() != from.getCell()->getCell()->getWorldSpace())
-                    distance = std::numeric_limits<float>::max();
-                else
-                {
-                    double diff[3];
+                // Distance from `from` to a target ref. Different worldspaces read as "very far",
+                // just like vanilla.
+                const auto distanceTo = [&from](const MWWorld::Ptr& target) -> float {
+                    if (!target.isInCell() || !from.isInCell()
+                        || target.getCell()->getCell()->getWorldSpace() != from.getCell()->getCell()->getWorldSpace())
+                        return std::numeric_limits<float>::max();
 
-                    const float* const pos1 = to.getRefData().getPosition().pos;
+                    double diff[3];
+                    const float* const pos1 = target.getRefData().getPosition().pos;
                     const float* const pos2 = from.getRefData().getPosition().pos;
                     for (int i = 0; i < 3; ++i)
                         diff[i] = pos1[i] - pos2[i];
 
-                    distance = static_cast<float>(std::sqrt(diff[0] * diff[0] + diff[1] * diff[1] + diff[2] * diff[2]));
+                    return static_cast<float>(std::sqrt(diff[0] * diff[0] + diff[1] * diff[1] + diff[2] * diff[2]));
+                };
+
+                float distance = distanceTo(to);
+
+                // Multiplayer: "GetDistance Player" gates a great many vanilla proximity triggers (e.g.
+                // Fargoth sneaking to his hiding place). searchPtr("Player") only ever returns the
+                // primary player, so on a dedicated/idle host — whose own player stands nowhere near
+                // the action — every such trigger stays dormant and the event never fires for the
+                // clients actually standing there. Measure to the NEAREST player avatar so any player's
+                // presence arms it, and both peers evaluate it the same way. A no-op in single-player.
+                MWBase::World& world = *MWBase::Environment::get().getWorld();
+                if (name == "Player" && world.getPlayerCount() > 1)
+                {
+                    for (std::size_t i = 1; i < world.getPlayerCount(); ++i)
+                    {
+                        const MWWorld::Ptr avatar = world.getPlayerPtr(i);
+                        if (!avatar.isEmpty())
+                            distance = std::min(distance, distanceTo(avatar));
+                    }
                 }
 
                 runtime.push(distance);
