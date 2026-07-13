@@ -2,6 +2,7 @@
 #define GAME_MWWORLD_CELLSTORE_H
 
 #include <algorithm>
+#include <functional>
 #include <map>
 #include <memory>
 #include <stdexcept>
@@ -87,6 +88,9 @@ namespace MWWorld
 {
     class ESMStore;
     struct CellStoreImp;
+
+    /// Optional per-reference exclusion predicate for writeReferences (empty = write everything).
+    using RefNumSkip = std::function<bool(ESM::RefNum)>;
 
     using CellStoreTuple = std::tuple<CellRefList<ESM::Activator>, CellRefList<ESM::Potion>,
         CellRefList<ESM::Apparatus>, CellRefList<ESM::Armor>, CellRefList<ESM::Book>, CellRefList<ESM::Clothing>,
@@ -317,7 +321,10 @@ namespace MWWorld
 
         void readFog(ESM::ESMReader& reader);
 
-        void writeReferences(ESM::ESMWriter& writer) const;
+        /// @param skip optional per-reference exclusion, keyed by RefNum. Only used when writing a
+        /// network cell-state blob (refs owned by the live replication channels are left out); a
+        /// real save passes nothing and the output is byte-identical to before the parameter existed.
+        void writeReferences(ESM::ESMWriter& writer, const RefNumSkip& skip = {}) const;
 
         struct GetCellStoreCallback
         {

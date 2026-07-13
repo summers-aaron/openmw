@@ -34,6 +34,15 @@ namespace MWNet
     /// a client can instantiate it, but appears with no puff — only the content-file tells them apart.
     inline constexpr std::int32_t sNetworkSpawnRefNumContentFile = -3001;
 
+    /// A network CLIENT allocates its local generated RefNums ({index, -1} space) starting here,
+    /// while the host counts up from 1 — so refs arriving verbatim in a host cell-state blob can
+    /// never collide with (silently overwrite, in the Ptr registry) a client-local allocation, and
+    /// host-origin vs client-origin generated refs are distinguishable by index range (which is
+    /// what lets a client clear host-origin refs before re-applying a cell blob). 2^30 allocations
+    /// per side before the ranges could meet; index overflow rolls mContentFile further negative
+    /// (see CellRef::getOrAssignRefNum), which stays far clear of the reserved spaces above.
+    inline constexpr std::uint32_t sClientGeneratedRefNumBase = 0x40000000;
+
     inline bool isNetPlayer(const ESM::RefNum& id)
     {
         return id.mContentFile == sNetPlayerContentFile;

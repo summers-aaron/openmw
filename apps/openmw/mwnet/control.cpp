@@ -7,7 +7,7 @@ namespace MWNet
     namespace
     {
         // Wire format version. Bumped if any layout below changes incompatibly.
-        constexpr std::uint8_t sVersion = 2;
+        constexpr std::uint8_t sVersion = 3;
 
         void writeBody(ByteWriter& writer, const LoginRequest& message)
         {
@@ -48,6 +48,14 @@ namespace MWNet
         void writeBody(ByteWriter& writer, const LoginReject& message) { writer.writeString(message.mReason); }
 
         void writeBody(ByteWriter& writer, const WorldJournal& message) { writer.writeString(message.mBlob); }
+
+        void writeBody(ByteWriter& writer, const CellStateRequest& message) { writer.writeString(message.mCellId); }
+
+        void writeBody(ByteWriter& writer, const CellStateData& message)
+        {
+            writer.writeString(message.mCellId);
+            writer.writeString(message.mBlob);
+        }
 
         // Read a length-prefixed list of strings, validating the count against the buffer first (each
         // string is at least its 4-byte length prefix).
@@ -151,6 +159,20 @@ namespace MWNet
             {
                 WorldJournal message;
                 if (!reader.readString(message.mBlob))
+                    return std::nullopt;
+                return message;
+            }
+            case 8: // CellStateRequest
+            {
+                CellStateRequest message;
+                if (!reader.readString(message.mCellId))
+                    return std::nullopt;
+                return message;
+            }
+            case 9: // CellStateData
+            {
+                CellStateData message;
+                if (!reader.readString(message.mCellId) || !reader.readString(message.mBlob))
                     return std::nullopt;
                 return message;
             }

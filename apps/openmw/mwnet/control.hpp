@@ -98,8 +98,34 @@ namespace MWNet
         friend bool operator==(const WorldJournal&, const WorldJournal&) = default;
     };
 
+    /// client -> host: send me the current state of this cell (an ESM::RefId as serializeText).
+    /// Emitted as the client loads the cell; correlated purely by cell id (at most one request per
+    /// cell is in flight, and the Reliable channel is ordered), so no request id is needed.
+    struct CellStateRequest
+    {
+        std::string mCellId;
+
+        friend bool operator==(const CellStateRequest&, const CellStateRequest&) = default;
+    };
+
+    /// host -> client: one cell's current state as an opaque blob — the same REC_CSTA record a save
+    /// writes for the cell (see cellstatecodec). An EMPTY mBlob means the host cannot serve this
+    /// cell (unknown id, or over the size cap): the client falls back to the legacy per-category
+    /// reconcile channels for that cell load.
+    struct CellStateData
+    {
+        std::string mCellId;
+        std::string mBlob;
+
+        friend bool operator==(const CellStateData&, const CellStateData&) = default;
+    };
+
+    /// Refuse to send a cell blob larger than this (well under the transport's 16 MiB frame cap);
+    /// the client gets an empty-blob denial instead. A cell state is normally a few KB.
+    inline constexpr std::size_t sMaxCellStateBlob = 8 * 1024 * 1024;
+
     using ControlMessage = std::variant<LoginRequest, CharacterList, SelectCharacter, CreateNew,
-        CharacterData, LoginAccept, LoginReject, WorldJournal>;
+        CharacterData, LoginAccept, LoginReject, WorldJournal, CellStateRequest, CellStateData>;
 
     std::vector<std::byte> serializeControl(const ControlMessage& message);
 

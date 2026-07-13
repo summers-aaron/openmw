@@ -143,7 +143,8 @@ namespace
     }
 
     template <typename T>
-    void writeReferenceCollection(ESM::ESMWriter& writer, const MWWorld::CellRefList<T>& collection)
+    void writeReferenceCollection(
+        ESM::ESMWriter& writer, const MWWorld::CellRefList<T>& collection, const MWWorld::RefNumSkip& skip)
     {
         // references
         for (const MWWorld::LiveCellRef<T>& liveCellRef : collection.mList)
@@ -161,6 +162,12 @@ namespace
             if (liveCellRef.mRef.getCount() == 0 && !liveCellRef.mRef.hasContentFile())
             {
                 // Deleted reference that did not come from a content file -> ignore
+                continue;
+            }
+            if (skip && skip(liveCellRef.mRef.getRefNum()))
+            {
+                // Caller-excluded reference (a network cell-state blob leaves out refs the live
+                // replication channels own) -> ignore. Real saves pass no predicate.
                 continue;
             }
             using StateType = typename RecordToState<T>::StateType;
@@ -1026,16 +1033,18 @@ namespace MWWorld
         mFogState->load(reader);
     }
 
-    void CellStore::writeReferences(ESM::ESMWriter& writer) const
+    void CellStore::writeReferences(ESM::ESMWriter& writer, const RefNumSkip& skip) const
     {
         Misc::tupleForEach(this->mCellStoreImp->mRefLists,
-            [&writer](auto& cellRefList) { writeReferenceCollection(writer, cellRefList); });
+            [&writer, &skip](auto& cellRefList) { writeReferenceCollection(writer, cellRefList, skip); });
 
         for (const auto& [base, store] : mMovedToAnotherCell)
         {
             ESM::RefNum refNum = base->mRef.getRefNum();
             if (base->isDeleted() && !refNum.hasContentFile())
                 continue; // filtered out in writeReferenceCollection
+            if (skip && skip(refNum))
+                continue; // caller-excluded (see writeReferenceCollection)
             ESM::RefId movedTo = store->getCell()->getId();
 
             writer.writeFormId(refNum, true, "MVRF");
