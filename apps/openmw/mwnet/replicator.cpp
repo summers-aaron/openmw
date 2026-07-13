@@ -1230,7 +1230,17 @@ namespace MWNet
             mCellStatesInFlight.erase(id);
             if (!applied)
             {
-                Log(Debug::Error) << "Failed to apply cell state for " << id;
+                // The blob was non-empty but unparseable (version skew, a serialize bug, a hostile
+                // host). The stale-ref clear above already deleted this cell's host-origin refs, so
+                // leaving it here would strand it stripped forever with no re-request. Run the same
+                // legacy reconciliation the host-declined (empty-blob) path uses: it restores the
+                // door / ref-enable / removed-item state, and the reserved spawns and loose items the
+                // clear removed re-instantiate from the ongoing snapshot stream (sampleDelta re-sends
+                // their descriptors every tick). No re-request, so a persistently-bad blob can't loop.
+                Log(Debug::Error) << "Failed to apply cell state for " << id << "; using legacy reconciliation";
+                purgeRemovedItems();
+                applyRefStates();
+                applyDoorStates();
                 continue;
             }
             // A blob applied to an inactive cell is a STAGED baseline: its next load builds
