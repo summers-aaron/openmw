@@ -384,6 +384,12 @@ namespace MWNet
         // or summoner whose cell loads AFTER the actor's (cross-cell wanderers) still gets its
         // spawned-actor / summon-map link re-pointed to the migrated identity.
         std::map<ESM::RefNum, ESM::RefNum> mMigratedSpawnRefNums;
+        // Client only: cells with a CellStateRequest in flight (dedupe — one per cell at a time).
+        std::set<ESM::RefId> mCellStatesInFlight;
+        // Client only: cell ids queued for a CellStateRequest, drained by the engine pump.
+        std::vector<ESM::RefId> mOutgoingCellStateRequests;
+        // Client only: received cell blobs awaiting the deferred safe point (applyPendingCellStates).
+        std::vector<std::pair<ESM::RefId, std::string>> mPendingCellStates;
         // Client only: loose items spawned from the host's replication, keyed by their (host) RefNum.
         // Used to tell a host-owned floor item apart from anything else when this peer deletes one
         // (picks it up), so only those are reported back to the host.
@@ -847,6 +853,31 @@ namespace MWNet
         /// and broadcast a removal for a content actor the save DISPOSED (count 0), which a client
         /// would otherwise show alive forever. A no-op on a client and in single-player.
         void reconcileLoadedCellActors(MWWorld::CellStore& cell);
+
+        /// True when this peer's per-cell baseline comes from the host's cell-state blobs (the
+        /// cell-state protocol) rather than the legacy per-category load-time reconciles. Currently
+        /// simply "is a network client" — the legacy paths stay compiled as the denial fallback.
+        bool usesCellStateBaseline() const { return isNetworkClient(); }
+
+        /// Called (client only) as a cell loads: queue a CellStateRequest for it, replacing the
+        /// legacy load-time machinery — the host answers with the cell's current state as a save
+        /// blob (see cellstatecodec), applied in applyPendingCellStates. Dedupes: one request in
+        /// flight per cell. The engine drains the queue once the local player is ready.
+        void requestCellState(const MWWorld::CellStore& cell);
+
+        /// Drain the cell ids queued by requestCellState for sending.
+        std::vector<ESM::RefId> takeOutgoingCellStateRequests();
+
+        /// Stash a received CellStateData (client only) for applyPendingCellStates — applied at the
+        /// end of the pump, never mid message-dispatch.
+        void queueCellState(const std::string& cellId, const std::string& blob);
+
+        /// Apply every stashed cell blob (client only, deferred-safe point): clear the cell's
+        /// host-origin runtime refs (a re-applied blob would duplicate them — RefNum ranges make
+        /// host- vs client-origin distinguishable, see sClientGeneratedRefNumBase), apply the blob
+        /// through the save-load path, then scene-attach whatever it added. An empty blob is the
+        /// host declining: fall back to the legacy per-category machinery for that load.
+        void applyPendingCellStates();
 
         /// Mark a lootable inventory (a world container or a corpse) as changed, so this tick's
         /// action batch carries its new contents. Called by the loot UI on whichever peer made the

@@ -142,6 +142,39 @@ second move).
   host's per-door record is re-asserted periodically and at cell load (change-guarded on
   receivers) so late joiners find doors standing the way the world left them, and it
   persists in the server save. Teleport ("load") doors don't swing and never cross.
+- **Cell-state protocol (per-cell baseline download)** — as a client loads a cell it asks
+  the host (`CellStateRequest`) and the host answers with the cell's *current* state as the
+  same `REC_CSTA` record a save writes (`cellstatecodec`), applied through the save-load
+  read path. This replaces the client's legacy load-time re-derivation wholesale: ghost
+  items the host's save consumed, moved/changed content refs, container contents,
+  scripted enable/disable, door poses, and save-restored dynamic spawns all arrive in one
+  blob with their RefNums verbatim — closing the generated-RefNum aliasing bug class at
+  the root instead of one category at a time. Mechanics:
+  - the client's own generated RefNums allocate from a disjoint range
+    (`sClientGeneratedRefNumBase`), so blob refs can never collide with (and silently
+    re-key) a local allocation, and host- vs client-origin refs are distinguishable;
+  - re-applying is safe: the client clears the cell's host-origin runtime refs before
+    each apply (the save-read path always *adds* non-content refs), so every reload
+    re-requests and converges — no per-category caches needed while a cell is unloaded;
+  - a blob for a scene-ACTIVE cell applies inside `Scene::reloadCellWith` (unload → apply
+    → load): the save-format read path replaces each touched ref's RefData wholesale —
+    base node, custom data, mwscript locals — which is only safe against bare ref lists,
+    the one regime a real save-load exercises. Mutating a live cell instead leaves
+    still-registered scripts running on unconfigured locals and mechanics/rendering
+    holding freed state (heap corruption, found the hard way);
+  - the host serves only once the cell is **scene-active** on its side (the requester's
+    avatar migration is loading it), so the blob is cut *after* load-time reconciliation
+    (leveled rolls, respawn, save-restored-spawn RefNum migration); parked requests retry
+    each pump with a deadline, and an unknown/oversized cell gets an empty-blob denial —
+    on which the client falls back to the legacy per-category machinery (kept compiled);
+  - summons and avatars are filtered out of blobs (the snapshot channel owns them);
+    reserved `-3001` spawns are included, and the descriptor path adopts instead of
+    duplicating. Live channels (snapshot, actions, container broadcasts) are untouched —
+    the blob is the *baseline*, the live channels are the *diffs*.
+  - *Accepted transient:* between a cell load and its blob applying (~1-2 pumps) the
+    client briefly shows content-default state. *v2:* pre-request at preload to hide the
+    latency; shrink the legacy retention (`mRefStates`/`mDoorStates`/`mRemovedWorldItems`
+    re-asserts) once the protocol has soaked.
 - A test harness (`mp-server.sh`, see below) spins up the server + two pre-kitted clients.
 
 ## What's broken / known limitations

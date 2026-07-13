@@ -8,6 +8,7 @@
 #include "positioncellgrid.hpp"
 #include "ptr.hpp"
 
+#include <functional>
 #include <memory>
 #include <optional>
 #include <set>
@@ -157,6 +158,15 @@ namespace MWWorld
 
         // Load and keep active the cell that a newly added non-primary player occupies.
         void addExtraPlayer(const MWWorld::Ptr& player);
+
+        // Run an out-of-band mutation of a cell's STORE (a received network cell-state blob) in the
+        // only regime the save-format read path supports: a cell with no live scene objects. For an
+        // active cell this is unloadCell -> apply() -> loadCell (the full vanilla teardown/rebuild,
+        // including script re-registration and local re-configuration); for an inactive cell just
+        // apply() — its next activation rebuilds from the mutated store anyway. Mutating a LIVE
+        // cell instead (readReferences replaces RefData wholesale — base node, custom data, script
+        // locals) corrupts whatever mechanics/rendering/mwscript still points at the old state.
+        void reloadCellWith(CellStore& cell, const std::function<void()>& apply);
 
         CellStore* getCurrentCell();
 

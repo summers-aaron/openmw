@@ -274,6 +274,8 @@ namespace MWWorld
         ESM::RefNum reserveNetworkSummonRefNum() override;
         ESM::RefNum reserveNetworkSpawnRefNum() override;
         void assignNetworkSpawnRefNum(const MWWorld::Ptr& ptr) override;
+        bool isCellActive(MWWorld::CellStore& cell) override;
+        void reloadCellWith(MWWorld::CellStore& cell, const std::function<void()>& apply) override;
         // Mark this World as belonging to a dedicated server (no local human player). The primary
         // placeholder is flagged as a non-anchor, so simulation (navmesh, actor AI, cell
         // keep-alive) follows the network avatars rather than the stationary placeholder.

@@ -546,19 +546,30 @@ namespace MWWorld
         // player left open). No-op on a peer that has seen no removals/changes, and in single-player.
         if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
         {
-            replicator->purgeRemovedItems();
-            // Host only: re-derive from this just-loaded cell the loose-item changes the host's save
-            // baked in (items it already consumed, and items it placed at runtime), which a client's
-            // content-only world can't know on its own, and feed them to the removal / replication
-            // channels so a save-booted server keeps floor items in sync with joiners.
-            replicator->reconcileLoadedCellItems(cell);
-            // Host only: likewise re-derive the ACTOR changes the save baked in — dynamic spawns and
-            // corpses from earlier sessions restore under generated RefNums that a content-fresh
-            // client can't resolve (or worse, resolves to an unrelated local object), so migrate them
-            // into the reserved network-spawn space where they replicate like live-session spawns.
-            replicator->reconcileLoadedCellActors(cell);
-            replicator->applyRefStates();
-            replicator->applyDoorStates();
+            if (replicator->usesCellStateBaseline())
+            {
+                // Network client: this cell's baseline comes from the host as one cell-state blob
+                // (the cell's current save record, applied asynchronously a pump or two from now)
+                // instead of the legacy per-category machinery below — which stays compiled as the
+                // fallback the client runs if the host declines (see applyPendingCellStates).
+                replicator->requestCellState(cell);
+            }
+            else
+            {
+                replicator->purgeRemovedItems();
+                // Host only: re-derive from this just-loaded cell the loose-item changes the host's save
+                // baked in (items it already consumed, and items it placed at runtime), which a client's
+                // content-only world can't know on its own, and feed them to the removal / replication
+                // channels so a save-booted server keeps floor items in sync with joiners.
+                replicator->reconcileLoadedCellItems(cell);
+                // Host only: likewise re-derive the ACTOR changes the save baked in — dynamic spawns and
+                // corpses from earlier sessions restore under generated RefNums that a content-fresh
+                // client can't resolve (or worse, resolves to an unrelated local object), so migrate them
+                // into the reserved network-spawn space where they replicate like live-session spawns.
+                replicator->reconcileLoadedCellActors(cell);
+                replicator->applyRefStates();
+                replicator->applyDoorStates();
+            }
         }
     }
 
@@ -635,6 +646,28 @@ namespace MWWorld
                 loadCell(*cell, nullptr, false, pos, navigatorUpdateGuard.get());
         }
         const DetourNavigator::PlayerPosition playerPosition{ worldspace, pos };
+        mNavigator.update(std::span(&playerPosition, 1), navigatorUpdateGuard.get());
+        navigatorUpdateGuard.reset();
+    }
+
+    void Scene::reloadCellWith(CellStore& cell, const std::function<void()>& apply)
+    {
+        if (mActiveCells.find(&cell) == mActiveCells.end())
+        {
+            // Inactive: the store can be mutated freely — nothing live points into it, and the
+            // cell's next activation (insertCell + script wiring) builds from the mutated state.
+            apply();
+            return;
+        }
+        // Active: tear the cell's scene state down first, exactly as changeCellGrid would, so the
+        // mutation happens against bare ref lists; then rebuild through the one true load path
+        // (rendering/physics/mechanics/navmesh, LocalScripts::addCell -> setLocals, Lua restarts).
+        const osg::Vec3f pos = mWorld.getPlayerConstPtr().getRefData().getPosition().asVec3();
+        auto navigatorUpdateGuard = mNavigator.makeUpdateGuard();
+        unloadCell(&cell, navigatorUpdateGuard.get());
+        apply();
+        loadCell(cell, nullptr, /*respawn=*/false, pos, navigatorUpdateGuard.get());
+        const DetourNavigator::PlayerPosition playerPosition{ cell.getCell()->getWorldSpace(), pos };
         mNavigator.update(std::span(&playerPosition, 1), navigatorUpdateGuard.get());
         navigatorUpdateGuard.reset();
     }

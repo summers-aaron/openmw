@@ -183,6 +183,16 @@ namespace OMW
         std::map<MWNet::PeerId, ESM::RefNum> mPeerNetIds; // host: connected peer -> its login net id
         std::map<ESM::RefNum, std::string> mUploadedBlobs; // host: latest uploaded character sheet per net id
         std::set<ESM::RefNum> mCharacterApplied; // host: net ids whose sheet was applied to the live puppet
+        // Host: cell-state requests waiting for their cell to become scene-active (serving earlier
+        // would cut the blob before the host's load-time reconciliation ran for that cell). Each
+        // carries a deadline pump tick; an expired entry is answered with an empty-blob denial.
+        struct PendingCellStateServe
+        {
+            MWNet::PeerId mPeer;
+            std::string mCellId;
+            unsigned mDeadline;
+        };
+        std::vector<PendingCellStateServe> mPendingCellStateServes;
         MWBase::Environment mEnvironment;
         ToUTF8::FromType mEncoding;
         std::unique_ptr<ToUTF8::Utf8Encoder> mEncoder;
@@ -248,6 +258,12 @@ namespace OMW
         void handleControlMessage(MWNet::PeerId from, const MWNet::ControlMessage& message);
         /// Send a control message to one peer on the Reliable channel under the sKindControl tag.
         void sendControl(MWNet::PeerId to, const MWNet::ControlMessage& message);
+
+        /// Host: answer one client's CellStateRequest. Returns false when the cell exists but is
+        /// not scene-active yet — the caller keeps it pending and retries next pump (the client's
+        /// avatar migration is loading that cell as we speak). Unknown/oversized cells are denied
+        /// with an empty blob (returns true — handled).
+        bool tryServeCellState(MWNet::PeerId to, const std::string& cellId);
 
         /// Drain and dispatch lines typed into the dedicated server's terminal console:
         /// save/stop/players/help are built-ins; anything else runs as a console script command.

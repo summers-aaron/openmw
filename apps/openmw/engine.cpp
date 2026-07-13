@@ -88,6 +88,7 @@
 #include "mwworld/player.hpp"
 #include "mwworld/datetimemanager.hpp"
 #include "mwworld/worldimp.hpp"
+#include "mwworld/worldmodel.hpp"
 
 #include "mwrender/camera.hpp"
 #include "mwrender/vismask.hpp"
@@ -105,6 +106,7 @@
 #include "mwbase/worldrendering.hpp"
 
 #include "mwnet/actions.hpp"
+#include "mwnet/cellstatecodec.hpp"
 #include "mwnet/charactercodec.hpp"
 #include "mwnet/control.hpp"
 #include "mwnet/events.hpp"
@@ -294,6 +296,47 @@ void OMW::Engine::processServerConsole()
         }
         else if (!command.empty())
             mServerConsole->runScriptCommand(line);
+    }
+}
+
+bool OMW::Engine::tryServeCellState(MWNet::PeerId to, const std::string& cellId)
+{
+    MWBase::World& world = *MWBase::Environment::get().getWorld();
+    try
+    {
+        const ESM::RefId id = ESM::RefId::deserializeText(cellId);
+        MWWorld::CellStore* cell = MWBase::Environment::get().getWorldModel()->findCell(id);
+        if (cell == nullptr)
+        {
+            sendControl(to, MWNet::CellStateData{ cellId, {} }); // unknown cell — deny
+            return true;
+        }
+        // Serve only once the cell is scene-active here: the client's avatar migration is loading
+        // it right now (addExtraPlayer loads the same grid the client just did), and cutting the
+        // blob earlier would miss the load-time reconciliation (leveled rolls, respawn, the
+        // save-restored-spawn RefNum migration) that runs as the cell activates — a client copy
+        // keyed to pre-migration RefNums would be orphaned by the very next snapshot.
+        if (!world.isCellActive(*cell))
+            return false; // keep pending; retried next pump
+        std::string blob = MWNet::serializeCellState(*cell, world.getContentFiles());
+        if (blob.size() > MWNet::sMaxCellStateBlob)
+        {
+            Log(Debug::Error) << "Cell state for " << cellId << " is " << blob.size()
+                              << " bytes (over the cap); denying";
+            sendControl(to, MWNet::CellStateData{ cellId, {} });
+            return true;
+        }
+        Log(Debug::Verbose) << "Served cell state for " << cellId << " (" << blob.size() << " bytes) to peer "
+                            << to;
+        sendControl(to, MWNet::CellStateData{ cellId, std::move(blob) });
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        // A garbled id or a serialization failure must never take the host down — deny instead.
+        Log(Debug::Warning) << "Failed to serve cell state for '" << cellId << "': " << e.what();
+        sendControl(to, MWNet::CellStateData{ cellId, {} });
+        return true;
     }
 }
 
@@ -572,6 +615,19 @@ void OMW::Engine::handleControlMessage(MWNet::PeerId from, const MWNet::ControlM
                     *MWBase::Environment::get().getDialogueManager(), world.getContentFiles()) });
             Log(Debug::Info) << "Peer " << from << " is creating a new character";
         }
+        else if (const auto* cellRequest = std::get_if<MWNet::CellStateRequest>(&message))
+        {
+            // A client loading a cell asks for its current state. Usually served on the spot; if
+            // the cell isn't scene-active here yet (the client's avatar migration is bringing it
+            // up), park the request and retry each pump — with a deadline so a cell that never
+            // activates (a bogus id in a valid cell's clothing) still gets a denial.
+            if (!mPeerNetIds.contains(from))
+                return; // never logged in
+            constexpr unsigned sCellStateServeTimeoutPumps = 600; // ~10s at 60 fps
+            if (!tryServeCellState(from, cellRequest->mCellId))
+                mPendingCellStateServes.push_back(
+                    { from, cellRequest->mCellId, mPumpTick + sCellStateServeTimeoutPumps });
+        }
         else if (const auto* upload = std::get_if<MWNet::CharacterData>(&message))
         {
             // A client uploaded its full character sheet: apply it to its bound puppet slot so our
@@ -673,6 +729,12 @@ void OMW::Engine::handleControlMessage(MWNet::PeerId from, const MWNet::ControlM
             // checked each pump): the upcoming newGame wipes the journal, and chargen then writes
             // this character's own entries — the merge after chargen keeps both.
             mPendingWorldJournal = worldJournal->mBlob;
+        }
+        else if (const auto* cellState = std::get_if<MWNet::CellStateData>(&message))
+        {
+            // A cell's authoritative state (or an empty-blob denial). Stashed and applied at the
+            // deferred safe point — applying mid message-dispatch mutates the scene under our feet.
+            mReplicator->queueCellState(cellState->mCellId, cellState->mBlob);
         }
         else if (const auto* reject = std::get_if<MWNet::LoginReject>(&message))
             Log(Debug::Error) << "Login rejected by host: " << reject->mReason;
@@ -812,6 +874,13 @@ void OMW::Engine::pumpTransport()
         if (!outgoingActions.empty())
             mSession->broadcast(MWNet::Message{ MWNet::Channel::Reliable,
                 tagged(sKindActions, MWNet::serializeActions(outgoingActions)) });
+
+        // Cell-state requests queued as cells loaded. Sent only once the local player is ready:
+        // the bootstrap paths (adopt / chargen) load cells before the replication gate opens, and
+        // those requests flush here on the first ready pump — the cells are still loaded.
+        if (mSession->receivesAuthoritativeState() && mReplicator->isLocalPlayerReady())
+            for (const ESM::RefId& id : mReplicator->takeOutgoingCellStateRequests())
+                sendControl(MWNet::sLocalPeer, MWNet::CellStateRequest{ id.serializeText() });
     }
 
     // Host: clean up departed clients. The avatar is despawned for everyone and its world slot is
@@ -819,8 +888,30 @@ void OMW::Engine::pumpTransport()
     // reconnect) but out of the world: not simulated, not keeping cells alive. (The host is in-game.)
     if (mSession->isAuthority())
     {
+        // Cell-state requests parked because their cell wasn't scene-active yet: retry each pump
+        // (the requesting client's avatar migration is loading the cell — normally a tick or two),
+        // denying any that outlive their deadline so the client falls back to the legacy channels.
+        if (!mPendingCellStateServes.empty())
+        {
+            std::vector<PendingCellStateServe> still;
+            for (PendingCellStateServe& pending : mPendingCellStateServes)
+            {
+                if (mPumpTick >= pending.mDeadline)
+                {
+                    Log(Debug::Warning) << "Cell " << pending.mCellId << " never became active; denying peer "
+                                        << pending.mPeer << "'s cell-state request";
+                    sendControl(pending.mPeer, MWNet::CellStateData{ pending.mCellId, {} });
+                }
+                else if (!tryServeCellState(pending.mPeer, pending.mCellId))
+                    still.push_back(std::move(pending));
+            }
+            mPendingCellStateServes = std::move(still);
+        }
+
         for (const MWNet::PeerId peer : mSession->takeDisconnected())
         {
+            std::erase_if(mPendingCellStateServes,
+                [peer](const PendingCellStateServe& pending) { return pending.mPeer == peer; });
             const auto idIt = mPeerNetIds.find(peer);
             if (idIt == mPeerNetIds.end())
                 continue; // connected but never logged in
@@ -958,12 +1049,22 @@ void OMW::Engine::pumpTransport()
     if (inGame)
         mReplicator->driveRemoteActors();
 
+    // Deferred application of received cell-state blobs (safe here: message dispatch is done, and
+    // the world isn't mid cell-load). Held while mid-chargen like every other remote apply.
+    if (inGame && mSession->receivesAuthoritativeState() && !chargenBubble)
+        mReplicator->applyPendingCellStates();
+
     // Deferred backdrop for the character-select screen (safe here: message dispatch is done). Brings
     // up a scenic world and opens the select UI over it.
     if (mPendingLobby && mStateManager->getState() == MWBase::StateManager::State_NoGame)
     {
         mPendingLobby = false;
         enterSelectLobby();
+        // A network client's local generated RefNums must never collide with refs arriving verbatim
+        // in the host's cell-state blobs (the registry silently re-keys on collision): allocate from
+        // a disjoint range. Re-seeded after every world (re)init — newGame reset the counter.
+        MWBase::Environment::get().getWorldModel()->setLastGeneratedRefNum(
+            ESM::RefNum{ MWNet::sClientGeneratedRefNumBase, -1 });
     }
 
     // Deferred new-game for a client that chose to create a character (safe here: message dispatch is
@@ -976,6 +1077,10 @@ void OMW::Engine::pumpTransport()
         // TEMPORARY: the debug drop-in bypasses the chargen intro (a bypass start marks chargen
         // done, so the replication gate reopens on the next pump) and pre-kits the character.
         mStateManager->newGame(/*bypass=*/mDebugCharacter);
+        // Disjoint generated-RefNum range for this client's local allocations (see the lobby-time
+        // seed above; newGame just reset the counter again).
+        MWBase::Environment::get().getWorldModel()->setLastGeneratedRefNum(
+            ESM::RefNum{ MWNet::sClientGeneratedRefNumBase, -1 });
         // Arm the replication gate for THIS chargen (set after newGame so its teardown, which resets
         // the flag, doesn't clear it): updateClientStart opens the gate when this character's chargen
         // completes. Deliberately not armed for the select-lobby backdrop, whose bypass world also

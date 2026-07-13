@@ -4,6 +4,7 @@
 #include "rotationflags.hpp"
 
 #include <deque>
+#include <functional>
 #include <set>
 #include <span>
 #include <string_view>
@@ -224,6 +225,19 @@ namespace MWBase
 
         /// True when this instance is a headless dedicated server (no local human player / window).
         virtual bool isDedicatedServer() const = 0;
+
+        /// Whether this cell is currently active in the scene (rendered/simulated), as opposed to
+        /// merely having its CellStore loaded. The cell-state responder defers serving a cell until
+        /// it is active, so the host's load-time reconciliation has run before the blob is cut.
+        virtual bool isCellActive(MWWorld::CellStore& cell) = 0;
+
+        /// Run an out-of-band mutation of a cell's store (a received network cell-state blob) with
+        /// the cell's scene state torn down around it (unload -> apply -> reload for an active
+        /// cell; plain apply for an inactive one). The save-format read path replaces each ref's
+        /// RefData wholesale — base node, custom data, script locals — which is only safe when
+        /// nothing live points into it; the reload then rebuilds everything through the ordinary
+        /// cell-load path. See Scene::reloadCellWith.
+        virtual void reloadCellWith(MWWorld::CellStore& cell, const std::function<void()>& apply) = 0;
 
         /// Adopt a server-supplied character (a REC_PLAY record blob) as the local primary player:
         /// apply its inventory/stats/skills/cell over the current player and re-instantiate the

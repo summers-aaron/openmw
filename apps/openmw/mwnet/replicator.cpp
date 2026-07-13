@@ -73,6 +73,8 @@
 #include "../mwworld/timestamp.hpp"
 #include "../mwworld/worldmodel.hpp"
 
+#include "cellstatecodec.hpp"
+
 namespace MWNet
 {
     namespace
@@ -1061,6 +1063,127 @@ namespace MWNet
             const MWWorld::Ptr player = world.getPlayerPtr(i);
             if (!player.isEmpty())
                 remapSummons(player);
+        }
+    }
+
+    void Replicator::requestCellState(const MWWorld::CellStore& cell)
+    {
+        if (!usesCellStateBaseline())
+            return;
+        const ESM::RefId id = cell.getCell()->getId();
+        if (!mCellStatesInFlight.insert(id).second)
+            return; // a request for this cell is already outstanding
+        mOutgoingCellStateRequests.push_back(id);
+    }
+
+    std::vector<ESM::RefId> Replicator::takeOutgoingCellStateRequests()
+    {
+        return std::exchange(mOutgoingCellStateRequests, {});
+    }
+
+    void Replicator::queueCellState(const std::string& cellId, const std::string& blob)
+    {
+        if (!usesCellStateBaseline())
+            return;
+        try
+        {
+            mPendingCellStates.emplace_back(ESM::RefId::deserializeText(cellId), blob);
+        }
+        catch (const std::exception&)
+        {
+            Log(Debug::Warning) << "Dropping cell state with a malformed cell id";
+        }
+    }
+
+    namespace
+    {
+        // A runtime ref in this client's copy of a cell that ORIGINATED ON THE HOST — i.e. one a
+        // cell blob (re-)delivers. Cleared before a blob applies, because readReferences always
+        // pushes a fresh LiveCellRef for a non-content ref (re-application would duplicate it).
+        // The ranges are disjoint by construction: the host allocates generated indices from 1,
+        // this client from sClientGeneratedRefNumBase (its own drops-in-flight etc. are preserved),
+        // and avatars/summons are owned by the snapshot channel, never by blobs.
+        bool isHostOriginRuntimeRef(const ESM::RefNum& id)
+        {
+            if (!id.isSet() || id.hasContentFile())
+                return false;
+            if (id.mContentFile == sNetworkPlayerRefNumContentFile
+                || id.mContentFile == sNetworkSummonRefNumContentFile)
+                return false; // live-channel-owned; filtered out of blobs on the host too
+            if (id.mContentFile == -1 && id.mIndex >= sClientGeneratedRefNumBase)
+                return false; // this client's own local allocation
+            return true; // host generated space, or a reserved (-3001) spawn
+        }
+    }
+
+    void Replicator::applyPendingCellStates()
+    {
+        if (mPendingCellStates.empty())
+            return;
+        MWBase::World& world = *MWBase::Environment::get().getWorld();
+        MWWorld::WorldModel& worldModel = *MWBase::Environment::get().getWorldModel();
+        for (auto& [id, blob] : std::exchange(mPendingCellStates, {}))
+        {
+            if (blob.empty())
+            {
+                // The host declined (unknown cell / over the size cap): run the legacy per-category
+                // machinery this load skipped, so the cell still converges the old way.
+                mCellStatesInFlight.erase(id);
+                Log(Debug::Warning) << "Host declined cell state for " << id << "; using legacy reconciliation";
+                purgeRemovedItems();
+                applyRefStates();
+                applyDoorStates();
+                continue;
+            }
+            MWWorld::CellStore* cell = worldModel.findCell(id, /*forceLoad=*/false);
+            if (cell == nullptr)
+            {
+                mCellStatesInFlight.erase(id);
+                continue; // we requested it, so it should exist — a hostile/garbled id ends up here
+            }
+            // Everything the blob does locally is the host's state, not this player's actions —
+            // don't report any of it back.
+            RemoteApplyScope scope(this);
+            // The save-format read path replaces each touched ref's RefData wholesale (base node,
+            // custom data, script locals) — only safe against a cell with no live scene objects,
+            // the one regime a real save-load ever exercises. reloadCellWith tears the active
+            // cell's scene state down around the mutation and rebuilds it through the ordinary
+            // cell-load path afterwards, which re-wires scripts, mechanics and rendering cleanly.
+            std::size_t cleared = 0;
+            bool applied = false;
+            world.reloadCellWith(*cell, [&] {
+                // Clear the host-origin runtime refs the blob re-delivers (readReferences always
+                // ADDS a non-content ref — re-applying without this would duplicate them). The
+                // handoff guard keeps the deletions from echoing as pickups, and forgetEntity
+                // drops motion/swing state so a recreated actor re-primes from its next snapshot.
+                std::vector<MWWorld::Ptr> stale;
+                cell->forEach([&](const MWWorld::Ptr& ptr) {
+                    if (isHostOriginRuntimeRef(ptr.getCellRef().getRefNum()) && ptr.getCellRef().getCount() > 0)
+                        stale.push_back(ptr);
+                    return true;
+                });
+                for (const MWWorld::Ptr& ptr : stale)
+                {
+                    const ESM::RefNum refNum = ptr.getCellRef().getRefNum();
+                    mHandingOffDrop = true;
+                    world.deleteObject(ptr);
+                    mHandingOffDrop = false;
+                    forgetEntity(refNum);
+                }
+                cleared = stale.size();
+                applied = MWNet::applyCellState(blob);
+            });
+            // Erased AFTER the reload: the rebuild re-enters Scene::loadCell, whose
+            // requestCellState hook then dedupes against the still-present marker instead of
+            // re-requesting the state we just applied.
+            mCellStatesInFlight.erase(id);
+            if (!applied)
+            {
+                Log(Debug::Error) << "Failed to apply cell state for " << id;
+                continue;
+            }
+            Log(Debug::Verbose) << "Applied cell state for " << id << " (" << blob.size() << " bytes, cleared "
+                                << cleared << " stale ref(s))";
         }
     }
 
@@ -2806,11 +2929,14 @@ namespace MWNet
                 mAuthoritativeContainers[state.mId] = state;
                 mDirtyContainers.insert(state.mId);
             }
-            else
+            else if (!usesCellStateBaseline())
             {
                 // Client: cache the authoritative contents so that if this container's cell isn't loaded
                 // yet (applyContainerState above was a no-op), we still apply it the moment the container
                 // materializes — see syncContainerFromCache. Latest broadcast wins.
+                // Gated off under the cell-state protocol: the next cell blob carries the container's
+                // final contents anyway, and a lazily-materializing container applying a STALE cache
+                // AFTER the (fresher) blob would regress it.
                 mCachedContainerStates[state.mId] = state;
             }
         }

@@ -26,6 +26,7 @@
 #include <components/esm3/player.hpp>
 #include <components/esm3/loadmgef.hpp>
 #include <components/esm3/loadregn.hpp>
+#include <components/esm3/loadscpt.hpp>
 #include <components/esm3/loadstat.hpp>
 #include <components/esm4/loadcell.hpp>
 #include <components/esm4/loaddoor.hpp>
@@ -2141,6 +2142,16 @@ namespace MWWorld
         initObjectInCell(dropped, *cell, adjustPos);
 
         return dropped;
+    }
+
+    bool World::isCellActive(MWWorld::CellStore& cell)
+    {
+        return mWorldScene->isCellActive(cell);
+    }
+
+    void World::reloadCellWith(MWWorld::CellStore& cell, const std::function<void()>& apply)
+    {
+        mWorldScene->reloadCellWith(cell, apply);
     }
 
     void World::initObjectInCell(const Ptr& object, CellStore& cell, bool adjustPos)

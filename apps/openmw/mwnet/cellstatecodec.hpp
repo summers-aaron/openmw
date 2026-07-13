@@ -25,11 +25,12 @@ namespace MWNet
 
     /// Apply a received cell blob through the same path a save-load uses (the REC_CSTA branch of
     /// WorldModel::readRecord: loadState + readReferences over the content-loaded cell). Content
-    /// refs are overwritten in place; runtime refs are added to the cell's ref list — the caller
-    /// is responsible for scene attachment (World::attachCellStateRefs) and for clearing stale
-    /// host-origin runtime refs first (re-application would duplicate them), and should hold a
-    /// Replicator::RemoteApplyScope so the applied changes are not re-reported. Returns false on
-    /// malformed input (cleanly, hostile data cannot crash the reader).
+    /// refs are overwritten in place; runtime refs are added to the cell's ref list. The apply
+    /// replaces each touched ref's RefData WHOLESALE (base node, custom data, script locals), so
+    /// the caller must run it with the cell's scene state torn down (World::reloadCellWith) and
+    /// must clear stale host-origin runtime refs first (re-application would duplicate them),
+    /// under a Replicator::RemoteApplyScope so the applied changes are not re-reported. Returns
+    /// false on malformed input (cleanly, hostile data cannot crash the reader).
     bool applyCellState(const std::string& blob);
 }
 
