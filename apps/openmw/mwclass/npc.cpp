@@ -434,12 +434,6 @@ namespace MWClass
                 inventory.fill(ref->mBase->mInventory, ptr.getCellRef().getRefId(), prng);
             }
             inventory.autoEquip();
-
-            // Multiplayer: the NPC just materialized (its cell loaded). Its inventory is
-            // host-authoritative; if the host's contents arrived while the cell was unloaded,
-            // replace the locally rolled placeholder now (no-op on the host / in single-player).
-            if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
-                replicator->syncContainerFromCache(ptr);
         }
     }
 

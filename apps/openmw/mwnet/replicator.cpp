@@ -654,12 +654,12 @@ namespace MWNet
             mRefStates.clear();
             mDoorStates.clear();
         }
-    // Deliberately kept: mAppearances (peers' body identities, so their avatars rebuild
+        // Deliberately kept: mAppearances (peers' body identities, so their avatars rebuild
         // immediately), mLocalPlayerNetId / mLocalPlayerReady (the login identity outlives the
         // world), and the item/container/summon session records (mRemovedWorldItems,
-        // mCachedContainerStates, mAuthoritativeContainers, mReplicatedItems, mNetworkItems,
-        // summon maps) — those are keyed by wire RefNums, hold no Ptrs, and exist precisely to
-        // be re-applied as cells (re)load.
+        // mAuthoritativeContainers, mReplicatedItems, mNetworkItems, summon maps) — those are
+        // keyed by wire RefNums, hold no Ptrs, and exist precisely to be re-applied as cells
+        // (re)load.
     }
 
     std::set<ESM::RefNum> Replicator::collectSummons(const std::vector<MWWorld::Ptr>& actors) const
@@ -2984,31 +2984,11 @@ namespace MWNet
                 mAuthoritativeContainers[state.mId] = state;
                 mDirtyContainers.insert(state.mId);
             }
-            else if (!usesCellStateBaseline())
-            {
-                // Client: cache the authoritative contents so that if this container's cell isn't loaded
-                // yet (applyContainerState above was a no-op), we still apply it the moment the container
-                // materializes — see syncContainerFromCache. Latest broadcast wins.
-                // Gated off under the cell-state protocol: the next cell blob carries the container's
-                // final contents anyway, and a lazily-materializing container applying a STALE cache
-                // AFTER the (fresher) blob would regress it.
-                mCachedContainerStates[state.mId] = state;
-            }
+            // (No unloaded-cell caching on a client: the cell-state blob its load requests carries
+            // the container's final contents, and a lazily-materializing container applying a stale
+            // cache AFTER that fresher blob would regress it. Broadcasts for loaded containers
+            // applied above; the periodic re-broadcast covers a denial-fallback cell.)
         }
-    }
-
-    void Replicator::syncContainerFromCache(const MWWorld::Ptr& container)
-    {
-        if (mCachedContainerStates.empty())
-            return; // host / single-player, or nothing cached yet
-        const ESM::RefNum id = container.getCellRef().getRefNum();
-        if (!id.isSet())
-            return;
-        // The container just loaded (its custom data was set right before this call), so applyContainerState
-        // — which re-fetches the ref by RefNum and overwrites its store — now succeeds. No recursion: the
-        // getContainerStore it triggers finds the custom data already present.
-        if (auto it = mCachedContainerStates.find(id); it != mCachedContainerStates.end())
-            applyContainerState(it->second);
     }
 
     void Replicator::reportContainerChange(ESM::RefNum container, const MWWorld::Ptr& item, int count, bool take)

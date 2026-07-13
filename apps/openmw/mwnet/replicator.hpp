@@ -359,12 +359,6 @@ namespace MWNet
         // recovery (if the host's cell unloads and rolls the container back to default, the record
         // restores it). Survives the live store; never trusts a re-rolled store.
         std::map<ESM::RefNum, ContainerState> mAuthoritativeContainers;
-        // Client only: the latest authoritative contents received for each changed lootable, kept even
-        // while its cell is unloaded here. A broadcast for an unloaded container can't be applied at
-        // receipt (the ref doesn't exist yet), so it is cached and re-applied the moment the container
-        // materializes (syncContainerFromCache), instead of showing the deterministic default until the
-        // host's next periodic re-broadcast. Closes the load-time / late-join window.
-        std::map<ESM::RefNum, ContainerState> mCachedContainerStates;
         // Host only: loose items created during the session (a peer's drop), which must be
         // replicated for existence — unlike items already in the shared save, which every peer
         // loads identically and so needs no syncing. Sampled each tick and dropped when deleted.
@@ -931,12 +925,6 @@ namespace MWNet
         /// Apply received over-take corrections (client only): drop from this peer's own inventory the
         /// items the host says it claimed but the container didn't have.
         void applyContainerRevokes(const ActionBatch& batch);
-
-        /// Called (client only) when a container's store is first materialized — i.e. its cell just
-        /// loaded here. If the host has already told us this container's authoritative contents (cached
-        /// while its cell was unloaded), apply them now so a looted container never briefly shows its
-        /// deterministic default. A no-op on the host, in single-player, or with nothing cached.
-        void syncContainerFromCache(const MWWorld::Ptr& container);
 
         /// Drain this tick's reported actions for sending (including the contents of any container
         /// that changed since the last tick).

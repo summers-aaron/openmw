@@ -92,13 +92,6 @@ namespace MWClass
             getContainerStore(ptr).setPtr(ptr);
 
             MWBase::Environment::get().getWorld()->addContainerScripts(ptr, ptr.getCell());
-
-            // Multiplayer: this container just materialized (its cell loaded). If the host already sent
-            // its authoritative contents while our cell was unloaded, apply them now so a looted container
-            // doesn't briefly show its deterministic default. No-op on the host / in single-player. The
-            // custom data is already set above, so the store access inside this call won't recurse here.
-            if (MWNet::Replicator* replicator = MWBase::Environment::get().getReplicator())
-                replicator->syncContainerFromCache(ptr);
         }
     }
 
