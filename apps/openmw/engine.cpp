@@ -976,96 +976,118 @@ void OMW::Engine::pumpTransport()
     std::size_t receivedEvents = 0;
     for (const MWNet::ReceivedMessage& received : mSession->poll())
     {
-        // Never trust a payload: a real peer can send malformed bytes; drop them.
-        const MWNet::Message& message = received.mMessage;
-        if (message.mChannel == MWNet::Channel::Unreliable)
+        // A malformed payload from a real peer must never escape here: pumpTransport runs outside
+        // frame()'s try/catch, so an unguarded throw (e.g. a bad RefId string handed to
+        // deserializeText deep in an apply path) would unwind past the main loop and terminate the
+        // process. Drop just the offending message and carry on with the rest of the batch.
+        try
         {
-            // Snapshots need a running world; drop them pre-game and while mid-chargen.
-            if (inGame && !chargenBubble)
-                if (const std::optional<MWNet::SnapshotDelta> snapshot = MWNet::deserializeSnapshot(message.mPayload))
+            // Never trust a payload: a real peer can send malformed bytes; drop them.
+            const MWNet::Message& message = received.mMessage;
+            if (message.mChannel == MWNet::Channel::Unreliable)
+            {
+                // Snapshots need a running world; drop them pre-game and while mid-chargen.
+                if (inGame && !chargenBubble)
+                    if (const std::optional<MWNet::SnapshotDelta> snapshot
+                        = MWNet::deserializeSnapshot(message.mPayload))
+                    {
+                        receivedEntities += snapshot->mEntities.size();
+                        appliedEntities += mReplicator->applyDelta(*snapshot, applyRemote);
+                    }
+            }
+            else if (!message.mPayload.empty()) // Reliable: leading byte selects events / actions / control
+            {
+                const std::span<const std::byte> body(message.mPayload.data() + 1, message.mPayload.size() - 1);
+                if (message.mPayload.front() == sKindControl)
                 {
-                    receivedEntities += snapshot->mEntities.size();
-                    appliedEntities += mReplicator->applyDelta(*snapshot, applyRemote);
+                    // The login/character handshake — dispatched in ALL game states (it is what decides
+                    // whether/what game a client starts).
+                    if (const std::optional<MWNet::ControlMessage> control = MWNet::deserializeControl(body))
+                        handleControlMessage(received.mFrom, *control);
                 }
+                else if (!inGame)
+                    continue; // events/actions need a running game
+                else if (message.mPayload.front() == sKindEvents)
+                {
+                    if (const std::optional<MWNet::EventBatch> events = MWNet::deserializeEvents(body))
+                    {
+                        receivedEvents += events->mGlobal.size() + events->mLocal.size();
+                        if (applyRemote)
+                            mLuaManager->injectIncomingEvents(*events);
+                    }
+                }
+                else if (message.mPayload.front() == sKindActions)
+                {
+                    if (const std::optional<MWNet::ActionBatch> actions = MWNet::deserializeActions(body))
+                    {
+                        // Host resolves clients' reported hits; a client applies the host's report
+                        // that its own player was hit by the shared world.
+                        if (authority)
+                        {
+                            mReplicator->applyActions(*actions);
+                            mReplicator->applyContainerChanges(*actions); // resolve clients' take/put requests
+                            mReplicator->applyAvatarInventory(*actions); // store a client's backpack on its avatar
+                            mReplicator->applyAvatarBounty(*actions); // a client cleared its avatar's bounty
+                            mReplicator->applyCombatRequests(*actions); // a client's avatar resisted arrest
+                            // A client's own-player sounds (casts, swishes): play here and relay onward.
+                            mReplicator->applyWorldSounds(*actions, /*relay=*/true);
+                            // A client's quest progress: apply to the world journal, record, relay.
+                            mReplicator->applyJournalReports(*actions);
+                            // A client's global writes and rest/travel time advances, likewise.
+                            mReplicator->applyGlobalReports(*actions);
+                            mReplicator->applyTimeRequests(*actions);
+                            // A client's scripted ref enable/disable (dialogue-result Enable etc.).
+                            mReplicator->applyRefEnableReports(*actions);
+                            // A client's StartScript/StopScript transitions.
+                            mReplicator->applyScriptRunReports(*actions);
+                            // A door a client's player pushed open or shut.
+                            mReplicator->applyDoorMoveReports(*actions);
+                        }
+                        else if (!chargenBubble) // the bubble also keeps host actions out of the intro cells
+                        {
+                            mReplicator->applyIncomingPlayerDamage(*actions);
+                            mReplicator->applySpellCasts(*actions); // a spell a host NPC / another player cast on us
+                            mReplicator->applySpellVfx(*actions); // cosmetic hit VFX on host-owned actors
+                            mReplicator->applyIncomingPlayerBounty(*actions); // crime bounty the host gave our avatar
+                            mReplicator->applyContainerRevokes(*actions); // drop items we lost a take race for
+                            mReplicator->applyNpcSpeech(*actions); // replay voiced lines host NPCs spoke
+                            mReplicator->applyWorldSounds(*actions, /*relay=*/false); // replay host one-shot SFX
+                            mReplicator->applyJournalDeltas(*actions); // the shared world journal advanced
+                            mReplicator->applyGlobalDeltas(*actions); // shared globals changed
+                            mReplicator->applyTimeSyncs(*actions); // the authoritative game clock
+                            mReplicator->applyWeatherSyncs(*actions); // the authoritative per-region weather
+                            mReplicator->applyRefEnables(*actions); // scripted refs appeared/vanished
+                            mReplicator->applyScriptRuns(*actions); // quest scripts started/stopped
+                            mReplicator->applyDoorMoves(*actions); // doors swung open/shut elsewhere
+                            mReplicator->applyArrests(*actions); // open arrest dialogue a guard triggered
+                        }
+                        // Authoritative lootable contents flow host -> clients; the host relays them onward.
+                        if (!chargenBubble)
+                            mReplicator->applyContainers(*actions, /*relay=*/authority);
+                    }
+                }
+            }
         }
-        else if (!message.mPayload.empty()) // Reliable: leading byte selects events / actions / control
+        catch (const std::exception& e)
         {
-            const std::span<const std::byte> body(message.mPayload.data() + 1, message.mPayload.size() - 1);
-            if (message.mPayload.front() == sKindControl)
-            {
-                // The login/character handshake — dispatched in ALL game states (it is what decides
-                // whether/what game a client starts).
-                if (const std::optional<MWNet::ControlMessage> control = MWNet::deserializeControl(body))
-                    handleControlMessage(received.mFrom, *control);
-            }
-            else if (!inGame)
-                continue; // events/actions need a running game
-            else if (message.mPayload.front() == sKindEvents)
-            {
-                if (const std::optional<MWNet::EventBatch> events = MWNet::deserializeEvents(body))
-                {
-                    receivedEvents += events->mGlobal.size() + events->mLocal.size();
-                    if (applyRemote)
-                        mLuaManager->injectIncomingEvents(*events);
-                }
-            }
-            else if (message.mPayload.front() == sKindActions)
-            {
-                if (const std::optional<MWNet::ActionBatch> actions = MWNet::deserializeActions(body))
-                {
-                    // Host resolves clients' reported hits; a client applies the host's report
-                    // that its own player was hit by the shared world.
-                    if (authority)
-                    {
-                        mReplicator->applyActions(*actions);
-                        mReplicator->applyContainerChanges(*actions); // resolve clients' take/put requests
-                        mReplicator->applyAvatarInventory(*actions); // store a client's full backpack on its avatar
-                        mReplicator->applyAvatarBounty(*actions); // a client cleared its avatar's bounty
-                        mReplicator->applyCombatRequests(*actions); // a client's avatar resisted arrest
-                        // A client's own-player sounds (casts, swishes): play here and relay onward.
-                        mReplicator->applyWorldSounds(*actions, /*relay=*/true);
-                        // A client's quest progress: apply to the world journal, record, relay.
-                        mReplicator->applyJournalReports(*actions);
-                        // A client's global writes and rest/travel time advances, likewise.
-                        mReplicator->applyGlobalReports(*actions);
-                        mReplicator->applyTimeRequests(*actions);
-                        // A client's scripted ref enable/disable (dialogue-result Enable etc.).
-                        mReplicator->applyRefEnableReports(*actions);
-                        // A client's StartScript/StopScript transitions.
-                        mReplicator->applyScriptRunReports(*actions);
-                        // A door a client's player pushed open or shut.
-                        mReplicator->applyDoorMoveReports(*actions);
-                    }
-                    else if (!chargenBubble) // the bubble also keeps host actions out of the intro cells
-                    {
-                        mReplicator->applyIncomingPlayerDamage(*actions);
-                        mReplicator->applySpellCasts(*actions); // a spell a host NPC / another player cast on us
-                        mReplicator->applySpellVfx(*actions); // cosmetic hit VFX on host-owned actors
-                        mReplicator->applyIncomingPlayerBounty(*actions); // crime bounty the host gave our avatar
-                        mReplicator->applyContainerRevokes(*actions); // drop items we lost a take race for
-                        mReplicator->applyNpcSpeech(*actions); // replay voiced lines host NPCs spoke
-                        mReplicator->applyWorldSounds(*actions, /*relay=*/false); // replay host one-shot SFX
-                        mReplicator->applyJournalDeltas(*actions); // the shared world journal advanced
-                        mReplicator->applyGlobalDeltas(*actions); // shared globals changed
-                        mReplicator->applyTimeSyncs(*actions); // the authoritative game clock
-                        mReplicator->applyWeatherSyncs(*actions); // the authoritative per-region weather
-                        mReplicator->applyRefEnables(*actions); // scripted refs appeared/vanished
-                        mReplicator->applyScriptRuns(*actions); // quest scripts started/stopped
-                        mReplicator->applyDoorMoves(*actions); // doors swung open/shut elsewhere
-                        mReplicator->applyArrests(*actions); // open arrest dialogue a guard triggered
-                    }
-                    // Authoritative lootable contents flow host -> clients; the host relays them onward.
-                    if (!chargenBubble)
-                        mReplicator->applyContainers(*actions, /*relay=*/authority);
-                }
-            }
+            Log(Debug::Warning) << "Dropping malformed network message: " << e.what();
         }
     }
 
     // Re-assert every remote-owned actor's locomotion intent for this frame, before the mechanics
     // pass (which zeroes the movement vector each frame) runs.
     if (inGame)
-        mReplicator->driveRemoteActors();
+    {
+        // Guarded for the same reason as the message loop: this runs outside frame()'s try/catch.
+        try
+        {
+            mReplicator->driveRemoteActors();
+        }
+        catch (const std::exception& e)
+        {
+            Log(Debug::Warning) << "Driving remote actors failed: " << e.what();
+        }
+    }
 
     // Deferred application of received cell-state blobs (safe here: message dispatch is done, and
     // the world isn't mid cell-load). Gated on ACTUAL chargen only — unlike the chargen bubble
@@ -1074,7 +1096,18 @@ void OMW::Engine::pumpTransport()
     // cell loads then build straight from host state (no ghost window, no post-load reload). A
     // brand-new character's chargen intro stays a private bubble until it finalizes.
     if (inGame && mSession->receivesAuthoritativeState() && !mReplicator->isChargenInProgress())
-        mReplicator->applyPendingCellStates();
+    {
+        // Guarded: a bad cell-state blob can throw during the scene rebuild inside reloadCellWith
+        // (loadCell asset attach), which would otherwise escape frame() and kill the process.
+        try
+        {
+            mReplicator->applyPendingCellStates();
+        }
+        catch (const std::exception& e)
+        {
+            Log(Debug::Warning) << "Applying pending cell states failed: " << e.what();
+        }
+    }
 
     // Deferred backdrop for the character-select screen (safe here: message dispatch is done). Brings
     // up a scenic world and opens the select UI over it.
