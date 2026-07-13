@@ -259,11 +259,13 @@ namespace OMW
         /// Send a control message to one peer on the Reliable channel under the sKindControl tag.
         void sendControl(MWNet::PeerId to, const MWNet::ControlMessage& message);
 
-        /// Host: answer one client's CellStateRequest. Returns false when the cell exists but is
-        /// not scene-active yet — the caller keeps it pending and retries next pump (the client's
-        /// avatar migration is loading that cell as we speak). Unknown/oversized cells are denied
-        /// with an empty blob (returns true — handled).
-        bool tryServeCellState(MWNet::PeerId to, const std::string& cellId);
+        /// Host: send one cell's state to one peer — a CellStateRequest answer, or (unsolicited)
+        /// a push for a just-activated cell. Returns false when the cell exists but is not
+        /// scene-active yet: a request is kept pending and retried next pump (the client's avatar
+        /// migration is loading that cell as we speak); a push is simply dropped. Unknown or
+        /// oversized cells are denied with an empty blob for a request (returns true — handled),
+        /// silently dropped for a push (best-effort, nothing to fall back from).
+        bool tryServeCellState(MWNet::PeerId to, const std::string& cellId, bool unsolicited = false);
 
         /// Drain and dispatch lines typed into the dedicated server's terminal console:
         /// save/stop/players/help are built-ins; anything else runs as a console script command.

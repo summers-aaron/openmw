@@ -637,6 +637,13 @@ namespace MWNet
         mLastWeatherGameHours = -1.f;
         mWeatherPrevOccupied.clear();
         mWeatherKnownAvatars.clear();
+        // Cell-state protocol: in-flight requests, undelivered blobs and staged baselines are all
+        // keyed to the world being torn down — the next world's cells re-request as they load.
+        mCellStatesInFlight.clear();
+        mOutgoingCellStateRequests.clear();
+        mPendingCellStates.clear();
+        mStagedCellStates.clear();
+        mOutgoingCellStatePushes.clear();
         // On the authority the ref-state and door records belong to the world being torn down —
         // the next world seeds them from its own save's REC_NETWORK_STATE (or starts clean). On a
         // client they are the cache of received states and SURVIVE, so a rejoining world (new
@@ -1066,11 +1073,29 @@ namespace MWNet
         }
     }
 
+    namespace
+    {
+        // How long a STAGED cell state (applied while the cell was scene-inactive, usually from an
+        // unsolicited push) counts as fresh enough for the cell's next load to skip its own
+        // request. Divergence within the window rides the live channels; a staler staging (the
+        // player dawdled in a menu) re-requests like any load.
+        constexpr std::uint32_t sCellStateFreshTicks = 300;
+    }
+
     void Replicator::requestCellState(const MWWorld::CellStore& cell)
     {
         if (!usesCellStateBaseline())
             return;
         const ESM::RefId id = cell.getCell()->getId();
+        // A freshly staged baseline (a push applied just before this load) IS this cell's state —
+        // don't ask for it again. One-shot: the staging is consumed, so a later reload re-requests.
+        if (const auto staged = mStagedCellStates.find(id); staged != mStagedCellStates.end())
+        {
+            const bool fresh = mTick - staged->second <= sCellStateFreshTicks;
+            mStagedCellStates.erase(staged);
+            if (fresh)
+                return;
+        }
         if (!mCellStatesInFlight.insert(id).second)
             return; // a request for this cell is already outstanding
         mOutgoingCellStateRequests.push_back(id);
@@ -1081,18 +1106,43 @@ namespace MWNet
         return std::exchange(mOutgoingCellStateRequests, {});
     }
 
-    void Replicator::queueCellState(const std::string& cellId, const std::string& blob)
+    void Replicator::queueCellState(const std::string& cellId, const std::string& blob, bool unsolicited)
     {
         if (!usesCellStateBaseline())
             return;
         try
         {
-            mPendingCellStates.emplace_back(ESM::RefId::deserializeText(cellId), blob);
+            const ESM::RefId id = ESM::RefId::deserializeText(cellId);
+            if (unsolicited)
+            {
+                if (blob.empty())
+                    return; // a push is best-effort; nothing to fall back from
+                // A push for a cell that is ACTIVE here is redundant: it was blob'd when it
+                // loaded and the live channels keep it right — applying it would only churn a
+                // scene reload (on every peer, every time any player's grid activates it).
+                MWWorld::CellStore* cell
+                    = MWBase::Environment::get().getWorldModel()->findCell(id, /*forceLoad=*/false);
+                if (cell != nullptr && MWBase::Environment::get().getWorld()->isCellActive(*cell))
+                    return;
+            }
+            mPendingCellStates.emplace_back(id, blob);
         }
         catch (const std::exception&)
         {
             Log(Debug::Warning) << "Dropping cell state with a malformed cell id";
         }
+    }
+
+    void Replicator::queueCellStatePush(const MWWorld::CellStore& cell)
+    {
+        if (!mIsAuthority)
+            return;
+        mOutgoingCellStatePushes.push_back(cell.getCell()->getId());
+    }
+
+    std::vector<ESM::RefId> Replicator::takeOutgoingCellStatePushes()
+    {
+        return std::exchange(mOutgoingCellStatePushes, {});
     }
 
     namespace
@@ -1149,6 +1199,7 @@ namespace MWNet
             // the one regime a real save-load ever exercises. reloadCellWith tears the active
             // cell's scene state down around the mutation and rebuilds it through the ordinary
             // cell-load path afterwards, which re-wires scripts, mechanics and rendering cleanly.
+            const bool wasActive = world.isCellActive(*cell);
             std::size_t cleared = 0;
             bool applied = false;
             world.reloadCellWith(*cell, [&] {
@@ -1182,8 +1233,12 @@ namespace MWNet
                 Log(Debug::Error) << "Failed to apply cell state for " << id;
                 continue;
             }
+            // A blob applied to an inactive cell is a STAGED baseline: its next load builds
+            // straight from this state and (while fresh) skips its own request.
+            if (!wasActive)
+                mStagedCellStates[id] = mTick;
             Log(Debug::Verbose) << "Applied cell state for " << id << " (" << blob.size() << " bytes, cleared "
-                                << cleared << " stale ref(s))";
+                                << cleared << " stale ref(s), " << (wasActive ? "reloaded" : "staged") << ")";
         }
     }
 

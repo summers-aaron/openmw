@@ -171,10 +171,20 @@ second move).
     reserved `-3001` spawns are included, and the descriptor path adopts instead of
     duplicating. Live channels (snapshot, actions, container broadcasts) are untouched —
     the blob is the *baseline*, the live channels are the *diffs*.
-  - *Accepted transient:* between a cell load and its blob applying (~1-2 pumps) the
-    client briefly shows content-default state. *v2:* pre-request at preload to hide the
-    latency; shrink the legacy retention (`mRefStates`/`mDoorStates`/`mRemovedWorldItems`
-    re-asserts) once the protocol has soaked.
+  - the host also PUSHES a cell's state unsolicited to every peer the moment the cell
+    becomes scene-active on its side (a resuming player's slot unparking at character
+    select, an avatar's grid growing into new cells). A client STAGES a push into a cell
+    it hasn't loaded (a prefetched baseline: the cell's own load then builds straight
+    from host state — no ghost window, no reload, no request round-trip, as long as the
+    staging is fresh) and drops it for a cell it has loaded (the live channels keep
+    active cells right; reloading them would be pure churn). Blob application is held
+    only during ACTUAL chargen — the pre-adopt select screen applies staged baselines,
+    which is what makes a resumed character's spawn area arrive pre-built.
+  - *Accepted transient:* for a cell the client loads before any blob arrives (walking
+    into fresh territory ahead of the host's avatar migration), content-default state
+    shows for ~1-2 pumps until the requested blob lands and the cell reloads. The legacy
+    retention (`mRefStates`/`mDoorStates`/`mRemovedWorldItems` re-asserts) deliberately
+    stays: it is the denial fallback's data.
 - A test harness (`mp-server.sh`, see below) spins up the server + two pre-kitted clients.
 
 ## What's broken / known limitations

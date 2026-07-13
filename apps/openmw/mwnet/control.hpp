@@ -111,11 +111,15 @@ namespace MWNet
     /// host -> client: one cell's current state as an opaque blob — the same REC_CSTA record a save
     /// writes for the cell (see cellstatecodec). An EMPTY mBlob means the host cannot serve this
     /// cell (unknown id, or over the size cap): the client falls back to the legacy per-category
-    /// reconcile channels for that cell load.
+    /// reconcile channels for that cell load. mUnsolicited marks a PUSH (the host activated the
+    /// cell — e.g. it just loaded the grid around a resuming player's slot — and broadcast its
+    /// state unrequested): a client stages it into a locally-inactive cell as a prefetched
+    /// baseline, and drops it for an active cell, whose state the live channels already maintain.
     struct CellStateData
     {
         std::string mCellId;
         std::string mBlob;
+        bool mUnsolicited = false;
 
         friend bool operator==(const CellStateData&, const CellStateData&) = default;
     };

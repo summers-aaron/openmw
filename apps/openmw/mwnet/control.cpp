@@ -55,6 +55,7 @@ namespace MWNet
         {
             writer.writeString(message.mCellId);
             writer.writeString(message.mBlob);
+            writer.write(static_cast<std::uint8_t>(message.mUnsolicited ? 1 : 0));
         }
 
         // Read a length-prefixed list of strings, validating the count against the buffer first (each
@@ -172,8 +173,11 @@ namespace MWNet
             case 9: // CellStateData
             {
                 CellStateData message;
-                if (!reader.readString(message.mCellId) || !reader.readString(message.mBlob))
+                std::uint8_t unsolicited = 0;
+                if (!reader.readString(message.mCellId) || !reader.readString(message.mBlob)
+                    || !reader.read(unsolicited))
                     return std::nullopt;
+                message.mUnsolicited = unsolicited != 0;
                 return message;
             }
             default:

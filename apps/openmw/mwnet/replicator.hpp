@@ -390,6 +390,13 @@ namespace MWNet
         std::vector<ESM::RefId> mOutgoingCellStateRequests;
         // Client only: received cell blobs awaiting the deferred safe point (applyPendingCellStates).
         std::vector<std::pair<ESM::RefId, std::string>> mPendingCellStates;
+        // Client only: cells whose blob was STAGED — applied while the cell was scene-inactive
+        // (typically an unsolicited push), keyed to the tick it happened. The cell's next load
+        // skips its own request if the staged state is still fresh, so a fast join/entry builds
+        // straight from host state with no reload; a stale staging (the player dawdled) re-requests.
+        std::map<ESM::RefId, std::uint32_t> mStagedCellStates;
+        // Host only: just-activated cells to push unsolicited to every peer, drained by the pump.
+        std::vector<ESM::RefId> mOutgoingCellStatePushes;
         // Client only: loose items spawned from the host's replication, keyed by their (host) RefNum.
         // Used to tell a host-owned floor item apart from anything else when this peer deletes one
         // (picks it up), so only those are reported back to the host.
@@ -869,8 +876,23 @@ namespace MWNet
         std::vector<ESM::RefId> takeOutgoingCellStateRequests();
 
         /// Stash a received CellStateData (client only) for applyPendingCellStates — applied at the
-        /// end of the pump, never mid message-dispatch.
-        void queueCellState(const std::string& cellId, const std::string& blob);
+        /// end of the pump, never mid message-dispatch. An unsolicited PUSH for a locally-ACTIVE
+        /// cell is dropped here: the live channels (and the request made when it loaded) already
+        /// keep an active cell right, and applying it would only churn a needless scene reload.
+        void queueCellState(const std::string& cellId, const std::string& blob, bool unsolicited);
+
+        /// Queue (host only) a just-activated cell for an unsolicited state push to every peer:
+        /// the moment a cell scene-loads host-side — e.g. the grid around a resuming player's slot
+        /// unparking at character-select — is exactly when its state is reconciled and worth
+        /// prefetching to clients that don't have the cell loaded yet. A client that stages the
+        /// push before its own cell load then builds the cell straight from host state: no ghost
+        /// window, no post-load reload, no request round-trip.
+        void queueCellStatePush(const MWWorld::CellStore& cell);
+
+        /// Drain the cells queued by queueCellStatePush for broadcasting.
+        std::vector<ESM::RefId> takeOutgoingCellStatePushes();
+
+        bool isChargenInProgress() const { return mChargenInProgress; }
 
         /// Apply every stashed cell blob (client only, deferred-safe point): clear the cell's
         /// host-origin runtime refs (a re-applied blob would duplicate them — RefNum ranges make

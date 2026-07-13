@@ -87,6 +87,7 @@
 #include "mwworld/class.hpp"
 #include "mwworld/player.hpp"
 #include "mwworld/datetimemanager.hpp"
+#include "mwworld/scene.hpp"
 #include "mwworld/worldimp.hpp"
 #include "mwworld/worldmodel.hpp"
 
@@ -299,16 +300,21 @@ void OMW::Engine::processServerConsole()
     }
 }
 
-bool OMW::Engine::tryServeCellState(MWNet::PeerId to, const std::string& cellId)
+bool OMW::Engine::tryServeCellState(MWNet::PeerId to, const std::string& cellId, bool unsolicited)
 {
     MWBase::World& world = *MWBase::Environment::get().getWorld();
+    // A push is best-effort: no denial replies (the client made no request to fall back from).
+    const auto deny = [&] {
+        if (!unsolicited)
+            sendControl(to, MWNet::CellStateData{ cellId, {}, false });
+    };
     try
     {
         const ESM::RefId id = ESM::RefId::deserializeText(cellId);
         MWWorld::CellStore* cell = MWBase::Environment::get().getWorldModel()->findCell(id);
         if (cell == nullptr)
         {
-            sendControl(to, MWNet::CellStateData{ cellId, {} }); // unknown cell — deny
+            deny(); // unknown cell
             return true;
         }
         // Serve only once the cell is scene-active here: the client's avatar migration is loading
@@ -317,25 +323,25 @@ bool OMW::Engine::tryServeCellState(MWNet::PeerId to, const std::string& cellId)
         // save-restored-spawn RefNum migration) that runs as the cell activates — a client copy
         // keyed to pre-migration RefNums would be orphaned by the very next snapshot.
         if (!world.isCellActive(*cell))
-            return false; // keep pending; retried next pump
+            return false; // request: keep pending, retried next pump; push: dropped by the caller
         std::string blob = MWNet::serializeCellState(*cell, world.getContentFiles());
         if (blob.size() > MWNet::sMaxCellStateBlob)
         {
             Log(Debug::Error) << "Cell state for " << cellId << " is " << blob.size()
                               << " bytes (over the cap); denying";
-            sendControl(to, MWNet::CellStateData{ cellId, {} });
+            deny();
             return true;
         }
-        Log(Debug::Verbose) << "Served cell state for " << cellId << " (" << blob.size() << " bytes) to peer "
-                            << to;
-        sendControl(to, MWNet::CellStateData{ cellId, std::move(blob) });
+        Log(Debug::Verbose) << (unsolicited ? "Pushed" : "Served") << " cell state for " << cellId << " ("
+                            << blob.size() << " bytes) to peer " << to;
+        sendControl(to, MWNet::CellStateData{ cellId, std::move(blob), unsolicited });
         return true;
     }
     catch (const std::exception& e)
     {
         // A garbled id or a serialization failure must never take the host down — deny instead.
         Log(Debug::Warning) << "Failed to serve cell state for '" << cellId << "': " << e.what();
-        sendControl(to, MWNet::CellStateData{ cellId, {} });
+        deny();
         return true;
     }
 }
@@ -734,7 +740,7 @@ void OMW::Engine::handleControlMessage(MWNet::PeerId from, const MWNet::ControlM
         {
             // A cell's authoritative state (or an empty-blob denial). Stashed and applied at the
             // deferred safe point — applying mid message-dispatch mutates the scene under our feet.
-            mReplicator->queueCellState(cellState->mCellId, cellState->mBlob);
+            mReplicator->queueCellState(cellState->mCellId, cellState->mBlob, cellState->mUnsolicited);
         }
         else if (const auto* reject = std::get_if<MWNet::LoginReject>(&message))
             Log(Debug::Error) << "Login rejected by host: " << reject->mReason;
@@ -888,6 +894,18 @@ void OMW::Engine::pumpTransport()
     // reconnect) but out of the world: not simulated, not keeping cells alive. (The host is in-game.)
     if (mSession->isAuthority())
     {
+        // Unsolicited pushes for cells that just became scene-active here (a resuming player's
+        // slot unparking, an avatar's grid growing): broadcast each to every logged-in peer.
+        // Clients stage them into cells they haven't loaded yet — a prefetched baseline — and
+        // drop them for cells they have (the live channels keep those right). Best-effort: a
+        // cell that deactivated since queueing is silently skipped.
+        for (const ESM::RefId& id : mReplicator->takeOutgoingCellStatePushes())
+        {
+            const std::string cellId = id.serializeText();
+            for (const auto& [peer, netId] : mPeerNetIds)
+                tryServeCellState(peer, cellId, /*unsolicited=*/true);
+        }
+
         // Cell-state requests parked because their cell wasn't scene-active yet: retry each pump
         // (the requesting client's avatar migration is loading the cell — normally a tick or two),
         // denying any that outlive their deadline so the client falls back to the legacy channels.
@@ -1050,8 +1068,12 @@ void OMW::Engine::pumpTransport()
         mReplicator->driveRemoteActors();
 
     // Deferred application of received cell-state blobs (safe here: message dispatch is done, and
-    // the world isn't mid cell-load). Held while mid-chargen like every other remote apply.
-    if (inGame && mSession->receivesAuthoritativeState() && !chargenBubble)
+    // the world isn't mid cell-load). Gated on ACTUAL chargen only — unlike the chargen bubble
+    // (which also covers the pre-adopt lobby), so a resuming character's pushed baselines stage
+    // into its destination cells WHILE the player is still at the select screen, and the adopt's
+    // cell loads then build straight from host state (no ghost window, no post-load reload). A
+    // brand-new character's chargen intro stays a private bubble until it finalizes.
+    if (inGame && mSession->receivesAuthoritativeState() && !mReplicator->isChargenInProgress())
         mReplicator->applyPendingCellStates();
 
     // Deferred backdrop for the character-select screen (safe here: message dispatch is done). Brings
@@ -1111,6 +1133,14 @@ void OMW::Engine::pumpTransport()
                     *MWBase::Environment::get().getDialogueManager(), journal))
                 Log(Debug::Error) << "Failed to restore the served character's journal";
             mReplicator->setLocalPlayerReady(true);
+            // Request the baseline for every cell that is ALREADY active: adopt re-points the
+            // player over the select-screen backdrop in place, and any backdrop cell the adopted
+            // world keeps (a character resuming right where the lobby vantage is) was loaded
+            // BEFORE LoginAccept assigned our net id — its load-time request no-op'd, and no new
+            // loadCell will fire for it. Deduped against in-flight requests and freshly staged
+            // pushes, so cells the adopt did just load (or that were prefetched) aren't re-asked.
+            for (MWWorld::CellStore* active : mWorld->getWorldScene().getActiveCells())
+                mReplicator->requestCellState(*active);
         }
         else
             Log(Debug::Error) << "Failed to adopt served character";

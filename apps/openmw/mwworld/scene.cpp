@@ -562,6 +562,11 @@ namespace MWWorld
                 // content-only world can't know on its own, and feed them to the removal / replication
                 // channels so a save-booted server keeps floor items in sync with joiners.
                 replicator->reconcileLoadedCellItems(cell);
+                // Host only: a just-activated (and, below, just-reconciled) cell is worth pushing
+                // unsolicited to every peer — a client that stages it before its own load of the
+                // cell builds straight from host state, with no ghost window and no reload. Queued
+                // here, pushed after the reconciles below have run (the pump drains the queue).
+                replicator->queueCellStatePush(cell);
                 // Host only: likewise re-derive the ACTOR changes the save baked in — dynamic spawns and
                 // corpses from earlier sessions restore under generated RefNums that a content-fresh
                 // client can't resolve (or worse, resolves to an unrelated local object), so migrate them
