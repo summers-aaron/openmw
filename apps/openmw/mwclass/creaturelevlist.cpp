@@ -149,6 +149,20 @@ namespace MWClass
             customData.mSpawn = false;
     }
 
+    ESM::RefNum CreatureLevList::getSpawnedActor(const MWWorld::ConstPtr& ptr) const
+    {
+        if (ptr.getRefData().getCustomData() == nullptr)
+            return {}; // never spawned
+        return ptr.getRefData().getCustomData()->asCreatureLevListCustomData().mSpawnedActor;
+    }
+
+    void CreatureLevList::setSpawnedActor(const MWWorld::Ptr& ptr, const ESM::RefNum& id) const
+    {
+        if (ptr.getRefData().getCustomData() == nullptr)
+            return;
+        ptr.getRefData().getCustomData()->asCreatureLevListCustomData().mSpawnedActor = id;
+    }
+
     void CreatureLevList::ensureCustomData(const MWWorld::Ptr& ptr) const
     {
         if (!ptr.getRefData().getCustomData())

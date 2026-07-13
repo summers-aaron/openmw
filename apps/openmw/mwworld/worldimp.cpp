@@ -3721,7 +3721,14 @@ namespace MWWorld
         // A reserved content file, clear of real content (>= 0), generated refs (count down from -1),
         // the net-player wire id (-1000) and network-player avatars (-2000). Clients never generate
         // into it, so a host summon's RefNum can't collide with a client's local refs.
-        return ESM::RefNum{ mNextNetworkSummonRefNum++, MWNet::sNetworkSummonRefNumContentFile };
+        // Reserved RefNums PERSIST in saves (any negative-contentFile ref is written verbatim), but
+        // this counter restarts at 1 each boot — so skip indices already occupied by refs restored
+        // from a save made mid-session. Every saved cell's refs are registered eagerly at save-read
+        // time, so a registry probe is a complete check.
+        ESM::RefNum id{ mNextNetworkSummonRefNum++, MWNet::sNetworkSummonRefNumContentFile };
+        while (!mWorldModel.getPtr(id).isEmpty())
+            id.mIndex = mNextNetworkSummonRefNum++;
+        return id;
     }
 
     ESM::RefNum World::reserveNetworkSpawnRefNum()
@@ -3729,8 +3736,12 @@ namespace MWWorld
         // The sibling of reserveNetworkSummonRefNum for a host-spawned dynamic creature that isn't a
         // summon (leveled creature list, random encounter, scripted PlaceAt*). A distinct reserved
         // content file so a client can tell it apart from a summon (no summon puff), while sharing the
-        // collision-proof, clients-never-generate-into-it property. Monotonic index, never reused.
-        return ESM::RefNum{ mNextNetworkSpawnRefNum++, MWNet::sNetworkSpawnRefNumContentFile };
+        // collision-proof, clients-never-generate-into-it property. Monotonic index, never reused;
+        // skips indices held by refs restored from a mid-session save (see the summon sibling).
+        ESM::RefNum id{ mNextNetworkSpawnRefNum++, MWNet::sNetworkSpawnRefNumContentFile };
+        while (!mWorldModel.getPtr(id).isEmpty())
+            id.mIndex = mNextNetworkSpawnRefNum++;
+        return id;
     }
 
     void World::assignNetworkSpawnRefNum(const MWWorld::Ptr& ptr)

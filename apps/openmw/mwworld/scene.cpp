@@ -552,6 +552,11 @@ namespace MWWorld
             // content-only world can't know on its own, and feed them to the removal / replication
             // channels so a save-booted server keeps floor items in sync with joiners.
             replicator->reconcileLoadedCellItems(cell);
+            // Host only: likewise re-derive the ACTOR changes the save baked in — dynamic spawns and
+            // corpses from earlier sessions restore under generated RefNums that a content-fresh
+            // client can't resolve (or worse, resolves to an unrelated local object), so migrate them
+            // into the reserved network-spawn space where they replicate like live-session spawns.
+            replicator->reconcileLoadedCellActors(cell);
             replicator->applyRefStates();
             replicator->applyDoorStates();
         }

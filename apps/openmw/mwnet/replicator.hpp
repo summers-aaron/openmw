@@ -379,6 +379,11 @@ namespace MWNet
         // set of removals received so far. Both purge these from a cell as it loads (purgeRemovedItems),
         // so an item taken while a peer's cell was unloaded doesn't reappear on the shelf when it loads.
         std::set<ESM::RefNum> mRemovedWorldItems;
+        // Host only: save-restored dynamic actors migrated into the reserved spawn RefNum space
+        // (old generated RefNum -> reserved RefNum), kept for the session so a leveled-list marker
+        // or summoner whose cell loads AFTER the actor's (cross-cell wanderers) still gets its
+        // spawned-actor / summon-map link re-pointed to the migrated identity.
+        std::map<ESM::RefNum, ESM::RefNum> mMigratedSpawnRefNums;
         // Client only: loose items spawned from the host's replication, keyed by their (host) RefNum.
         // Used to tell a host-owned floor item apart from anything else when this peer deletes one
         // (picks it up), so only those are reported back to the host.
@@ -830,6 +835,18 @@ namespace MWNet
         ///    to relay its transform, never re-spawned (applyWorldEntity guards a shared content RefNum).
         /// A no-op on a client and in single-player.
         void reconcileLoadedCellItems(const MWWorld::CellStore& cell);
+
+        /// Called (host only) as a cell loads: the actor-side sibling of reconcileLoadedCellItems.
+        /// A dynamic actor spawned in an EARLIER session (a leveled-list roll, rest encounter,
+        /// scripted PlaceAt* — or its corpse) restores from the host's save with its original
+        /// GENERATED RefNum, so it never went through assignNetworkSpawnRefNum: sampleDelta ships no
+        /// spawn descriptor for it, and its generated index aliases whatever a content-fresh client
+        /// allocated at the same index locally — the client puppets an unrelated object (wrong model)
+        /// or shows nothing. Migrate every such actor into the reserved network-spawn RefNum space
+        /// (re-pointing any leveled-list marker / summon-map entry that referenced the old RefNum),
+        /// and broadcast a removal for a content actor the save DISPOSED (count 0), which a client
+        /// would otherwise show alive forever. A no-op on a client and in single-player.
+        void reconcileLoadedCellActors(MWWorld::CellStore& cell);
 
         /// Mark a lootable inventory (a world container or a corpse) as changed, so this tick's
         /// action batch carries its new contents. Called by the loot UI on whichever peer made the

@@ -32,6 +32,10 @@ namespace MWClass
 
         void respawn(const MWWorld::Ptr& ptr) const override;
 
+        ESM::RefNum getSpawnedActor(const MWWorld::ConstPtr& ptr) const override;
+
+        void setSpawnedActor(const MWWorld::Ptr& ptr, const ESM::RefNum& id) const override;
+
         MWWorld::Ptr copyToCellImpl(const MWWorld::ConstPtr& ptr, MWWorld::CellStore& cell) const override;
 
         void adjustPosition(const MWWorld::Ptr& ptr, bool force) const override;

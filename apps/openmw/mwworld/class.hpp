@@ -15,6 +15,7 @@
 #include "../mwmechanics/damagesourcetype.hpp"
 
 #include <components/esm/refid.hpp>
+#include <components/esm3/refnum.hpp>
 #include <components/vfs/pathutil.hpp>
 
 namespace osg
@@ -364,6 +365,13 @@ namespace MWWorld
         virtual void setDoorState(const MWWorld::Ptr& ptr, DoorState state) const;
 
         virtual void respawn(const MWWorld::Ptr& ptr) const {}
+
+        /// The RefNum of the actor this reference spawned (leveled creature lists), or unset.
+        virtual ESM::RefNum getSpawnedActor(const MWWorld::ConstPtr& ptr) const { return {}; }
+
+        /// Re-point the spawned-actor link after the spawned actor's RefNum was rekeyed
+        /// (network-spawn migration of a save-restored spawn).
+        virtual void setSpawnedActor(const MWWorld::Ptr& ptr, const ESM::RefNum& id) const {}
 
         /// Returns sound id
         virtual ESM::RefId getSound(const MWWorld::ConstPtr& ptr) const;

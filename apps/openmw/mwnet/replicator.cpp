@@ -980,6 +980,90 @@ namespace MWNet
         });
     }
 
+    void Replicator::reconcileLoadedCellActors(MWWorld::CellStore& cell)
+    {
+        // Host only. The actor-side sibling of reconcileLoadedCellItems: a dynamic actor spawned in
+        // an earlier session restores from the save under its original generated RefNum, a space a
+        // content-fresh client re-allocates from zero for its own local instantiations. Left alone it
+        // replicates with no spawn descriptor and a colliding identity — the client drives whatever
+        // unrelated object holds that index (wrong model) or nothing at all. Rekey each one into the
+        // reserved spawn space, exactly as if it had been spawned this session.
+        if (!mIsAuthority)
+            return;
+        MWBase::World& world = *MWBase::Environment::get().getWorld();
+
+        // Collect first: assignNetworkSpawnRefNum mutates the registry and Lua bindings, and forEach
+        // must not observe the cell mid-edit.
+        std::vector<MWWorld::Ptr> toMigrate;
+        cell.forEach([&](const MWWorld::Ptr& ptr) {
+            if (!ptr.getClass().isActor())
+                return true;
+            const ESM::RefNum id = ptr.getCellRef().getRefNum();
+            if (!id.isSet())
+                return true;
+            if (ptr.getRefData().isRemoteOwned())
+                return true; // a peer's copy, not ours to rekey
+            if (id.hasContentFile())
+            {
+                // A content actor loads identically on every peer — no identity work. But one the
+                // save DISPOSED (killed + corpse cleared/deleted, count 0) stays enumerable while a
+                // client still shows it alive: record and broadcast the removal, like an item ghost.
+                if (ptr.getCellRef().getCount() <= 0 && mRemovedWorldItems.insert(id).second)
+                    mPendingItemRemovals.push_back(id);
+                return true;
+            }
+            if (MWNet::isReservedSpawn(id))
+                return true; // migrated in an earlier session's run — already ships a descriptor
+            if (id.mContentFile == MWNet::sNetworkPlayerRefNumContentFile || MWNet::isNetPlayer(id))
+                return true; // network-player identities are managed by the session, never rekeyed
+            toMigrate.push_back(ptr); // generated RefNum: a prior-session dynamic spawn (or corpse)
+            return true;
+        });
+        for (const MWWorld::Ptr& ptr : toMigrate)
+        {
+            const ESM::RefNum old = ptr.getCellRef().getRefNum();
+            world.assignNetworkSpawnRefNum(ptr);
+            const ESM::RefNum id = ptr.getCellRef().getRefNum();
+            mMigratedSpawnRefNums.emplace(old, id);
+            Log(Debug::Verbose) << "Migrated save-restored spawn " << ptr.getCellRef().getRefId() << " ("
+                                << old.mIndex << "," << old.mContentFile << ") -> (" << id.mIndex << ","
+                                << id.mContentFile << ")";
+        }
+
+        if (mMigratedSpawnRefNums.empty())
+            return;
+        // Re-point every stored reference to a migrated RefNum: a leveled-list marker's spawned-actor
+        // link (or respawn() re-rolls a duplicate over the migrated creature) and a summoner's
+        // summon-map entry (or UpdateSummonedCreatures re-summons one). The actor and its marker /
+        // summoner can sit in different cells and load in either order, so sweep every loaded cell
+        // against the accumulated session map — cheap (cell loads are rare) and idempotent.
+        MWWorld::WorldModel& worldModel = *MWBase::Environment::get().getWorldModel();
+        const auto remapSummons = [&](const MWWorld::Ptr& actor) {
+            for (auto& [effect, refNum] : actor.getClass().getCreatureStats(actor).getSummonedCreatureMap())
+                if (const auto it = mMigratedSpawnRefNums.find(refNum); it != mMigratedSpawnRefNums.end())
+                    refNum = it->second;
+        };
+        worldModel.forEachLoadedCellStore([&](MWWorld::CellStore& store) {
+            store.forEach([&](const MWWorld::Ptr& ptr) {
+                const ESM::RefNum spawned = ptr.getClass().getSpawnedActor(ptr);
+                if (spawned.isSet())
+                    if (const auto it = mMigratedSpawnRefNums.find(spawned); it != mMigratedSpawnRefNums.end())
+                        ptr.getClass().setSpawnedActor(ptr, it->second);
+                if (ptr.getClass().isActor())
+                    remapSummons(ptr);
+                return true;
+            });
+        });
+        // Players aren't in any cell's ref list; a still-active summon restored from the save sits in
+        // the player's summon map under its old generated RefNum.
+        for (std::size_t i = 0; i < world.getPlayerCount(); ++i)
+        {
+            const MWWorld::Ptr player = world.getPlayerPtr(i);
+            if (!player.isEmpty())
+                remapSummons(player);
+        }
+    }
+
     void Replicator::recordMotion(const ESM::RefNum& id, const MWWorld::Ptr& actor, const osg::Vec3f& target,
         const osg::Vec3f& rotation, std::optional<float> speed)
     {
@@ -1914,6 +1998,8 @@ namespace MWNet
                 worldModel.deregisterLiveCellRef(*placed.getBase()); // adopt the host's RefNum
                 placed.getCellRef().setRefNum(entity.mId);
                 worldModel.registerPtr(placed);
+                Log(Debug::Verbose) << "Instantiated host spawn " << placed.getCellRef().getRefId() << " id=("
+                                    << entity.mId.mIndex << "," << entity.mId.mContentFile << ")";
                 // Only a SUMMON gets the summon cosmetics — the start puff here and the end puff its
                 // despawn plays (mInstantiatedSummons). A plain dynamic spawn (a leveled rat, a scripted
                 // creature) just pops in quietly; both share this instantiation path, the content-file
